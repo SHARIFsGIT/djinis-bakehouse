@@ -1,4 +1,4 @@
-import { Flame, ShieldCheck, Sparkles, Star, Truck, Users, Wheat } from "lucide-react";
+import { Flame, ShieldCheck, Star, Truck, Users, Wheat } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import client from "../api/client";
@@ -129,7 +129,7 @@ export default function Home() {
         <div className="mx-auto grid max-w-7xl items-center gap-12 px-4 py-14 md:grid-cols-2 md:py-20">
           <div className="rise-in">
             <p className="badge badge-outline badge-secondary px-3 py-3 text-xs font-bold tracking-widest text-white uppercase">
-              Est. 2016 · Small-batch bakery
+              Home kitchen · Small size bakery
             </p>
             <h1 className="font-display mt-5 text-5xl leading-[1.05] font-semibold md:text-6xl">
               Butter, flour &<br />a little{" "}
@@ -205,15 +205,12 @@ export default function Home() {
       {/* ---------------------------------------------------------------- */}
       <section className="border-y border-base-300/60 bg-base-200/40">
         <div className="mx-auto grid max-w-7xl gap-6 px-4 py-8 sm:grid-cols-2 lg:grid-cols-4">
-          {PROMISES.map(({ Icon, title, text }) => (
-            <div key={title} className="flex items-start gap-3.5">
+          {PROMISES.map(({ Icon, title }) => (
+            <div key={title} className="flex items-center gap-3.5">
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-secondary/15 text-secondary">
                 <Icon size={20} />
               </span>
-              <div>
-                <p className="font-display font-semibold">{title}</p>
-                <p className="mt-0.5 text-sm opacity-70">{text}</p>
-              </div>
+              <p className="font-display font-semibold">{title}</p>
             </div>
           ))}
         </div>
@@ -318,11 +315,10 @@ export default function Home() {
           <div className="mb-8 flex items-end justify-between gap-4">
             <div>
               <p className="flex items-center gap-2 text-xs font-bold tracking-[0.25em] text-secondary uppercase">
-                <Sparkles size={14} aria-hidden="true" />
                 On its way
               </p>
               <h2 className="font-display mt-2 text-3xl font-semibold md:text-4xl">
-                Coming soon to the counter
+                On the Horizon at Our Bakehouse
               </h2>
               <p className="mt-2 opacity-70">
                 What Djini is testing, timing and promising for the shelves next.

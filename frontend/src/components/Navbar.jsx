@@ -105,6 +105,8 @@ export default function Navbar() {
       to: "/products?on_sale=true",
       label: "On sale",
       active: browsing && saleActive,
+      wide: true, // joins only once the bar has room for it (the shop
+                 // sidebar's sale filter covers narrower widths)
     },
   ];
 
@@ -113,7 +115,7 @@ export default function Navbar() {
       {/* Announcement bar — admin-editable, hidden when cleared */}
       {announcement && (
         <div className="brand-gradient text-primary-content">
-          <p className="mx-auto max-w-7xl px-4 py-1.5 text-center text-xs font-semibold tracking-wide">
+          <p className="mx-auto max-w-7xl px-4 py-2 text-balance text-center text-xs font-semibold tracking-wide">
             {announcement}
           </p>
         </div>
@@ -127,7 +129,7 @@ export default function Navbar() {
             alt="Djini's Bakehouse"
             className="h-10 w-10 object-contain"
           />
-          <span className="font-display text-xl leading-none font-bold">
+          <span className="font-display text-xl leading-tight font-bold">
             Djini&rsquo;s{" "}
             <span className="italic text-secondary">Bakehouse</span>
           </span>
@@ -135,9 +137,9 @@ export default function Navbar() {
 
         {/* Shelves — dead-centre on the mark's line; the search box keeps
             narrow at lg so the two never meet */}
-        <ul className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-5 lg:flex">
+        <ul className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-6 lg:flex xl:gap-8">
           {shopLinks.map((link) => (
-            <li key={link.label}>
+            <li key={link.label} className={link.wide ? "hidden xl:block" : undefined}>
               <Link to={link.to} className={linkClass(link.active)}>
                 {link.label}
               </Link>
