@@ -36,7 +36,7 @@ const PROMISES = [
   },
   {
     Icon: Wheat,
-    title: "Flour from two farms away",
+    title: "Flour from two farms",
   },
 ];
 
@@ -61,10 +61,8 @@ function Stars({ rating }) {
 function TestimonialFigure({ t }) {
   return (
     <figure className="glass rounded-box p-6 shadow-sm ring-1 ring-base-300/60">
-      <Stars rating={t.rating} />
-      <blockquote className="mt-3 leading-relaxed opacity-85">
-        “{t.quote}”
-      </blockquote>
+      <blockquote className="leading-relaxed opacity-85">“{t.quote}”</blockquote>
+      {/* Name and role on the left, the stars mid-line to their right */}
       <figcaption className="mt-5 flex items-center gap-3">
         {t.avatar_url ? (
           <img
@@ -78,10 +76,15 @@ function TestimonialFigure({ t }) {
             {productInitial(t.name)}
           </span>
         )}
-        <div>
+        <div className="min-w-0">
           <p className="font-semibold">{t.name}</p>
           {t.role && <p className="text-xs opacity-60">{t.role}</p>}
         </div>
+        {t.rating && (
+          <div className="ms-auto shrink-0">
+            <Stars rating={t.rating} />
+          </div>
+        )}
       </figcaption>
     </figure>
   );
@@ -140,9 +143,10 @@ export default function Home() {
               <em className="text-secondary italic">patience</em>
             </h1>
             <p className="mt-6 max-w-md text-lg leading-relaxed opacity-80">
-              Made with patience, baked with love.
+              Made with patience, baked with love — small batches out of our
+              little kitchen, on your table the same day.
             </p>
-            <div className="mt-8 flex flex-wrap gap-3">
+            <div className="mt-8 flex flex-wrap gap-5">
               <Link to="/products" className="btn btn-primary btn-lg shadow-md">
                 Explore Our Bakes
               </Link>

@@ -159,6 +159,9 @@ class ReviewOut(ORMModel):
     author_id: int | None = None
     # True when the reviewer actually bought this bake (non-cancelled order)
     verified_purchase: bool = False
+    # False when the baker took the review down; the field travels so the
+    # author's own copy can explain itself ("hidden by the shop").
+    is_approved: bool = True
 
 
 class ProductCard(ORMModel):
@@ -417,6 +420,45 @@ class AdminStatsOut(BaseModel):
     top_products: list[dict]
     recent_orders: list[OrderOut]
     low_stock: list[ProductCard]
+
+
+# --------------------------------------------------------------------------
+# Review moderation + the baker's bell
+# --------------------------------------------------------------------------
+
+class ReviewModerationRequest(BaseModel):
+    is_approved: bool
+
+
+class AdminReviewOut(ORMModel):
+    """One review as the desk sees it: whose, on what, and whether it's live."""
+
+    id: int
+    product_id: int
+    product_name: str
+    product_slug: str
+    author_name: str | None = None
+    author_email: str | None = None
+    rating: int
+    comment: str | None
+    verified_purchase: bool = False
+    is_approved: bool
+    created_at: datetime
+
+
+class AdminNotificationOut(ORMModel):
+    id: int
+    kind: str
+    title: str
+    body: str | None
+    link: str | None
+    is_read: bool
+    created_at: datetime
+
+
+class AdminNotificationList(BaseModel):
+    items: list[AdminNotificationOut]
+    unread_count: int
 
 
 class SortOption(str, enum.Enum):

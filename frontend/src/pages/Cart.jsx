@@ -364,7 +364,7 @@ export default function Cart() {
             to={user ? "/checkout" : "/login?from=/checkout"}
             className="btn btn-primary btn-lg mt-6 w-full"
           >
-            {user ? "Checkout" : "Log in to checkout"} →
+            {user ? "Checkout" : "Log in to checkout"}
           </Link>
           <p className="mt-3 text-center text-xs opacity-60">
             Totals confirmed at checkout

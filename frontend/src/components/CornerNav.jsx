@@ -7,6 +7,7 @@ import {
   MapPin,
   ScrollText,
   Settings,
+  Star,
   Store,
   TicketPercent,
   User,
@@ -39,6 +40,7 @@ const DESK_SECTIONS = [
     tabs: [
       { to: "/admin/orders", label: "Orders", Icon: ScrollText, end: true },
       { to: "/admin/products", label: "Products", Icon: CakeSlice, end: true },
+      { to: "/admin/reviews", label: "Reviews", Icon: Star, end: true },
       { to: "/admin/promotions", label: "Promotions", Icon: TicketPercent, end: true },
     ],
   },

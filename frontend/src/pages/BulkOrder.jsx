@@ -1,28 +1,9 @@
 import { useMemo, useState } from "react";
-import { CalendarHeart, CheckCircle2, PhoneCall, Wheat } from "lucide-react";
 import client, { apiError } from "../api/client";
 import { EVENT_TYPES, isoDate } from "../lib/format";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import EmptyState from "../components/EmptyState";
-
-const HOW_IT_WORKS = [
-  {
-    Icon: CalendarHeart,
-    title: "Tell us the date",
-    text: "One form, two minutes — pick the day, the crowd and the bakes you have in mind.",
-  },
-  {
-    Icon: PhoneCall,
-    title: "We quote within a day",
-    text: "Djini calls or writes back with a price, portions and delivery timing.",
-  },
-  {
-    Icon: Wheat,
-    title: "We bake, box and deliver",
-    text: "Everything comes out of the same oven, the same morning as your event.",
-  },
-];
 
 const EMPTY_FORM = {
   name: "",
@@ -32,7 +13,6 @@ const EMPTY_FORM = {
   event_date: "",
   guests: "",
   items_note: "",
-  message: "",
 };
 
 export default function BulkOrder() {
@@ -73,7 +53,7 @@ export default function BulkOrder() {
 
   if (sent) {
     return (
-      <div className="mx-auto max-w-3xl px-4 py-8">
+      <div className="mx-auto max-w-2xl px-4 py-12">
         <EmptyState
           title="Enquiry received"
           hint="Djini will call or write back within one working day with a quote, portions and delivery timing. Nothing is charged until you say yes."
@@ -87,188 +67,142 @@ export default function BulkOrder() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-10">
-      <div className="max-w-2xl">
-        <p className="text-xs font-bold tracking-[0.25em] text-secondary uppercase">
-          Events &amp; catering
-        </p>
-        <h1 className="font-display mt-2 text-4xl font-semibold md:text-5xl">
-          Feeding a crowd?
-        </h1>
-        <p className="mt-4 text-lg leading-relaxed opacity-80">
-          Weddings, office Fridays, birthday tables for forty — the whole spread
-          comes out of the same oven as the morning case. Tell us the date and
-          the crowd; we quote within a working day.
-        </p>
-      </div>
+    <div className="mx-auto max-w-2xl px-4 py-12">
+      <p className="text-xs font-bold tracking-[0.25em] text-secondary uppercase">
+        Events &amp; catering
+      </p>
+      <h1 className="font-display mt-2 text-4xl font-semibold md:text-5xl">
+        Feeding a crowd?
+      </h1>
+      <p className="mt-3 opacity-75">
+        Tell us the date and the crowd — we quote within a working day.
+      </p>
 
-      <div className="mt-10 grid gap-8 lg:grid-cols-[1fr_360px]">
-        {/* The enquiry form */}
-        <form
-          onSubmit={submit}
-          className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60 md:p-8"
-        >
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label className="label text-xs" htmlFor="bulk-name">
-                Your name
-              </label>
-              <input
-                id="bulk-name"
-                className="input input-bordered w-full"
-                required
-                maxLength={150}
-                value={form.name}
-                onChange={(e) => setField("name", e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="label text-xs" htmlFor="bulk-email">
-                Email
-              </label>
-              <input
-                id="bulk-email"
-                type="email"
-                className="input input-bordered w-full"
-                required
-                maxLength={255}
-                value={form.email}
-                onChange={(e) => setField("email", e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="label text-xs" htmlFor="bulk-phone">
-                Phone (optional — we mostly quote by phone)
-              </label>
-              <input
-                id="bulk-phone"
-                type="tel"
-                className="input input-bordered w-full"
-                maxLength={30}
-                value={form.phone}
-                onChange={(e) => setField("phone", e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="label text-xs" htmlFor="bulk-type">
-                The occasion
-              </label>
-              <select
-                id="bulk-type"
-                className="select select-bordered w-full"
-                value={form.event_type}
-                onChange={(e) => setField("event_type", e.target.value)}
-              >
-                {EVENT_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="label text-xs" htmlFor="bulk-date">
-                Event date
-              </label>
-              <input
-                id="bulk-date"
-                type="date"
-                className="input input-bordered w-full"
-                required
-                min={minDate}
-                value={form.event_date}
-                onChange={(e) => setField("event_date", e.target.value)}
-              />
-              <p className="mt-1 text-xs opacity-60">
-                At least a day&rsquo;s notice — big boxes need planning.
-              </p>
-            </div>
-            <div>
-              <label className="label text-xs" htmlFor="bulk-guests">
-                How many guests?
-              </label>
-              <input
-                id="bulk-guests"
-                type="number"
-                className="input input-bordered w-full"
-                required
-                min="1"
-                max="2000"
-                value={form.guests}
-                onChange={(e) => setField("guests", e.target.value)}
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="label text-xs" htmlFor="bulk-items">
-                What did you have in mind? (optional)
-              </label>
-              <textarea
-                id="bulk-items"
-                rows={3}
-                maxLength={2000}
-                className="textarea textarea-bordered w-full"
-                placeholder="60 croffles, 3 garden focaccias, 4 dozen glazed doughnuts…"
-                value={form.items_note}
-                onChange={(e) => setField("items_note", e.target.value)}
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="label text-xs" htmlFor="bulk-message">
-                Anything else? (optional)
-              </label>
-              <textarea
-                id="bulk-message"
-                rows={2}
-                maxLength={2000}
-                className="textarea textarea-bordered w-full"
-                placeholder="Delivery window, dietary needs, budget to work to…"
-                value={form.message}
-                onChange={(e) => setField("message", e.target.value)}
-              />
-            </div>
+      <form
+        onSubmit={submit}
+        className="rounded-box glass mt-8 p-6 shadow-sm ring-1 ring-base-300/60 md:p-8"
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className="label text-xs" htmlFor="bulk-name">
+              Your name
+            </label>
+            <input
+              id="bulk-name"
+              className="input input-bordered w-full"
+              required
+              maxLength={150}
+              value={form.name}
+              onChange={(e) => setField("name", e.target.value)}
+            />
           </div>
-
-          <div className="mt-6 flex flex-wrap items-center gap-4">
-            <button
-              type="submit"
-              className="btn btn-primary btn-lg"
-              disabled={sending}
-            >
-              {sending ? <span className="loading loading-spinner loading-sm" /> : null}
-              {sending ? "Sending…" : "Send the enquiry"}
-            </button>
-            <p className="text-xs opacity-60">
-              No account needed · nothing is charged until you approve the quote
-            </p>
+          <div>
+            <label className="label text-xs" htmlFor="bulk-email">
+              Email
+            </label>
+            <input
+              id="bulk-email"
+              type="email"
+              className="input input-bordered w-full"
+              required
+              maxLength={255}
+              value={form.email}
+              onChange={(e) => setField("email", e.target.value)}
+            />
           </div>
-        </form>
-
-        {/* Reassurance rail */}
-        <aside className="h-fit space-y-4 lg:sticky lg:top-24">
-          {HOW_IT_WORKS.map(({ Icon, title, text }, i) => (
-            <div
-              key={title}
-              className="flex items-start gap-3.5 rounded-box bg-base-200/60 p-5"
+          <div>
+            <label className="label text-xs" htmlFor="bulk-type">
+              The occasion
+            </label>
+            <select
+              id="bulk-type"
+              className="select select-bordered w-full"
+              value={form.event_type}
+              onChange={(e) => setField("event_type", e.target.value)}
             >
-              <span className="brand-gradient flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-secondary-content">
-                <Icon size={20} aria-hidden="true" />
-              </span>
-              <div>
-                <p className="font-display font-semibold">
-                  <span className="opacity-50">{i + 1}. </span>
-                  {title}
-                </p>
-                <p className="mt-0.5 text-sm opacity-70">{text}</p>
-              </div>
-            </div>
-          ))}
-          <p className="flex items-start gap-2 px-1 text-xs leading-relaxed opacity-70">
-            <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-success" aria-hidden="true" />
-            Regular customers: your usual boxes can go out on the evening run —
-            orders over $50 ship free, vouchers included.
+              {EVENT_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label text-xs" htmlFor="bulk-date">
+              Event date
+            </label>
+            <input
+              id="bulk-date"
+              type="date"
+              className="input input-bordered w-full"
+              required
+              min={minDate}
+              value={form.event_date}
+              onChange={(e) => setField("event_date", e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label text-xs" htmlFor="bulk-guests">
+              How many guests?
+            </label>
+            <input
+              id="bulk-guests"
+              type="number"
+              className="input input-bordered w-full"
+              required
+              min="1"
+              max="2000"
+              value={form.guests}
+              onChange={(e) => setField("guests", e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label text-xs" htmlFor="bulk-phone">
+              Phone (optional)
+            </label>
+            <input
+              id="bulk-phone"
+              type="tel"
+              className="input input-bordered w-full"
+              maxLength={30}
+              value={form.phone}
+              onChange={(e) => setField("phone", e.target.value)}
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label text-xs" htmlFor="bulk-items">
+              What did you have in mind? (optional)
+            </label>
+            <textarea
+              id="bulk-items"
+              rows={3}
+              maxLength={2000}
+              className="textarea textarea-bordered w-full"
+              placeholder="60 croffles, 3 garden focaccias, delivery by 2pm…"
+              value={form.items_note}
+              onChange={(e) => setField("items_note", e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="mt-6 flex flex-wrap items-center gap-4">
+          <button
+            type="submit"
+            className="btn btn-primary btn-lg"
+            disabled={sending}
+          >
+            {sending ? <span className="loading loading-spinner loading-sm" /> : null}
+            {sending ? "Sending…" : "Send the enquiry"}
+          </button>
+          <p className="text-xs opacity-60">
+            No account needed · nothing charged until you approve the quote
           </p>
-        </aside>
-      </div>
+        </div>
+      </form>
+
+      <p className="mt-6 text-center text-xs tracking-wide opacity-55">
+        Tell us the date · We quote within a day · Baked the same morning as your event
+      </p>
     </div>
   );
 }

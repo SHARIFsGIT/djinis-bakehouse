@@ -114,8 +114,20 @@ def get_current_admin(
     return user
 
 
+def get_optional_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+    db: Annotated[Session, Depends(get_db)],
+) -> User | None:
+    """The viewer when a valid token came along, a guest otherwise — for
+    pages that render for everyone but personalize a corner (a hidden review
+    stays visible to its own author)."""
+    user = _get_user_by_token(credentials, db)
+    return user if user is not None and user.is_active else None
+
+
 CurrentUser = Annotated[User, Depends(get_current_user)]
 CurrentAdmin = Annotated[User, Depends(get_current_admin)]
+OptionalUser = Annotated[User | None, Depends(get_optional_user)]
 DbSession = Annotated[Session, Depends(get_db)]
 
 

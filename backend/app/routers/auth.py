@@ -10,6 +10,7 @@ from sqlalchemy import select
 from ..config import get_settings
 from ..email import reset_password_email, send_email
 from ..models import Address, User, utcnow
+from ..notifications import notify_admin
 from ..schemas import (
     AccessTokenResponse,
     AddressCreate,
@@ -73,6 +74,15 @@ def register(payload: RegisterRequest, db: DbSession, request: Request):
         phone=payload.phone,
     )
     db.add(user)
+    db.flush()
+    # A new regular is news worth hearing at the desk.
+    notify_admin(
+        db,
+        kind="customer",
+        title=f"New customer — {user.full_name}",
+        body=user.email,
+        link="/admin/users",
+    )
     db.commit()
     db.refresh(user)
     return _token_response(user)

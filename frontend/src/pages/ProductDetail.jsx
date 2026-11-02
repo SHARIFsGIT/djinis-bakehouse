@@ -356,6 +356,12 @@ export default function ProductDetail() {
                 <p className="mb-2 font-semibold">
                   {mine ? "Update your review" : "Leave a review"}
                 </p>
+                {mine && !mine.is_approved && (
+                  <p className="mb-2 rounded-lg bg-base-200 px-3 py-2 text-xs opacity-70">
+                    The shop has taken this review off the public wall. You can
+                    still read and edit your copy.
+                  </p>
+                )}
                 <StarPicker value={reviewRating} onChange={setReviewRating} />
                 <textarea
                   className="textarea textarea-bordered mt-3 w-full"

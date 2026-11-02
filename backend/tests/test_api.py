@@ -367,6 +367,127 @@ def test_review_verified_purchase_badge():
     assert badges["Bystander User"] is False
 
 
+def test_review_moderation():
+    """The baker can take a review off the wall without losing it: the
+    public wall and the averages drop it, the author keeps their copy."""
+    headers = admin_headers()
+    mine = auth_header(register_and_login("moderated@example.com", "Moderated123!"))
+    product = get_product("croffle")  # carries two seeded reviews
+
+    seeded = client.get(f"/api/products/{product['slug']}").json()
+    seeded_count, seeded_avg = seeded["review_count"], seeded["average_rating"]
+
+    created = client.post(
+        f"/api/products/{product['id']}/reviews",
+        json={"rating": 1, "comment": "Not my favorite"},
+        headers=mine,
+    )
+    assert created.status_code == 201
+    assert created.json()["is_approved"] is True
+    review_id = created.json()["id"]
+
+    desk = client.get("/api/admin/reviews", params={"status": "live"}, headers=headers).json()
+    row = next(r for r in desk if r["id"] == review_id)
+    assert row["author_email"] == "moderated@example.com"
+    assert row["product_slug"] == "croffle"
+
+    hidden = client.put(
+        f"/api/admin/reviews/{review_id}", json={"is_approved": False}, headers=headers
+    )
+    assert hidden.status_code == 200
+    assert hidden.json()["is_approved"] is False
+
+    # shoppers no longer see it — list, count or average
+    public = client.get(f"/api/products/{product['slug']}").json()
+    assert public["review_count"] == seeded_count
+    assert public["average_rating"] == seeded_avg
+    assert all(r["is_approved"] for r in public["reviews"])
+
+    # the author still finds their own copy, flagged
+    own = client.get(f"/api/products/{product['slug']}", headers=mine).json()
+    flagged = [r for r in own["reviews"] if r["id"] == review_id]
+    assert flagged and flagged[0]["is_approved"] is False
+
+    hidden_list = client.get(
+        "/api/admin/reviews", params={"status": "hidden"}, headers=headers
+    ).json()
+    assert any(r["id"] == review_id for r in hidden_list)
+
+    restored = client.put(
+        f"/api/admin/reviews/{review_id}", json={"is_approved": True}, headers=headers
+    )
+    assert restored.status_code == 200
+    assert client.get(f"/api/products/{product['slug']}").json()["review_count"] == seeded_count + 1
+
+    # the wall is the baker's to manage, never another shopper's
+    assert client.put(
+        f"/api/admin/reviews/{review_id}", json={"is_approved": False}, headers=mine
+    ).status_code == 403
+
+
+def test_bakers_bell_notifications():
+    """Every customer-facing write — order, review (new or changed), catering
+    lead, signup — drops one ping on the desk, and only the desk can read it."""
+    headers = admin_headers()
+    customer = client.post("/api/auth/login", json=CUSTOMER).json()["access_token"]
+
+    placed = client.post("/api/orders", json=checkout_payload(), headers=auth_header(customer))
+    assert placed.status_code == 201
+
+    reviewer = register_and_login("bellfan@example.com", "Bellfan123!")
+    product = get_product("wool-roll-bread")
+    assert client.post(
+        f"/api/products/{product['id']}/reviews",
+        json={"rating": 5},
+        headers=auth_header(reviewer),
+    ).status_code == 201
+    assert client.post(
+        f"/api/products/{product['id']}/reviews",
+        json={"rating": 3, "comment": "Hmm, smaller than last time"},
+        headers=auth_header(reviewer),
+    ).status_code == 200
+
+    import datetime
+
+    lead = client.post(
+        "/api/bulk-orders",
+        json={
+            "name": "Bell Tester",
+            "email": "bell@example.com",
+            "event_date": (datetime.date.today() + datetime.timedelta(days=14)).isoformat(),
+            "event_type": "birthday",
+            "guests": 20,
+        },
+    )
+    assert lead.status_code == 201
+
+    board = client.get("/api/admin/notifications", headers=headers).json()
+    titles = [n["title"] for n in board["items"]]
+    digest = " | ".join(titles)
+    assert f"New order {placed.json()['order_number']}" in digest
+    assert "left a review on Wool Roll Bread" in digest
+    assert "changed their review on Wool Roll Bread" in digest
+    assert "Bulk enquiry from Bell Tester" in digest
+    assert any(t.startswith("New customer") for t in titles)
+    assert board["unread_count"] >= 5
+
+    # one ping marks read; read-all clears the badge
+    top = board["items"][0]
+    assert (
+        client.post(f"/api/admin/notifications/{top['id']}/read", headers=headers).status_code
+        == 200
+    )
+    after_one = client.get("/api/admin/notifications", headers=headers).json()
+    assert after_one["unread_count"] == board["unread_count"] - 1
+
+    client.post("/api/admin/notifications/read-all", headers=headers)
+    cleared = client.get("/api/admin/notifications", headers=headers).json()
+    assert cleared["unread_count"] == 0
+
+    # the bell rings for the baker alone
+    assert client.get("/api/admin/notifications", headers=auth_header(customer)).status_code == 403
+
+
 def test_favorites():
     token = register_and_login("heart@example.com", "Heart123!")
     headers = auth_header(token)

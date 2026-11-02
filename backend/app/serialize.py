@@ -8,12 +8,15 @@ from .schemas import ProductCard, ReviewOut
 
 
 def review_summary(db: Session, product_ids: list[int]) -> dict[int, tuple[float, int]]:
-    """Average rating and review count per product id, in one query."""
+    """Average rating and review count per product id, in one query.
+
+    Live reviews only — the numbers shoppers see never include one the baker
+    has taken down."""
     if not product_ids:
         return {}
     rows = (
         db.query(Review.product_id, func.avg(Review.rating), func.count(Review.id))
-        .filter(Review.product_id.in_(product_ids))
+        .filter(Review.product_id.in_(product_ids), Review.is_approved.is_(True))
         .group_by(Review.product_id)
         .all()
     )
@@ -71,4 +74,5 @@ def review_to_out(review: Review, verified_purchase: bool = False) -> ReviewOut:
         author_name=user.full_name if user else None,
         author_id=review.user_id,
         verified_purchase=verified_purchase,
+        is_approved=review.is_approved,
     )

@@ -44,7 +44,20 @@ _ADDITIVE_COLUMNS = {
     "coupons": {
         "min_subtotal": "ALTER TABLE coupons ADD COLUMN min_subtotal NUMERIC(10,2)",
     },
+    "reviews": {
+        "is_approved": "ALTER TABLE reviews ADD COLUMN is_approved BOOLEAN NOT NULL DEFAULT 1",
+    },
 }
+
+# One-off copy corrections for older databases, matched against the exact
+# shipped text so anything the baker rewrote is never touched. Each runs on
+# every boot but only ever fires once — the match disappears with the text.
+_DATA_FIXES = (
+    "UPDATE categories SET description = NULL WHERE description = "
+    "'Daily loaves, baguettes, focaccia and soft rolls — baked every morning.'",
+    "UPDATE categories SET description = NULL WHERE description = "
+    "'Doughnuts, maritozzo and seasonal sweet things.'",
+)
 
 
 class SlidingWindowLimiter:
@@ -109,6 +122,10 @@ def _upgrade_schema() -> None:
                 if column not in present:
                     logger.info("Upgrading schema: adding %s.%s", table, column)
                     conn.execute(text(statement))
+        for statement in _DATA_FIXES:
+            result = conn.execute(text(statement))
+            if result.rowcount:
+                logger.info("Applied copy fix (%d row%s)", result.rowcount, "s" if result.rowcount != 1 else "")
 
 
 @asynccontextmanager
@@ -120,6 +137,19 @@ async def lifespan(app: FastAPI):
     from .seed import seed_db
 
     seed_db()
+
+    # Housekeeping: read desk pings older than a month quietly leave.
+    from .database import SessionLocal
+    from .notifications import prune_notifications
+
+    housekeeping = SessionLocal()
+    try:
+        pruned = prune_notifications(housekeeping)
+        if pruned:
+            logger.info("Pruned %d read notification(s) past retention", pruned)
+    finally:
+        housekeeping.close()
+
     settings = get_settings()
     if settings.is_production and settings.enable_docs:
         logger.warning(
@@ -135,7 +165,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=f"{settings.bakery_name} API",
-        version="3.5.0",
+        version="3.6.0",
         description="Bakery e-commerce API — customers, catalog, orders, coupons, bulk enquiries, saved bakes, newsletter and admin.",
         lifespan=lifespan,
         docs_url="/api/docs" if settings.enable_docs else None,

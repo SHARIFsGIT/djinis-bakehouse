@@ -14,6 +14,7 @@ from ..models import (
     DEFAULT_HERO_IMAGE,
     DEFAULT_MARQUEE,
     DEFAULT_TODAY_NOTE,
+    AdminNotification,
     BulkEnquiry,
     BulkEnquiryStatus,
     Category,
@@ -25,12 +26,16 @@ from ..models import (
     OrderStatus,
     PaymentStatus,
     Product,
+    Review,
     Testimonial,
     User,
     UserRole,
     get_store_setting,
 )
 from ..schemas import (
+    AdminNotificationList,
+    AdminNotificationOut,
+    AdminReviewOut,
     AdminStatsOut,
     BulkEnquiryOut,
     BulkEnquiryUpdate,
@@ -52,6 +57,7 @@ from ..schemas import (
     ProductDetail,
     ProductListResponse,
     ProductUpdateRequest,
+    ReviewModerationRequest,
     StoreSettingsOut,
     StoreSettingsUpdate,
     TestimonialCreate,
@@ -61,7 +67,7 @@ from ..schemas import (
     UserOut,
 )
 from ..security import CurrentAdmin, DbSession
-from ..serialize import product_to_card, review_summary
+from ..serialize import product_to_card, review_summary, verified_buyers
 from ..uploads import MAX_PRODUCT_PHOTO_BYTES, save_photo
 from .orders import _cancel_order, _late_cancel_fee, _serialize
 
@@ -125,6 +131,48 @@ def stats(admin: CurrentAdmin, db: DbSession):
         recent_orders=[_serialize(o) for o in recent],
         low_stock=[product_to_card(p, low_ratings) for p in low_stock_products],
     )
+
+
+# --------------------------------------------------------------------------
+# The baker's bell (desk notifications)
+# --------------------------------------------------------------------------
+
+@router.get("/notifications", response_model=AdminNotificationList)
+def list_notifications(
+    admin: CurrentAdmin,
+    db: DbSession,
+    limit: int = Query(default=20, ge=1, le=50),
+    unread_only: bool = False,
+):
+    """The desk's pings, newest first, with the unread tally for the badge."""
+    query = select(AdminNotification).order_by(AdminNotification.created_at.desc())
+    if unread_only:
+        query = query.where(AdminNotification.is_read.is_(False))
+    items = db.scalars(query.limit(limit)).all()
+    unread = db.scalar(
+        select(func.count(AdminNotification.id)).where(AdminNotification.is_read.is_(False))
+    )
+    return AdminNotificationList(items=items, unread_count=unread or 0)
+
+
+@router.post("/notifications/{notification_id}/read", response_model=AdminNotificationOut)
+def mark_notification_read(notification_id: int, admin: CurrentAdmin, db: DbSession):
+    notification = db.get(AdminNotification, notification_id)
+    if notification is None:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    notification.is_read = True
+    db.commit()
+    db.refresh(notification)
+    return notification
+
+
+@router.post("/notifications/read-all")
+def mark_all_notifications_read(admin: CurrentAdmin, db: DbSession):
+    db.execute(
+        update(AdminNotification).where(AdminNotification.is_read.is_(False)).values(is_read=True)
+    )
+    db.commit()
+    return {"message": "All caught up", "unread_count": 0}
 
 
 # --------------------------------------------------------------------------
@@ -487,6 +535,80 @@ async def upload_hero_photo(photo: UploadFile, admin: CurrentAdmin):
     """The photo above the today note on the home page (Settings tab)."""
     url = await save_photo(photo, folder="site", max_bytes=MAX_PRODUCT_PHOTO_BYTES)
     return {"url": url}
+
+
+# --------------------------------------------------------------------------
+# Review moderation
+# --------------------------------------------------------------------------
+
+def _admin_review(review: Review, verified: bool) -> AdminReviewOut:
+    return AdminReviewOut(
+        id=review.id,
+        product_id=review.product_id,
+        product_name=review.product.name,
+        product_slug=review.product.slug,
+        author_name=review.user.full_name if review.user else None,
+        author_email=review.user.email if review.user else None,
+        rating=review.rating,
+        comment=review.comment,
+        verified_purchase=verified,
+        is_approved=review.is_approved,
+        created_at=review.created_at,
+    )
+
+
+@router.get("/reviews", response_model=list[AdminReviewOut])
+def all_reviews(
+    admin: CurrentAdmin,
+    db: DbSession,
+    status_filter: str = Query(default="all", alias="status", pattern="^(live|hidden|all)$"),
+):
+    """Every review as the desk sees it: whose, on what, live or taken down."""
+    query = select(Review).order_by(Review.created_at.desc())
+    if status_filter == "live":
+        query = query.where(Review.is_approved.is_(True))
+    elif status_filter == "hidden":
+        query = query.where(Review.is_approved.is_(False))
+    reviews = db.scalars(query).all()
+
+    # Verified-purchase flags in one pass per product, not one query per row.
+    by_product: dict[int, list[int]] = {}
+    for review in reviews:
+        by_product.setdefault(review.product_id, []).append(review.user_id)
+    verified: set[tuple[int, int]] = set()
+    for product_id, user_ids in by_product.items():
+        verified.update((product_id, uid) for uid in verified_buyers(db, product_id, user_ids))
+
+    return [_admin_review(r, (r.product_id, r.user_id) in verified) for r in reviews]
+
+
+@router.put("/reviews/{review_id}", response_model=AdminReviewOut)
+def moderate_review(
+    review_id: int, payload: ReviewModerationRequest, admin: CurrentAdmin, db: DbSession
+):
+    """Put a review on the wall or take it down. The reviewer keeps their
+    copy (their own view explains what happened); only the public wall and
+    the averages change."""
+    review = db.get(Review, review_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail="Review not found")
+    review.is_approved = payload.is_approved
+    db.commit()
+    db.refresh(review)
+    verified = review.user_id in verified_buyers(db, review.product_id, [review.user_id])
+    return _admin_review(review, verified)
+
+
+@router.delete("/reviews/{review_id}")
+def delete_review_admin(review_id: int, admin: CurrentAdmin, db: DbSession):
+    """Remove a review outright — spam and abuse. Hiding is the gentler,
+    reversible tool; this one is for the bin."""
+    review = db.get(Review, review_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail="Review not found")
+    db.delete(review)
+    db.commit()
+    return {"message": "Review deleted"}
 
 
 # --------------------------------------------------------------------------

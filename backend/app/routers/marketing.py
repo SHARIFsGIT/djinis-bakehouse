@@ -29,6 +29,7 @@ from ..schemas import (
     VoucherOut,
 )
 from ..config import get_settings
+from ..notifications import notify_admin
 from ..security import CurrentAdmin, DbSession, client_key
 
 router = APIRouter(prefix="/api", tags=["storefront"])
@@ -111,6 +112,15 @@ def create_bulk_enquiry(payload: BulkEnquiryCreate, db: DbSession, request: Requ
         message=payload.message,
     )
     db.add(enquiry)
+    db.flush()
+    # A catering lead is worth acting on today — same transaction, one ping.
+    notify_admin(
+        db,
+        kind="enquiry",
+        title=f"Bulk enquiry from {enquiry.name} — {enquiry.event_date:%b %d}",
+        body=f"{enquiry.guests} guests · {enquiry.email}",
+        link="/admin/orders",  # the enquiry rail lives under Orders
+    )
     db.commit()
     db.refresh(enquiry)
     return enquiry

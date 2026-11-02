@@ -14,7 +14,8 @@ from ..schemas import (
     ReviewOut,
     SortOption,
 )
-from ..security import CurrentUser, DbSession
+from ..notifications import notify_review
+from ..security import CurrentUser, DbSession, OptionalUser
 from ..serialize import product_to_card, review_summary, review_to_out, verified_buyers
 
 router = APIRouter(prefix="/api/products", tags=["products"])
@@ -144,12 +145,14 @@ def list_products(
     if sort == SortOption.RATING:
         # Sort the whole catalog, not just the page: join the per-product
         # average rating and let the database order by it before paging.
+        # Live reviews only — the wall and the ranking agree.
         rating_subq = (
             select(
                 Review.product_id,
                 func.avg(Review.rating).label("avg_rating"),
                 func.count(Review.id).label("review_count"),
             )
+            .where(Review.is_approved.is_(True))
             .group_by(Review.product_id)
             .subquery()
         )
@@ -187,7 +190,7 @@ def list_products(
 
 
 @router.get("/{slug}", response_model=ProductDetail)
-def product_detail(slug: str, db: DbSession):
+def product_detail(slug: str, db: DbSession, user: OptionalUser):
     product = db.scalar(
         select(Product).where(Product.slug == slug, Product.is_available.is_(True))
     )
@@ -195,7 +198,12 @@ def product_detail(slug: str, db: DbSession):
         raise HTTPException(status_code=404, detail="Product not found")
 
     ratings = review_summary(db, [product.id])
-    ordered_reviews = sorted(product.reviews, key=lambda r: r.created_at, reverse=True)
+    # Live reviews for everyone; a hidden one stays in its author's own view,
+    # flagged, so the form still finds it and can say why it's off the wall.
+    visible = [
+        r for r in product.reviews if r.is_approved or (user is not None and r.user_id == user.id)
+    ]
+    ordered_reviews = sorted(visible, key=lambda r: r.created_at, reverse=True)
     buyers = verified_buyers(db, product.id, [r.user_id for r in ordered_reviews])
     detail = ProductDetail(
         **product_to_card(product, ratings).model_dump(),
@@ -229,7 +237,10 @@ def product_detail(slug: str, db: DbSession):
 def add_review(
     product_id: int, payload: ReviewCreate, user: CurrentUser, db: DbSession, response: Response
 ):
-    """Create a review, or edit the customer's existing one for this product."""
+    """Create a review, or edit the customer's existing one for this product.
+
+    Either way the baker's bell rings — a changed review deserves a second
+    look as much as a fresh one."""
     product = db.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -241,11 +252,14 @@ def add_review(
         review.rating = payload.rating
         review.comment = payload.comment
         response.status_code = status.HTTP_200_OK
+        notify_review(db, review, changed=True)
     else:
         review = Review(
             product_id=product_id, user_id=user.id, rating=payload.rating, comment=payload.comment
         )
         db.add(review)
+        db.flush()  # give the ping its product/author relationships
+        notify_review(db, review, changed=False)
     db.commit()
     db.refresh(review)
     return review_to_out(review)

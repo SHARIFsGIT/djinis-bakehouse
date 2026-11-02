@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 
 from ..config import get_settings
 from ..email import send_order_receipt
+from ..notifications import notify_admin
 from ..models import (
     Address,
     Coupon,
@@ -224,6 +225,16 @@ def checkout(payload: CheckoutRequest, user: CurrentUser, db: DbSession, backgro
         product.stock -= quantity
 
     db.add(OrderEvent(order_id=order.id, status=OrderStatus.PENDING.value, comment="Order placed"))
+    # Same transaction as the order itself — the bell can't announce a sale
+    # that didn't happen.
+    notify_admin(
+        db,
+        kind="order",
+        title=f"New order {order.order_number} — ${total:.2f}",
+        body=f"{user.full_name} · {sum(merged.values())} items · "
+        f"{payload.payment_method.value.replace('_', ' ')}",
+        link=f"/admin/orders?search={order.order_number}",
+    )
     db.commit()
     db.refresh(order)
 

@@ -195,6 +195,10 @@ class Review(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     rating: Mapped[int] = mapped_column(Integer)  # 1..5
     comment: Mapped[str | None] = mapped_column(Text)
+    # Reviews go live the moment they're posted; the baker can take one down
+    # from the desk without losing it. Hidden reviews stay visible to their
+    # author (flagged) so editing still works.
+    is_approved: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     product: Mapped[Product] = relationship(back_populates="reviews")
@@ -367,6 +371,24 @@ class OrderEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     order: Mapped[Order] = relationship(back_populates="timeline")
+
+
+class AdminNotification(Base):
+    """A ping on the baker's desk: a new order, a review that changed, a
+    catering lead, a new face. Every customer-facing write drops one here in
+    its own transaction, so the bell never announces something that didn't
+    happen."""
+
+    __tablename__ = "admin_notifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), index=True)  # order, review, enquiry, customer
+    title: Mapped[str] = mapped_column(String(255))
+    body: Mapped[str | None] = mapped_column(String(500))
+    # Where the bell's click lands (a front-of-house route on the desk)
+    link: Mapped[str | None] = mapped_column(String(255))
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 # Storefront copy the admin can rewrite — these are the out-of-the-box lines
