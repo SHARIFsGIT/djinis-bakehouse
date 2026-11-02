@@ -1,10 +1,10 @@
+import { Flame, ShieldCheck, Sparkles, Star, Truck, Users, Wheat } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { Flame, ShieldCheck, Sparkles, Star, Truck, Users, Wheat } from "lucide-react";
 import client from "../api/client";
-import ProductCard from "../components/ProductCard";
-import PhotoTile from "../components/PhotoTile";
 import { ProductGridSkeleton } from "../components/Loading";
+import PhotoTile from "../components/PhotoTile";
+import ProductCard from "../components/ProductCard";
 import { productInitial } from "../lib/format";
 
 // Shown until /store answers (and whenever the admin hasn't picked one)
@@ -137,7 +137,7 @@ export default function Home() {
             </p>
             <h1 className="font-display mt-5 text-5xl leading-[1.05] font-semibold md:text-6xl">
               Butter, flour &<br />a little{" "}
-              <em className="text-secondary italic">patience</em>.
+              <em className="text-secondary italic">patience</em>
             </h1>
             <p className="mt-6 max-w-md text-lg leading-relaxed opacity-80">
               Every loaf proofs overnight, every croissant is laminated by hand,
@@ -180,7 +180,7 @@ export default function Home() {
               <img
                 src={heroImage}
                 alt="Djini behind the counter in her chef's coat"
-                className="aspect-[6/5] w-full object-cover"
+                className="aspect-6/5 w-full object-cover"
               />
               {todayNote && (
                 <div className="brand-gradient text-primary-content">
@@ -275,9 +275,9 @@ export default function Home() {
               <PhotoTile
                 src={c.image_url}
                 name={c.name}
-                className="aspect-[4/3] w-full"
+                className="aspect-4/3 w-full"
               />
-              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-base-100 via-base-100/85 to-transparent p-4 pt-12">
+              <div className="absolute inset-x-0 bottom-0 bg-linear-to-t from-base-100 via-base-100/85 to-transparent p-4 pt-12">
                 <p className="font-display text-xl font-semibold">{c.name}</p>
                 <p className="text-xs opacity-70">
                   {c.product_count} {c.product_count === 1 ? "item" : "items"}{" "}
@@ -345,7 +345,7 @@ export default function Home() {
                 <PhotoTile
                   src={item.image_url}
                   name={item.title}
-                  className="aspect-[16/10] w-full"
+                  className="aspect-16/10 w-full"
                 />
                 <div className="bg-base-200/60 p-5">
                   <div className="flex items-start justify-between gap-3">
