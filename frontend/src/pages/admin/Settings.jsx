@@ -551,6 +551,7 @@ export default function Settings() {
         fee: String(data.late_cancel_fee_percent),
         announcement: data.announcement ?? "",
         today_note: data.today_note ?? "",
+        marquee: data.marquee_items ?? "",
       });
     });
   }, []);
@@ -563,7 +564,8 @@ export default function Settings() {
   const feeDirty = feeValid && parsed !== saved.late_cancel_fee_percent;
   const copyDirty =
     form.announcement !== (saved.announcement ?? "") ||
-    form.today_note !== (saved.today_note ?? "");
+    form.today_note !== (saved.today_note ?? "") ||
+    form.marquee !== (saved.marquee_items ?? "");
   const example = (40 * parsed) / 100; // a $40 box, for scale
 
   const save = async (part) => {
@@ -572,7 +574,11 @@ export default function Settings() {
       const body =
         part === "fee"
           ? { late_cancel_fee_percent: parsed }
-          : { announcement: form.announcement, today_note: form.today_note };
+          : {
+              announcement: form.announcement,
+              today_note: form.today_note,
+              marquee_items: form.marquee,
+            };
       const { data } = await client.put("/admin/settings", body);
       setSaved(data);
       setForm((f) => ({ ...f, fee: String(data.late_cancel_fee_percent) }));
@@ -677,8 +683,7 @@ export default function Settings() {
       <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
         <h2 className="font-display text-xl font-semibold">Storefront copy</h2>
         <p className="mt-1 text-sm opacity-70">
-          The two lines shoppers see first. Clear a box to hide it from the
-          shop.
+          The lines shoppers see first. Clear a box to hide it from the shop.
         </p>
 
         <div className="mt-5 grid gap-5 sm:grid-cols-2">
@@ -715,6 +720,26 @@ export default function Settings() {
               value={form.today_note}
               onChange={(e) => setForm({ ...form, today_note: e.target.value })}
             />
+          </div>
+          <div className="sm:col-span-2">
+            <label
+              className="label mb-1.5 text-xs font-semibold"
+              htmlFor="marquee"
+            >
+              Scrolling strip — one phrase per line
+            </label>
+            <textarea
+              id="marquee"
+              rows={4}
+              maxLength={1000}
+              className="textarea textarea-bordered w-full resize-none font-mono text-xs tracking-wide uppercase"
+              value={form.marquee}
+              onChange={(e) => setForm({ ...form, marquee: e.target.value })}
+            />
+            <p className="mt-1.5 text-xs opacity-60">
+              The band that drifts across the home page. Empty lines are
+              skipped; clear the box to hide the strip.
+            </p>
           </div>
         </div>
 

@@ -8,7 +8,7 @@ export default function NotFound() {
       <p className="mt-3 opacity-70">
         Whatever you were looking for isn&rsquo;t in the case — but plenty of other good things are.
       </p>
-      <Link to="/" className="btn btn-primary btn mt-8">Back to the bakery</Link>
+      <Link to="/" className="btn btn-primary btn mt-8">Home</Link>
     </div>
   );
 }

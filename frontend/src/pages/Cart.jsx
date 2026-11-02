@@ -67,18 +67,17 @@ function VoucherCard({ voucher, subtotal, applied, onApply, onRemove }) {
       <p className="mt-2 text-xs font-semibold">
         {min > 0 && !unlocked && (
           <span className="text-secondary">
-            Add {money(away)} more to unlock it — worth{" "}
-            {money((min * voucher.percent_off) / 100)}
+            Add {money(away)} more to unlock
           </span>
         )}
         {min > 0 && unlocked && (
           <span className="text-success">
-            Unlocked on this basket — saves you about {money(saving)}
+            Unlocked · saves {money(saving)}
           </span>
         )}
         {min === 0 && (
           <span className="text-success">
-            Works on any basket — saves you about {money(saving)}
+            Any basket · saves {money(saving)}
           </span>
         )}
       </p>
@@ -112,7 +111,7 @@ export default function Cart() {
     if (subtotal >= min) {
       setAppliedCode(voucher.code);
       storeCoupon(voucher.code);
-      toast.success(`${voucher.code} saved — it's applied at checkout`);
+      toast.success(`${voucher.code} applied`);
     } else {
       // Not earned yet: point at the nearest bake that crosses the line
       setAppliedCode("");
@@ -164,8 +163,7 @@ export default function Cart() {
     <div className="mx-auto max-w-7xl px-4 py-10">
       <h1 className="font-display text-4xl font-semibold">Your basket</h1>
       <p className="mt-1 opacity-70">
-        {count} {count === 1 ? "item" : "items"} — packed with paper, never
-        plastic.
+        {count} {count === 1 ? "item" : "items"}
       </p>
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_380px]">
@@ -235,9 +233,6 @@ export default function Cart() {
                   <h2 className="font-display text-lg font-semibold">
                     Complete the box
                   </h2>
-                  <p className="text-xs opacity-60">
-                    Regulars usually add one of these
-                  </p>
                 </div>
                 <div className="mt-4 grid gap-4 sm:grid-cols-3">
                   {picks.map((p) => (
@@ -319,10 +314,6 @@ export default function Cart() {
               <div className="flex justify-between font-semibold text-success">
                 <span>
                   {appliedVoucher.code} ({appliedVoucher.percent_off}% off)
-                  <span className="font-normal opacity-70">
-                    {" "}
-                    · applied at checkout
-                  </span>
                 </span>
                 <span>−{money(discount)}</span>
               </div>
@@ -376,7 +367,7 @@ export default function Cart() {
             {user ? "Checkout" : "Log in to checkout"} →
           </Link>
           <p className="mt-3 text-center text-xs opacity-60">
-            Final totals confirmed at checkout · card payment simulated
+            Totals confirmed at checkout
           </p>
         </aside>
       </div>

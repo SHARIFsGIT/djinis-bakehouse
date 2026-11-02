@@ -20,7 +20,9 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=72)
     first_name: str = Field(min_length=1, max_length=100)
-    last_name: str = Field(min_length=1, max_length=100)
+    # Optional so the signup form can be one "Your name" field — plenty of
+    # customers have a single name to give.
+    last_name: str = Field(default="", max_length=100)
     phone: str | None = Field(default=None, max_length=30)
 
 
@@ -295,6 +297,7 @@ class StoreSettingsOut(ORMModel):
     announcement: str
     today_note: str
     hero_image: str
+    marquee_items: str
     updated_at: datetime
 
 
@@ -303,6 +306,7 @@ class StoreSettingsUpdate(BaseModel):
     announcement: str | None = Field(default=None, max_length=255)
     today_note: str | None = Field(default=None, max_length=255)
     hero_image: str | None = Field(default=None, max_length=255)
+    marquee_items: str | None = Field(default=None, max_length=1000)
 
 
 class StorefrontOut(BaseModel):
@@ -312,6 +316,7 @@ class StorefrontOut(BaseModel):
     announcement: str
     today_note: str
     hero_image: str
+    marquee: list[str] = []
     demo_accounts: bool = False
 
 

@@ -7,10 +7,11 @@ The cart lives client-side; the server re-validates every line item
 import random
 from datetime import date, timedelta
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 from sqlalchemy import func, select
 
 from ..config import get_settings
+from ..email import send_order_receipt
 from ..models import (
     Address,
     Coupon,
@@ -113,7 +114,7 @@ def _serialize(order: Order, detailed: bool = False, cancel_fee_preview: float =
 
 
 @router.post("", response_model=OrderDetailOut, status_code=status.HTTP_201_CREATED)
-def checkout(payload: CheckoutRequest, user: CurrentUser, db: DbSession):
+def checkout(payload: CheckoutRequest, user: CurrentUser, db: DbSession, background: BackgroundTasks):
     # Resolve delivery address (existing id or a new one created on the fly)
     if payload.address_id:
         address = db.scalar(
@@ -225,6 +226,30 @@ def checkout(payload: CheckoutRequest, user: CurrentUser, db: DbSession):
     db.add(OrderEvent(order_id=order.id, status=OrderStatus.PENDING.value, comment="Order placed"))
     db.commit()
     db.refresh(order)
+
+    # The receipt every order earns as proof of purchase. Plain values only —
+    # the background task runs after this request's session has closed, so it
+    # must never reach back into the ORM for more.
+    receipt = {
+        "email": user.email,
+        "first_name": user.first_name,
+        "order_number": order.order_number,
+        "placed_at": order.created_at.strftime("%b %d, %Y, %I:%M %p"),
+        "items": [
+            {"name": i.product_name, "quantity": i.quantity, "subtotal": float(i.subtotal)}
+            for i in order.items
+        ],
+        "subtotal": float(order.subtotal),
+        "discount": float(order.discount_amount),
+        "coupon_code": order.coupon_code,
+        "tax": float(order.tax),
+        "shipping": float(order.shipping_fee),
+        "total": float(order.total),
+        "payment_method": order.payment_method,
+        "payment_status": order.payment_status,
+    }
+    background.add_task(send_order_receipt, receipt)
+
     return _serialize(order, detailed=True)
 
 

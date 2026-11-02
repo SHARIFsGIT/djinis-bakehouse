@@ -10,7 +10,9 @@ import { productInitial } from "../lib/format";
 // Shown until /store answers (and whenever the admin hasn't picked one)
 const DEFAULT_HERO = "/static/site/baker.jpg";
 
-const MARQUEE = [
+// The strip's shipped phrases — the admin's own list takes over once /store
+// answers (an intentionally cleared list hides the band).
+const DEFAULT_MARQUEE = [
   "FRESH EVERY MORNING",
   "TWO-DAY CROISSANTS",
   "KETTLE-BOILED BAGELS",
@@ -92,6 +94,7 @@ export default function Home() {
   const [heroImage, setHeroImage] = useState(DEFAULT_HERO);
   const [testimonials, setTestimonials] = useState([]);
   const [comingSoon, setComingSoon] = useState([]);
+  const [marquee, setMarquee] = useState(DEFAULT_MARQUEE);
 
   useEffect(() => {
     client
@@ -107,6 +110,7 @@ export default function Home() {
       .then(({ data }) => {
         setTodayNote(data.today_note);
         setHeroImage(data.hero_image || DEFAULT_HERO);
+        setMarquee(data.marquee);
       })
       .catch(() => {});
     // The baker's two curatable bands — empty lists simply hide the sections
@@ -150,19 +154,16 @@ export default function Home() {
                 Bulk Order
               </Link>
             </div>
-            <div className="mt-10 flex gap-8 text-sm">
-              <div>
-                <p className="font-display text-2xl font-bold">25</p>
-                <p className="opacity-60">bakes daily</p>
-              </div>
-              <div>
-                <p className="font-display text-2xl font-bold">4.8</p>
-                <p className="opacity-60">customer rating</p>
-              </div>
-              <div>
-                <p className="font-display text-2xl font-bold">6am</p>
-                <p className="opacity-60">first batch out</p>
-              </div>
+            {/* The shop's four promises — icons, two columns, no ceremony */}
+            <div className="mt-10 grid max-w-md grid-cols-1 gap-x-6 gap-y-3.5 sm:grid-cols-2">
+              {PROMISES.map(({ Icon, title }) => (
+                <div key={title} className="flex items-center gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary/15 text-secondary">
+                    <Icon size={17} />
+                  </span>
+                  <p className="text-sm leading-snug font-semibold">{title}</p>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -201,53 +202,40 @@ export default function Home() {
       </section>
 
       {/* ---------------------------------------------------------------- */}
-      {/* Promises                                                          */}
+      {/* Marquee band — the baker's own phrases, from the Settings tab     */}
       {/* ---------------------------------------------------------------- */}
-      <section className="border-y border-base-300/60 bg-base-200/40">
-        <div className="mx-auto grid max-w-7xl gap-6 px-4 py-8 sm:grid-cols-2 lg:grid-cols-4">
-          {PROMISES.map(({ Icon, title }) => (
-            <div key={title} className="flex items-center gap-3.5">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-secondary/15 text-secondary">
-                <Icon size={20} />
-              </span>
-              <p className="font-display font-semibold">{title}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ---------------------------------------------------------------- */}
-      {/* Marquee band                                                      */}
-      {/* ---------------------------------------------------------------- */}
-      <section
-        className="brand-gradient overflow-hidden py-3 text-primary-content"
-        aria-hidden="true"
-      >
-        <div className="marquee-track flex w-max gap-10 whitespace-nowrap">
-          {[...MARQUEE, ...MARQUEE, ...MARQUEE, ...MARQUEE].map((item, i) => (
-            <span
-              key={i}
-              className="font-display flex items-center gap-10 text-sm font-bold tracking-[0.2em] uppercase"
-            >
-              {item} <span className="opacity-50">·</span>
-            </span>
-          ))}
-        </div>
-      </section>
+      {marquee.length > 0 && (
+        <section
+          className="brand-gradient overflow-hidden py-3 text-primary-content"
+          aria-hidden="true"
+        >
+          <div className="marquee-track flex w-max gap-10 whitespace-nowrap">
+            {(() => {
+              // Enough copies that the track always outruns two viewports —
+              // the -50% loop never shows a seam, however short the list.
+              const loop = [];
+              while (loop.length < 24) loop.push(...marquee);
+              return loop.map((item, i) => (
+                <span
+                  key={i}
+                  className="font-display flex items-center gap-10 text-sm font-bold tracking-[0.2em] uppercase"
+                >
+                  {item} <span className="opacity-50">·</span>
+                </span>
+              ));
+            })()}
+          </div>
+        </section>
+      )}
 
       {/* ---------------------------------------------------------------- */}
       {/* Categories                                                        */}
       {/* ---------------------------------------------------------------- */}
       <section className="mx-auto max-w-7xl px-4 py-16">
         <div className="mb-8 flex items-end justify-between gap-4">
-          <div>
-            <h2 className="font-display text-3xl font-semibold md:text-4xl">
-              Browse the shelves
-            </h2>
-            <p className="mt-2 opacity-70">
-              Every corner of the shop, restocked every morning.
-            </p>
-          </div>
+          <h2 className="font-display text-3xl font-semibold md:text-4xl">
+            Browse the shelves
+          </h2>
           <Link
             to="/products"
             className="link link-secondary hidden text-sm font-semibold sm:inline"
@@ -286,14 +274,9 @@ export default function Home() {
       <section className="bg-base-200/50 py-16">
         <div className="mx-auto max-w-7xl px-4">
           <div className="mb-8 flex items-end justify-between gap-4">
-            <div>
-              <h2 className="font-display text-3xl font-semibold md:text-4xl">
-                Fresh from the oven
-              </h2>
-              <p className="mt-2 opacity-70">
-                The neighborhood&rsquo;s favorites, straight off the peel.
-              </p>
-            </div>
+            <h2 className="font-display text-3xl font-semibold md:text-4xl">
+              Fresh from the oven
+            </h2>
           </div>
           {featured === null ? (
             <ProductGridSkeleton />
@@ -318,11 +301,8 @@ export default function Home() {
                 On its way
               </p>
               <h2 className="font-display mt-2 text-3xl font-semibold md:text-4xl">
-                On the Horizon at Our Bakehouse
+                On the horizon
               </h2>
-              <p className="mt-2 opacity-70">
-                What Djini is testing, timing and promising for the shelves next.
-              </p>
             </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

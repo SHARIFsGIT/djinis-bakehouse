@@ -12,6 +12,7 @@ from sqlalchemy import func, or_, select, update
 from ..models import (
     DEFAULT_ANNOUNCEMENT,
     DEFAULT_HERO_IMAGE,
+    DEFAULT_MARQUEE,
     DEFAULT_TODAY_NOTE,
     BulkEnquiry,
     BulkEnquiryStatus,
@@ -141,6 +142,9 @@ def get_shop_settings(admin: CurrentAdmin, db: DbSession):
         settings.today_note if settings.today_note is not None else DEFAULT_TODAY_NOTE
     )
     settings.hero_image = settings.hero_image or DEFAULT_HERO_IMAGE
+    settings.marquee_items = (
+        settings.marquee_items if settings.marquee_items is not None else DEFAULT_MARQUEE
+    )
     return settings
 
 
@@ -156,9 +160,15 @@ def update_shop_settings(payload: StoreSettingsUpdate, admin: CurrentAdmin, db: 
     if payload.hero_image is not None:
         # An empty value clears the choice — the shipped photo comes back
         settings.hero_image = payload.hero_image.strip() or None
+    if payload.marquee_items is not None:
+        # Empty clears the strip on purpose — the band hides until refilled
+        settings.marquee_items = payload.marquee_items.strip()
     db.commit()
     db.refresh(settings)
     settings.hero_image = settings.hero_image or DEFAULT_HERO_IMAGE
+    settings.marquee_items = (
+        settings.marquee_items if settings.marquee_items is not None else DEFAULT_MARQUEE
+    )
     return settings
 
 

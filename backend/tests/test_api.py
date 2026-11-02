@@ -155,6 +155,38 @@ def test_register_login_me():
     assert refreshed.json()["access_token"]
 
 
+def test_single_name_registration():
+    """The signup form sends one "Your name" field — a lone name is fine."""
+    response = client.post(
+        "/api/auth/register",
+        json={"email": "lone@example.com", "password": "Lone12345!", "first_name": "Cher"},
+    )
+    assert response.status_code == 201
+    me = client.get("/api/auth/me", headers=auth_header(response.json()["access_token"])).json()
+    assert me["first_name"] == "Cher"
+    assert me["last_name"] == ""
+
+
+def test_checkout_earns_a_receipt_email(caplog):
+    """Every order emails a receipt as proof — until SMTP is set it lands in
+    the application log with the full itemised body."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        order = client.post(
+            "/api/orders",
+            json=checkout_payload(payment_method="cash_on_delivery"),
+            headers=auth_header(login_customer()),
+        ).json()
+
+    assert order["payment_status"] == "pending"
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert f"Receipt {order['order_number']}" in logged
+    assert f"order {order['order_number']}" in logged
+    assert "Cash on delivery — pay the courier at your door" in logged
+    assert "Total" in logged
+
+
 def test_password_change_revokes_old_tokens():
     email, old_password = "rotate@example.com", "Rotate123!"
     registered = client.post(
@@ -613,6 +645,22 @@ def test_storefront_copy_settings():
     cleared = client.put("/api/admin/settings", json={"hero_image": "  "}, headers=admin).json()
     assert cleared["hero_image"] == DEFAULT_HERO_IMAGE
     assert client.get("/api/store").json()["hero_image"] == DEFAULT_HERO_IMAGE
+
+    # the scrolling strip ships with the default phrases and is editable
+    storefront = client.get("/api/store").json()
+    assert "FRESH EVERY MORNING" in storefront["marquee"]
+    swapped = client.put(
+        "/api/admin/settings",
+        json={"marquee_items": "PUMPKIN SEASON\n\n  SOURDOUGH FRIDAYS  "},
+        headers=admin,
+    ).json()
+    assert swapped["marquee_items"] == "PUMPKIN SEASON\n\n  SOURDOUGH FRIDAYS"
+    storefront = client.get("/api/store").json()
+    assert storefront["marquee"] == ["PUMPKIN SEASON", "SOURDOUGH FRIDAYS"]
+
+    # a cleared strip hides the band rather than falling back
+    client.put("/api/admin/settings", json={"marquee_items": ""}, headers=admin)
+    assert client.get("/api/store").json()["marquee"] == []
 
     # the copy is admin-only
     assert (

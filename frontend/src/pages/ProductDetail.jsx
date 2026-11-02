@@ -80,7 +80,7 @@ export default function ProductDetail() {
         </h1>
         <p className="mt-2 opacity-70">{error}</p>
         <Link to="/products" className="btn btn-primary btn mt-6">
-          Back to the case
+          All bakes
         </Link>
       </div>
     );

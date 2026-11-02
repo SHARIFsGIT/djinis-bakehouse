@@ -1,3 +1,4 @@
+import { Eye, EyeOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import client, { apiError } from "../api/client";
@@ -18,6 +19,7 @@ export default function Login() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [demoAccounts, setDemoAccounts] = useState(false);
 
@@ -71,16 +73,26 @@ export default function Login() {
               <label className="label text-xs" htmlFor="password">Password</label>
               <Link to="/forgot-password" className="text-xs link link-secondary">Forgot?</Link>
             </div>
-            <input
-              id="password"
-              type="password"
-              className="input input-bordered w-full"
-              placeholder="••••••••"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
+            <div className="relative">
+              <input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                className="input input-bordered w-full pr-11"
+                placeholder="••••••••"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs btn-square absolute top-1/2 right-1.5 -translate-y-1/2"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
           </div>
           <button type="submit" className="btn btn-primary btn w-full" disabled={busy}>
             {busy ? <span className="loading loading-spinner loading-sm" /> : "Log in"}

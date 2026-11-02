@@ -219,11 +219,11 @@ export default function Navbar() {
         </div>
       </nav>
 
-      {/* Shelves — their own line under the bar, centered and unframed; one
-          clean hairline (the header's own border-b) closes the whole block.
+      {/* Shelves — their own line under the bar, centered and framed by a
+          hairline on each side (the header's own border-b closes the bottom).
           Extra shelves simply wrap to a second line. Below lg the shelves
           stay in the mobile menu. */}
-      <div className="hidden lg:block">
+      <div className="hidden border-t border-base-300/60 lg:block">
         <ul className="mx-auto flex max-w-7xl flex-wrap items-center justify-center gap-x-8 gap-y-1 px-4 py-3">
           {shopLinks.map((link) => (
             <li key={link.label}>

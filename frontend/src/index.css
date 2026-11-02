@@ -252,8 +252,26 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform 0.25s cubic-bezier(0.2, 0.7, 0.3, 1);
+  /* The shop's slow lean-in: the photo takes its time arriving, like
+     proofing dough — unhurried on the way in, unhurried on the way out. */
+  transition: transform 1.6s cubic-bezier(0.22, 0.61, 0.21, 1);
 }
 .group:hover .photo-tile img {
-  transform: scale(1.05);
+  transform: scale(1.06);
+}
+
+/* ------------------------------------------------------------------ */
+/* Printing (order receipts)                                           */
+/* ------------------------------------------------------------------ */
+@media print {
+  /* The receipt is the page; everything else is shop chrome. */
+  header,
+  footer,
+  .grain-overlay,
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff !important;
+  }
 }

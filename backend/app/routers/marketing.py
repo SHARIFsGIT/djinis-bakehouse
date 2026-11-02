@@ -12,6 +12,7 @@ from sqlalchemy import select
 from ..models import (
     DEFAULT_ANNOUNCEMENT,
     DEFAULT_HERO_IMAGE,
+    DEFAULT_MARQUEE,
     DEFAULT_TODAY_NOTE,
     BulkEnquiry,
     Coupon,
@@ -33,6 +34,14 @@ from ..security import CurrentAdmin, DbSession, client_key
 router = APIRouter(prefix="/api", tags=["storefront"])
 
 
+def _marquee_lines(raw: str | None) -> list[str]:
+    """The strip's phrases: one per line, blanks skipped. Never set shows
+    the shipped set; deliberately cleared comes back empty (band hidden)."""
+    if raw is None:
+        raw = DEFAULT_MARQUEE
+    return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
 @router.get("/store", response_model=StorefrontOut)
 def storefront(db: DbSession):
     """The copy on the home page — editable from the admin Settings tab.
@@ -47,6 +56,7 @@ def storefront(db: DbSession):
         ),
         today_note=settings.today_note if settings.today_note is not None else DEFAULT_TODAY_NOTE,
         hero_image=settings.hero_image or DEFAULT_HERO_IMAGE,
+        marquee=_marquee_lines(settings.marquee_items),
         demo_accounts=get_settings().demo_data_enabled,
     )
 

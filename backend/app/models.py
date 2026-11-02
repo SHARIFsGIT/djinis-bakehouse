@@ -78,7 +78,9 @@ class User(Base):
 
     @property
     def full_name(self) -> str:
-        return f"{self.first_name} {self.last_name}"
+        # Single-word names register with an empty last name — never show
+        # the trailing space that leaves behind.
+        return f"{self.first_name} {self.last_name}".strip()
 
     @property
     def is_admin(self) -> bool:
@@ -371,6 +373,17 @@ class OrderEvent(Base):
 DEFAULT_ANNOUNCEMENT = "Free delivery on boxes over $50 · WELCOME10 takes 10% off your first order"
 DEFAULT_TODAY_NOTE = "Croffles out at 8, doughnuts at 9"
 DEFAULT_HERO_IMAGE = "/static/site/baker.jpg"
+# The home page's scrolling strip — one phrase per line, the baker's to edit.
+DEFAULT_MARQUEE = "\n".join(
+    [
+        "FRESH EVERY MORNING",
+        "TWO-DAY CROISSANTS",
+        "KETTLE-BOILED BAGELS",
+        "STONE-GROUND FLOUR",
+        "CULTURED FRENCH BUTTER",
+        "WEEKEND DOUGHNUTS",
+    ]
+)
 
 
 class StoreSetting(Base):
@@ -384,6 +397,9 @@ class StoreSetting(Base):
     # strings hide the announcement bar / the hero "today" chip.
     announcement: Mapped[str] = mapped_column(String(255), default=DEFAULT_ANNOUNCEMENT)
     today_note: Mapped[str] = mapped_column(String(255), default=DEFAULT_TODAY_NOTE)
+    # Phrases for the home page's scrolling strip, one per line. NULL (never
+    # edited) shows the shipped set; an empty string hides the strip.
+    marquee_items: Mapped[str | None] = mapped_column(Text)
     # The photo above the today note; NULL/empty falls back to the shipped one.
     hero_image: Mapped[str | None] = mapped_column(String(255))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

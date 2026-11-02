@@ -39,6 +39,7 @@ _ADDITIVE_COLUMNS = {
         "announcement": "ALTER TABLE store_settings ADD COLUMN announcement VARCHAR(255)",
         "today_note": "ALTER TABLE store_settings ADD COLUMN today_note VARCHAR(255)",
         "hero_image": "ALTER TABLE store_settings ADD COLUMN hero_image VARCHAR(255)",
+        "marquee_items": "ALTER TABLE store_settings ADD COLUMN marquee_items TEXT",
     },
     "coupons": {
         "min_subtotal": "ALTER TABLE coupons ADD COLUMN min_subtotal NUMERIC(10,2)",
@@ -134,7 +135,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=f"{settings.bakery_name} API",
-        version="3.4.0",
+        version="3.5.0",
         description="Bakery e-commerce API — customers, catalog, orders, coupons, bulk enquiries, saved bakes, newsletter and admin.",
         lifespan=lifespan,
         docs_url="/api/docs" if settings.enable_docs else None,

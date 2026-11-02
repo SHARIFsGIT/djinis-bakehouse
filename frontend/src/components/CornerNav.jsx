@@ -27,18 +27,29 @@ const MY_TABS_ADMIN = MY_TABS.filter(
   (t) => t.label !== "Orders" && t.label !== "Saved bakes",
 );
 
-const DESK_TABS = [
-  { to: "/admin", label: "Dashboard", Icon: LayoutDashboard, end: true },
-  { to: "/admin/orders", label: "Orders", Icon: ScrollText, end: true },
-  { to: "/admin/products", label: "Products", Icon: CakeSlice, end: true },
+// The desk, grouped the way a shift actually runs: glance at the day, work
+// the trade, look after people, then tune the shop.
+const DESK_SECTIONS = [
   {
-    to: "/admin/promotions",
-    label: "Promotions",
-    Icon: TicketPercent,
-    end: true,
+    title: "Overview",
+    tabs: [{ to: "/admin", label: "Dashboard", Icon: LayoutDashboard, end: true }],
   },
-  { to: "/admin/users", label: "Users", Icon: Users, end: true },
-  { to: "/admin/settings", label: "Settings", Icon: Settings, end: true },
+  {
+    title: "Shop",
+    tabs: [
+      { to: "/admin/orders", label: "Orders", Icon: ScrollText, end: true },
+      { to: "/admin/products", label: "Products", Icon: CakeSlice, end: true },
+      { to: "/admin/promotions", label: "Promotions", Icon: TicketPercent, end: true },
+    ],
+  },
+  {
+    title: "Customers",
+    tabs: [{ to: "/admin/users", label: "Users", Icon: Users, end: true }],
+  },
+  {
+    title: "Setup",
+    tabs: [{ to: "/admin/settings", label: "Settings", Icon: Settings, end: true }],
+  },
 ];
 
 // Hover = the active tab's own wine tint, one shade deeper — a quiet cue
@@ -81,9 +92,9 @@ function Section({ title, tabs, first = false }) {
   );
 }
 
-/* One sidebar for both corners. Admins get the whole desk laid out under a
-   label — no clicking through to a second menu — with their personal tabs
-   beneath it. Customers simply see their own four. */
+/* One sidebar for both corners. Admins get the whole desk grouped by how a
+   shift runs — with their personal tabs beneath it. Customers simply see
+   their own four. */
 export default function CornerNav({ ariaLabel = "Account" }) {
   const { isAdmin, logout } = useAuth();
   const navigate = useNavigate();
@@ -91,7 +102,16 @@ export default function CornerNav({ ariaLabel = "Account" }) {
   return (
     <nav aria-label={ariaLabel}>
       <ul className="w-full space-y-0.5 rounded-box glass p-2 shadow-sm ring-1 ring-base-300/60">
-        {isAdmin && <Section first title="Baker’s desk" tabs={DESK_TABS} />}
+        {DESK_SECTIONS.map((section, i) =>
+          isAdmin ? (
+            <Section
+              key={section.title}
+              first={i === 0}
+              title={section.title}
+              tabs={section.tabs}
+            />
+          ) : null,
+        )}
         {isAdmin ? (
           <Section title="My corner" tabs={MY_TABS_ADMIN} />
         ) : (
@@ -101,7 +121,7 @@ export default function CornerNav({ ariaLabel = "Account" }) {
           {isAdmin && (
             <NavLink to="/" className={ITEM}>
               <Store size={18} className="shrink-0 opacity-70" />
-              Back to the shop
+              Shopfront
             </NavLink>
           )}
           <button

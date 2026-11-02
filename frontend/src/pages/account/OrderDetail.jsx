@@ -6,6 +6,7 @@ import {
   CircleCheck,
   CircleX,
   Flame,
+  Printer,
   ReceiptText,
   ShoppingBasket,
 } from "lucide-react";
@@ -60,7 +61,7 @@ export default function OrderDetail() {
     return (
       <div className="py-16 text-center">
         <p className="mt-3 opacity-70">{error}</p>
-        <Link to="/account/orders" className="btn btn-primary btn-sm btn mt-4">Back to orders</Link>
+        <Link to="/account/orders" className="btn btn-primary btn-sm btn mt-4">All orders</Link>
       </div>
     );
   }
@@ -102,7 +103,12 @@ export default function OrderDetail() {
         }
         try {
           const { data: product } = await client.get(`/products/${item.product_slug}`);
-          add(product, Math.min(item.quantity, Math.max(product.stock, 1)));
+          // Sold out stays sold out — never sneak one into the basket.
+          if (product.stock <= 0) {
+            missing.push(item.product_name);
+            continue;
+          }
+          add(product, Math.min(item.quantity, product.stock));
         } catch {
           missing.push(item.product_name);
         }
@@ -130,9 +136,15 @@ export default function OrderDetail() {
             <p className="font-bold">Order confirmed</p>
             <p className="text-sm">
               {order.payment_method === "card"
-                ? "Your card was charged (simulated) — see you on delivery day."
+                ? "Your card was charged (simulated) — receipt sent to your email."
                 : "Pay the courier at the door — cash only, please."}
             </p>
+            <Link
+              to={`/account/orders/${order.id}/receipt`}
+              className="link link-secondary mt-1 inline-block text-sm font-semibold"
+            >
+              View receipt
+            </Link>
           </div>
         </div>
       )}
@@ -150,6 +162,13 @@ export default function OrderDetail() {
             {statusLabel(order.status)}
           </span>
           <span className={`badge badge-lg ${payment.badge} border`}>{payment.label}</span>
+          <Link
+            to={`/account/orders/${order.id}/receipt`}
+            className="btn btn-outline btn-sm ml-1"
+          >
+            <Printer size={15} />
+            Receipt
+          </Link>
         </div>
       </div>
 

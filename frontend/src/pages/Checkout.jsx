@@ -142,6 +142,7 @@ export default function Checkout() {
 
   const placeOrder = async (e) => {
     e.preventDefault();
+    if (placing) return; // the button disables, but Enter can still submit
     setPlacing(true);
     try {
       const payload = {
@@ -422,7 +423,7 @@ export default function Checkout() {
           </button>
           <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-xs opacity-60">
             <Lock size={16} className="shrink-0" />
-            Details encrypted in transit · prices, stock and promo codes re-checked before baking
+            Prices &amp; stock re-checked before baking
           </p>
         </aside>
       </form>

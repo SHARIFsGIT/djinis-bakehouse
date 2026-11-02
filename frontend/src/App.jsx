@@ -20,6 +20,7 @@ import Profile from "./pages/account/Profile";
 import Addresses from "./pages/account/Addresses";
 import Orders from "./pages/account/Orders";
 import OrderDetail from "./pages/account/OrderDetail";
+import OrderReceipt from "./pages/account/OrderReceipt";
 import Saved from "./pages/account/Saved";
 import AdminLayout from "./pages/admin/AdminLayout";
 import Dashboard from "./pages/admin/Dashboard";
@@ -76,6 +77,12 @@ export default function App() {
               <Route path="addresses" element={<Addresses />} />
               <Route path="profile" element={<Profile />} />
             </Route>
+            {/* The receipt stands alone — no account chrome, so what prints
+                is the receipt and nothing else. */}
+            <Route
+              path="account/orders/:id/receipt"
+              element={<OrderReceipt />}
+            />
           </Route>
 
           <Route element={<AdminRoute />}>
