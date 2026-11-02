@@ -477,6 +477,10 @@ def test_bakers_bell_notifications():
     assert any(t.startswith("New customer") for t in titles)
     assert board["unread_count"] >= 5
 
+    # every enquiry ping lands on the enquiry rail, not the orders tab
+    enquiry_links = [n["link"] for n in board["items"] if n["kind"] == "enquiry"]
+    assert enquiry_links and all(link == "/admin/orders?tab=bulk" for link in enquiry_links)
+
     # one ping marks read; read-all clears the badge
     top = board["items"][0]
     assert (
@@ -492,6 +496,58 @@ def test_bakers_bell_notifications():
 
     # the bell rings for the baker alone
     assert client.get("/api/admin/notifications", headers=auth_header(customer)).status_code == 403
+
+
+def test_users_loyalty_and_export():
+    """The roll measures what special vouchers reward — kept orders, spend,
+    last visit — and cancelled orders never count towards any of it."""
+    headers = admin_headers()
+
+    loyal = auth_header(register_and_login("loyal@example.com", "Loyal123!"))
+    vip = auth_header(register_and_login("vip@example.com", "Vipuser123!"))
+    ghost = auth_header(register_and_login("ghost@example.com", "Ghost123!"))
+
+    def place(token):
+        placed = client.post("/api/orders", json=checkout_payload(), headers=token)
+        assert placed.status_code == 201, placed.text()
+        return placed.json()
+
+    for _ in range(3):
+        place(loyal)
+    for _ in range(10):
+        place(vip)
+    place(ghost)  # kept — the one that should count
+    cancelled = place(ghost)
+    assert (
+        client.post(f"/api/orders/{cancelled['id']}/cancel", headers=ghost).status_code
+        == 200
+    )
+
+    roll = {u["email"]: u for u in client.get("/api/admin/users", headers=headers).json()}
+    assert roll["loyal@example.com"]["order_count"] == 3
+    assert roll["loyal@example.com"]["loyalty"] == "loyal"
+    assert roll["loyal@example.com"]["last_order_at"] is not None
+
+    vip_row = roll["vip@example.com"]
+    assert vip_row["order_count"] == 10
+    assert vip_row["loyalty"] == "vip"
+    assert vip_row["lifetime_spend"] > 0
+
+    # one of ghost's two orders was cancelled — only the kept one counts
+    assert roll["ghost@example.com"]["order_count"] == 1
+    assert roll["ghost@example.com"]["loyalty"] == "regular"
+    assert roll["admin@djinisbakehouse.com"]["loyalty"] == "regular"
+
+    # the export is the voucher mailing list
+    export = client.get("/api/admin/users/export", headers=headers)
+    assert export.status_code == 200
+    assert export.headers["content-type"].startswith("text/csv")
+    assert "loyal@example.com" in export.text
+    vip_csv = next(row for row in export.text.splitlines() if "vip@example.com" in row)
+    assert vip_csv.split(",")[7] == "vip"
+
+    # the roll is the baker's alone
+    assert client.get("/api/admin/users", headers=loyal).status_code == 403
 
 
 def test_favorites():

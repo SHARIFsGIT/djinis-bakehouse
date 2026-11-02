@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select, update
 
+from ..database import utcnow
 from ..models import (
     DEFAULT_ANNOUNCEMENT,
     DEFAULT_HERO_IMAGE,
@@ -33,6 +34,7 @@ from ..models import (
     get_store_setting,
 )
 from ..schemas import (
+    AdminCustomerOut,
     AdminNotificationList,
     AdminNotificationOut,
     AdminReviewCounts,
@@ -132,6 +134,13 @@ def stats(admin: CurrentAdmin, db: DbSession):
         top_products=[{"name": name, "quantity": int(qty)} for name, qty in top_rows],
         recent_orders=[_serialize(o) for o in recent],
         low_stock=[product_to_card(p, low_ratings) for p in low_stock_products],
+        # Fresh catering leads the Orders desk shouldn't miss
+        new_enquiries=db.scalar(
+            select(func.count(BulkEnquiry.id)).where(
+                BulkEnquiry.status == BulkEnquiryStatus.NEW.value
+            )
+        )
+        or 0,
     )
 
 
@@ -883,12 +892,103 @@ def delete_coming_soon(item_id: int, admin: CurrentAdmin, db: DbSession):
 
 
 # --------------------------------------------------------------------------
-# User management
+# User management — the roll, with loyalty the shop can act on
 # --------------------------------------------------------------------------
 
-@router.get("/users", response_model=list[UserOut])
+# Loyalty, in words the baker can defend to a customer's face: kept orders
+# (cancelled ones never count) and a visit inside the window. Three kept
+# orders earns "loyal"; $150 kept or ten orders earns "vip"; anyone who
+# earned a tier and then went quiet for the window is "lapsed" — exactly
+# who a win-back voucher is for.
+LOYAL_ORDERS = 3
+VIP_ORDERS = 10
+VIP_SPEND = 150
+LOYAL_WINDOW_DAYS = 90
+
+
+def _loyalty(order_count: int, spend: float, last_order_at) -> str:
+    if last_order_at is None:
+        return "regular"
+    days_since = (utcnow() - last_order_at).days
+    fresh = days_since <= LOYAL_WINDOW_DAYS
+    if spend >= VIP_SPEND or order_count >= VIP_ORDERS:
+        return "vip" if fresh else "lapsed"
+    if order_count >= LOYAL_ORDERS:
+        return "loyal" if fresh else "lapsed"
+    return "regular"
+
+
+def _customer_out(user: User, stats_row=None) -> AdminCustomerOut:
+    """A user plus their measured loyalty — `stats_row` from the one
+    aggregate query below, or nothing for a customer with no kept orders."""
+    customer = AdminCustomerOut.model_validate(user)
+    if stats_row is None:
+        return customer
+    order_count = int(stats_row.orders)
+    spend = round(float(stats_row.spend or 0), 2)
+    return customer.model_copy(
+        update={
+            "order_count": order_count,
+            "lifetime_spend": spend,
+            "last_order_at": stats_row.last,
+            "loyalty": _loyalty(order_count, spend, stats_row.last),
+        }
+    )
+
+
+@router.get("/users", response_model=list[AdminCustomerOut])
 def all_users(admin: CurrentAdmin, db: DbSession):
-    return list(db.scalars(select(User).order_by(User.created_at.desc())))
+    """The regulars' roll, newest members first, with each one's kept
+    orders, lifetime spend, last visit and loyalty tier."""
+    users = list(db.scalars(select(User).order_by(User.created_at.desc())))
+    # One aggregate pass for everyone — never a query per row.
+    stats = {
+        row.user_id: row
+        for row in db.execute(
+            select(
+                Order.user_id.label("user_id"),
+                func.count(Order.id).label("orders"),
+                func.sum(Order.total).label("spend"),
+                func.max(Order.created_at).label("last"),
+            )
+            .where(Order.status != OrderStatus.CANCELLED.value)
+            .group_by(Order.user_id)
+        )
+    }
+    return [_customer_out(u, stats.get(u.id)) for u in users]
+
+
+@router.get("/users/export")
+def export_users(admin: CurrentAdmin, db: DbSession):
+    """CSV of the roll with loyalty stats — the mailing list for a
+    special-voucher thank-you."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        ["name", "email", "phone", "joined", "kept_orders", "lifetime_spend",
+         "last_order", "loyalty", "role", "active"]
+    )
+    for customer in all_users(admin, db):
+        writer.writerow(
+            [
+                f"{customer.first_name} {customer.last_name}",
+                customer.email,
+                customer.phone or "",
+                customer.created_at.strftime("%Y-%m-%d"),
+                customer.order_count,
+                f"{customer.lifetime_spend:.2f}",
+                customer.last_order_at.strftime("%Y-%m-%d") if customer.last_order_at else "",
+                customer.loyalty,
+                customer.role.value if hasattr(customer.role, "value") else customer.role,
+                "yes" if customer.is_active else "no",
+            ]
+        )
+    buffer.seek(0)
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=bakehouse-customers.csv"},
+    )
 
 
 @router.put("/users/{user_id}", response_model=UserOut)

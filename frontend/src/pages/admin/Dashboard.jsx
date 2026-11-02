@@ -41,7 +41,16 @@ export default function Dashboard() {
       {/* Headline stats */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile Icon={BadgeDollarSign} label="Paid revenue" value={money(stats.paid_revenue)} sub={`${money(stats.total_revenue)} incl. pending`} />
-        <StatTile Icon={ScrollText} label="Orders" value={stats.order_count} sub={`${stats.pending_orders} awaiting confirmation`} />
+        <StatTile
+          Icon={ScrollText}
+          label="Orders"
+          value={stats.order_count}
+          sub={
+            stats.new_enquiries > 0
+              ? `${stats.pending_orders} to confirm · ${stats.new_enquiries} new enquir${stats.new_enquiries === 1 ? "y" : "ies"}`
+              : `${stats.pending_orders} awaiting confirmation`
+          }
+        />
         <StatTile Icon={Users} label="Customers" value={stats.customer_count} sub="registered regulars" />
         <StatTile Icon={TrendingUp} label="Avg order" value={money(stats.avg_order_value)} sub="across all orders" />
       </div>

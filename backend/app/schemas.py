@@ -420,6 +420,18 @@ class AdminStatsOut(BaseModel):
     top_products: list[dict]
     recent_orders: list[OrderOut]
     low_stock: list[ProductCard]
+    new_enquiries: int = 0
+
+
+class AdminCustomerOut(UserOut):
+    """A customer as the desk sees them: who they are, plus what the shop can
+    measure — kept orders (cancelled never count), lifetime spend, the last
+    visit, and the loyalty tier those earn."""
+
+    order_count: int = 0
+    lifetime_spend: float = 0
+    last_order_at: datetime | None = None
+    loyalty: str = "regular"
 
 
 # --------------------------------------------------------------------------

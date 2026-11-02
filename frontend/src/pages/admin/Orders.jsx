@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { CalendarHeart, Trash2, Users } from "lucide-react";
 import client, { apiError } from "../../api/client";
@@ -540,7 +540,7 @@ function OrdersTab() {
 /* Tab 2 — event & catering enquiries                                  */
 /* ------------------------------------------------------------------ */
 
-function BulkTab({ onCounts }) {
+function BulkTab({ refreshCounts }) {
   const [params, setParams] = useSearchParams();
   const [items, setItems] = useState(null);
   const [selected, setSelected] = useState(null);
@@ -552,11 +552,8 @@ function BulkTab({ onCounts }) {
     const query = {};
     if (filter) query.status = filter;
     client.get("/admin/bulk-orders", { params: query }).then(({ data }) => setItems(data));
-    // The tab badge counts fresh leads regardless of the filter in view
-    client
-      .get("/admin/bulk-orders", { params: { status: "new" } })
-      .then(({ data }) => onCounts(data.length))
-      .catch(() => {});
+    // Status changes and deletes move leads off "new" — retally the badge
+    refreshCounts();
   };
 
   useEffect(() => {
@@ -711,6 +708,22 @@ export default function AdminOrders() {
 
   const tab = params.get("tab") === "bulk" ? "bulk" : "orders";
 
+  // The badge says "new leads are waiting" the moment this page opens — not
+  // only after someone happens to click the enquiry tab. One light call,
+  // kept warm at the bell's cadence.
+  const countNew = useCallback(() => {
+    client
+      .get("/admin/bulk-orders", { params: { status: "new" } })
+      .then(({ data }) => setNewCount(data.length))
+      .catch(() => {}); // a missed tally is never worth a toast
+  }, []);
+
+  useEffect(() => {
+    countNew();
+    const timer = setInterval(countNew, 30_000);
+    return () => clearInterval(timer);
+  }, [countNew]);
+
   const switchTab = (value) => {
     // A fresh sheet per tab — no stale filters carried across
     const next = new URLSearchParams();
@@ -747,7 +760,7 @@ export default function AdminOrders() {
       {tab === "orders" ? (
         <OrdersTab />
       ) : (
-        <BulkTab onCounts={setNewCount} />
+        <BulkTab refreshCounts={countNew} />
       )}
     </div>
   );

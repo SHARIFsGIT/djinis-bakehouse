@@ -119,7 +119,8 @@ def create_bulk_enquiry(payload: BulkEnquiryCreate, db: DbSession, request: Requ
         kind="enquiry",
         title=f"Bulk enquiry from {enquiry.name} — {enquiry.event_date:%b %d}",
         body=f"{enquiry.guests} guests · {enquiry.email}",
-        link="/admin/orders",  # the enquiry rail lives under Orders
+        # Straight to the enquiry rail — the Orders tab itself shows no leads
+        link="/admin/orders?tab=bulk",
     )
     db.commit()
     db.refresh(enquiry)
