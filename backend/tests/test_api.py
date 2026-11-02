@@ -674,6 +674,12 @@ def test_admin_category_creation():
     names = [c["name"] for c in client.get("/api/products/categories").json()]
     assert "Savory Pies" in names
 
+    # a brand-new shelf has no photo of its own yet
+    shelf = next(
+        c for c in client.get("/api/products/categories").json() if c["slug"] == "savory-pies"
+    )
+    assert shelf["image_url"] is None
+
     # a duplicate name in any casing is refused, not duplicated
     again = client.post("/api/admin/categories", json={"name": "savory pies"}, headers=headers)
     assert again.status_code == 409
@@ -686,11 +692,19 @@ def test_admin_category_creation():
             "price": 12.0,
             "stock": 4,
             "category_id": category["id"],
+            "image_url": "/static/products/butter-croissant.jpg",
         },
         headers=headers,
     )
     assert product.status_code == 201
     assert product.json()["category_slug"] == "savory-pies"
+
+    # …and the storefront lends the shelf its first bake's photo, so the
+    # home tiles never sit on a bare letter tile
+    shelf = next(
+        c for c in client.get("/api/products/categories").json() if c["slug"] == "savory-pies"
+    )
+    assert shelf["image_url"] == "/static/products/butter-croissant.jpg"
 
     # customers can't create shelves
     forbidden = client.post(

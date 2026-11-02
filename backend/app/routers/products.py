@@ -31,13 +31,22 @@ def list_categories(db: DbSession):
         .group_by(Product.category_id)
         .all()
     )
+    # A shelf the baker just named has no photo of its own yet — it borrows
+    # its first bake's, so the home tiles never sit on a bare letter tile.
+    first_photos: dict[int, str] = {}
+    for category_id, image_url in db.execute(
+        select(Product.category_id, Product.image_url)
+        .where(Product.is_available.is_(True), Product.image_url.is_not(None))
+        .order_by(Product.category_id, Product.id)
+    ):
+        first_photos.setdefault(category_id, image_url)
     return [
         CategoryOut(
             id=c.id,
             name=c.name,
             slug=c.slug,
             description=c.description,
-            image_url=c.image_url,
+            image_url=c.image_url or first_photos.get(c.id),
             product_count=counts.get(c.id, 0),
         )
         for c in categories

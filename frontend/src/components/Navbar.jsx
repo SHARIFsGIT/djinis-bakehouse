@@ -105,8 +105,6 @@ export default function Navbar() {
       to: "/products?on_sale=true",
       label: "On sale",
       active: browsing && saleActive,
-      wide: true, // joins only once the bar has room for it (the shop
-                 // sidebar's sale filter covers narrower widths)
     },
   ];
 
@@ -121,7 +119,7 @@ export default function Navbar() {
         </div>
       )}
 
-      <nav className="navbar relative mx-auto max-w-7xl px-4 gap-2">
+      <nav className="navbar mx-auto max-w-7xl px-4 gap-2">
         {/* Brand */}
         <Link to="/" className="flex items-center gap-2.5">
           <img
@@ -135,24 +133,13 @@ export default function Navbar() {
           </span>
         </Link>
 
-        {/* Shelves — dead-centre on the mark's line; the search box keeps
-            narrow at lg so the two never meet */}
-        <ul className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-6 lg:flex xl:gap-8">
-          {shopLinks.map((link) => (
-            <li key={link.label} className={link.wide ? "hidden xl:block" : undefined}>
-              <Link to={link.to} className={linkClass(link.active)}>
-                {link.label}
-              </Link>
-            </li>
-          ))}
-        </ul>
-
         <div className="flex-1" />
 
-        {/* Search (desktop) — narrows rather than pushing when space runs out */}
+        {/* Search (desktop) — the shelves moved to their own line below,
+            so the field can keep its full size at every width */}
         <form
           onSubmit={submitSearch}
-          className="hidden min-w-0 lg:flex lg:w-28 xl:w-44"
+          className="hidden min-w-0 lg:flex lg:w-44"
         >
           <SearchField value={search} onChange={setSearch} />
         </form>
@@ -228,6 +215,26 @@ export default function Navbar() {
           </button>
         </div>
       </nav>
+
+      {/* Shelves — their own line under the bar, so the collection can grow
+          without ever squeezing the search; extra shelves simply wrap to a
+          second line. The double rule sets the row apart from the bar
+          above. Below lg the shelves stay in the mobile menu. */}
+      <div className="hidden lg:block">
+        <div className="mx-auto max-w-7xl px-4">
+          <div aria-hidden="true" className="border-t border-base-300/70" />
+          <div aria-hidden="true" className="mt-0.5 border-t border-base-300/40" />
+          <ul className="flex flex-wrap items-center justify-center gap-x-8 gap-y-1 py-2.5">
+            {shopLinks.map((link) => (
+              <li key={link.label}>
+                <Link to={link.to} className={linkClass(link.active)}>
+                  {link.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
 
       {/* Mobile menu */}
       {menuOpen && (

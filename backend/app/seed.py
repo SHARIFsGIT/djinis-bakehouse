@@ -414,9 +414,9 @@ def seed_db() -> None:
             return  # already seeded
 
         categories: dict[str, Category] = {}
-        for name, slug, image_url, description, order in CATEGORIES:
+        for name, slug, image_url, order in CATEGORIES:
             category = Category(name=name, slug=slug, image_url=image_url,
-                                description=description, sort_order=order)
+                                sort_order=order)
             db.add(category)
             categories[slug] = category
         db.flush()
