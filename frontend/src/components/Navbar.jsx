@@ -109,7 +109,10 @@ export default function Navbar() {
   ];
 
   return (
-    <header className="glass sticky top-0 z-50 border-b border-base-300/60 lg:border-b-0">
+    // The trailing "!" matters: DaisyUI's own .glass utility resets borders
+    // and sorts after plain border utilities, so the header's hairline has
+    // to win explicitly.
+    <header className="glass sticky top-0 z-50 border-b! border-base-300/60!">
       {/* Announcement bar — admin-editable, hidden when cleared */}
       {announcement && (
         <div className="brand-gradient text-primary-content">
@@ -216,26 +219,20 @@ export default function Navbar() {
         </div>
       </nav>
 
-      {/* Shelves — their own line under the bar, so the collection can grow
-          without ever squeezing the search; extra shelves simply wrap to a
-          second line. Matching double rules frame the row top and bottom.
-          Below lg the shelves stay in the mobile menu. */}
+      {/* Shelves — their own line under the bar, centered and unframed; one
+          clean hairline (the header's own border-b) closes the whole block.
+          Extra shelves simply wrap to a second line. Below lg the shelves
+          stay in the mobile menu. */}
       <div className="hidden lg:block">
-        <div className="mx-auto max-w-7xl px-4">
-          <div aria-hidden="true" className="border-t border-base-300/70" />
-          <div aria-hidden="true" className="mt-0.5 border-t border-base-300/40" />
-          <ul className="flex flex-wrap items-center justify-center gap-x-8 gap-y-1 py-2.5">
-            {shopLinks.map((link) => (
-              <li key={link.label}>
-                <Link to={link.to} className={linkClass(link.active)}>
-                  {link.label}
-                </Link>
-              </li>
-            ))}
-          </ul>
-          <div aria-hidden="true" className="border-t border-base-300/40" />
-          <div aria-hidden="true" className="mt-0.5 border-t border-base-300/70" />
-        </div>
+        <ul className="mx-auto flex max-w-7xl flex-wrap items-center justify-center gap-x-8 gap-y-1 px-4 py-3">
+          {shopLinks.map((link) => (
+            <li key={link.label}>
+              <Link to={link.to} className={linkClass(link.active)}>
+                {link.label}
+              </Link>
+            </li>
+          ))}
+        </ul>
       </div>
 
       {/* Mobile menu */}

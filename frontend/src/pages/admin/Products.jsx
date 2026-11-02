@@ -4,6 +4,7 @@ import client, { apiError } from "../../api/client";
 import { money } from "../../lib/format";
 import { shrinkImage } from "../../lib/imageResize";
 import { useToast } from "../../context/ToastContext";
+import ConfirmDialog from "../../components/ConfirmDialog";
 import PhotoTile from "../../components/PhotoTile";
 import { Loading } from "../../components/Loading";
 
@@ -38,14 +39,16 @@ export default function AdminProducts() {
   const [categories, setCategories] = useState([]);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [shelfFilter, setShelfFilter] = useState(null); // category id, or the whole case
   const [editing, setEditing] = useState(null); // { id?, form }
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState(null);
   const [deletingShelf, setDeletingShelf] = useState(null);
 
-  const load = (p = page, s = search) => {
+  const load = (p = page, s = search, cat = shelfFilter) => {
     const query = { page: p, per_page: 15 };
     if (s) query.search = s;
+    if (cat) query.category_id = cat;
     return client
       .get("/admin/products", { params: query })
       .then(({ data }) => setData(data));
@@ -59,7 +62,7 @@ export default function AdminProducts() {
     setData(null);
     load(page, search);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search]);
+  }, [page, search, shelfFilter]);
 
   const openNew = () =>
     setEditing({
@@ -208,12 +211,16 @@ export default function AdminProducts() {
     setEditing((s) => ({ ...s, form: { ...s.form, [key]: value } }));
 
   const removeShelf = async () => {
+    const shelf = deletingShelf;
+    setDeletingShelf(null);
     try {
-      await client.delete(`/admin/categories/${deletingShelf.id}`);
-      toast.info(`Removed “${deletingShelf.name}” shelf`);
-      setDeletingShelf(null);
-      const { data } = await client.get("/products/categories");
-      setCategories(data);
+      const { data } = await client.delete(`/admin/categories/${shelf.id}`);
+      toast.info(data.message ?? `Removed “${shelf.name}” shelf`);
+      const { data: cats } = await client.get("/products/categories");
+      setCategories(cats);
+      // dropping the shelf we're filtered on reloads via the effect below
+      if (shelfFilter === shelf.id) setShelfFilter(null);
+      else await load();
     } catch (err) {
       toast.error(apiError(err));
     }
@@ -242,37 +249,68 @@ export default function AdminProducts() {
         </button>
       </div>
 
-      {/* Shelves — the case's layout at a glance. An empty shelf can be
-          retired with one tap; an occupied one explains why not. */}
+      {/* Shelves — the case's layout at a glance. Tap one to bring its bakes
+          up in the table below (tap it again, or clear, for the whole case);
+          the trash retires any shelf — its bakes land unshelved, not gone. */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold tracking-wide uppercase opacity-50">
           Shelves
         </span>
-        {categories.map((c) => (
-          <span
-            key={c.id}
-            className="badge badge-ghost gap-1.5 rounded-full py-2.5 pl-3 pr-2 text-sm"
+        {categories.map((c) => {
+          const active = shelfFilter === c.id;
+          return (
+            <div key={c.id} className="join rounded-full border border-base-300">
+              <button
+                type="button"
+                className={`btn btn-xs join-item rounded-l-full border-0 ${
+                  active
+                    ? "btn-secondary text-secondary-content"
+                    : "btn-ghost"
+                }`}
+                onClick={() => {
+                  setPage(1);
+                  setShelfFilter(active ? null : c.id);
+                }}
+                aria-pressed={active}
+                title={
+                  active
+                    ? `Showing only ${c.name} — click for every bake`
+                    : `Show only the ${c.name} shelf`
+                }
+              >
+                {c.name}
+                <span className="opacity-60">{c.product_count}</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-xs join-item btn-ghost rounded-r-full border-0 text-error"
+                onClick={() => setDeletingShelf(c)}
+                title={
+                  c.product_count > 0
+                    ? `Remove the shelf — its ${c.product_count} ${
+                        c.product_count === 1 ? "bake stays" : "bakes stay"
+                      }, unshelved`
+                    : `Remove the ${c.name} shelf`
+                }
+                aria-label={`Remove the ${c.name} shelf`}
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          );
+        })}
+        {shelfFilter && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => {
+              setPage(1);
+              setShelfFilter(null);
+            }}
           >
-            {c.name}
-            <span className="opacity-50">{c.product_count}</span>
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs btn-square text-error"
-              onClick={() => setDeletingShelf(c)}
-              disabled={c.product_count > 0}
-              title={
-                c.product_count > 0
-                  ? `Move or remove its ${c.product_count} ${
-                      c.product_count === 1 ? "bake" : "bakes"
-                    } first`
-                  : `Remove the ${c.name} shelf`
-              }
-              aria-label={`Remove the ${c.name} shelf`}
-            >
-              <Trash2 size={13} />
-            </button>
-          </span>
-        ))}
+            × clear
+          </button>
+        )}
       </div>
 
       {data === null ? (
@@ -591,66 +629,30 @@ export default function AdminProducts() {
 
       {/* Shelf delete confirm */}
       {deletingShelf && (
-        <div className="modal modal-open">
-          <div className="modal-box max-w-sm">
-            <h3 className="font-display text-lg font-bold">
-              Remove the “{deletingShelf.name}” shelf?
-            </h3>
-            <p className="mt-1 text-sm opacity-70">
-              The shelf leaves the navbar, the shop sidebar and the home page.
-              It holds no bakes, so nothing on the case changes.
-            </p>
-            <div className="modal-action">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => setDeletingShelf(null)}
-              >
-                Keep it
-              </button>
-              <button
-                type="button"
-                className="btn btn-error btn-sm"
-                onClick={removeShelf}
-              >
-                Yes, remove
-              </button>
-            </div>
-          </div>
-          <div className="modal-backdrop" onClick={() => setDeletingShelf(null)} />
-        </div>
+        <ConfirmDialog
+          title={`Remove the “${deletingShelf.name}” shelf?`}
+          onConfirm={removeShelf}
+          onCancel={() => setDeletingShelf(null)}
+        >
+          The shelf leaves the navbar, the shop sidebar and the home page.
+          {deletingShelf.product_count > 0
+            ? ` Its ${deletingShelf.product_count} ${
+                deletingShelf.product_count === 1 ? "bake stays" : "bakes stay"
+              } on the case, off this shelf — reshelve from each bake's edit form.`
+            : " It holds no bakes, so nothing on the case changes."}
+        </ConfirmDialog>
       )}
 
       {/* Delete confirm */}
       {deleting && (
-        <div className="modal modal-open">
-          <div className="modal-box max-w-sm">
-            <h3 className="font-display text-lg font-bold">
-              Remove “{deleting.name}”?
-            </h3>
-            <p className="mt-1 text-sm opacity-70">
-              It disappears from the shop immediately. Past orders keep their
-              line items.
-            </p>
-            <div className="modal-action">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => setDeleting(null)}
-              >
-                Keep it
-              </button>
-              <button
-                type="button"
-                className="btn btn-error btn-sm"
-                onClick={confirmDelete}
-              >
-                Yes, remove
-              </button>
-            </div>
-          </div>
-          <div className="modal-backdrop" onClick={() => setDeleting(null)} />
-        </div>
+        <ConfirmDialog
+          title={`Remove “${deleting.name}”?`}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleting(null)}
+        >
+          It disappears from the shop immediately. Past orders keep their line
+          items.
+        </ConfirmDialog>
       )}
     </div>
   );

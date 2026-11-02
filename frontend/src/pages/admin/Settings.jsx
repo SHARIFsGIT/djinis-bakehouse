@@ -4,7 +4,29 @@ import client, { apiError } from "../../api/client";
 import { money } from "../../lib/format";
 import { shrinkImage } from "../../lib/imageResize";
 import { useToast } from "../../context/ToastContext";
+import ConfirmDialog from "../../components/ConfirmDialog";
 import { Loading } from "../../components/Loading";
+
+/** Shared plumbing for the two home-page managers below: patch one row,
+ *  and swap a row with its neighbour by sort_order. */
+function sortableResource(base, reload, toast) {
+  const patch = async (item, body) => {
+    try {
+      await client.put(`${base}/${item.id}`, body);
+      await reload();
+    } catch (err) {
+      toast.error(apiError(err));
+    }
+  };
+  const move = async (items, item, dir) => {
+    const idx = items.findIndex((i) => i.id === item.id);
+    const swap = items[idx + dir];
+    if (!swap) return;
+    await patch(item, { sort_order: swap.sort_order });
+    await patch(swap, { sort_order: item.sort_order });
+  };
+  return { patch, move };
+}
 
 /* ------------------------------------------------------------------ */
 /* Coming soon — the home page's look-ahead band                       */
@@ -17,9 +39,12 @@ function ComingSoonManager() {
   const [items, setItems] = useState(null);
   const [form, setForm] = useState(null); // null = closed, EMPTY_SOON = new, item = edit
   const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState(null);
 
   const load = () =>
     client.get("/admin/coming-soon").then(({ data }) => setItems(data));
+
+  const { patch, move } = sortableResource("/admin/coming-soon", load, toast);
 
   useEffect(() => {
     load().catch(() => setItems([]));
@@ -51,23 +76,6 @@ function ComingSoonManager() {
     }
   };
 
-  const patch = async (item, body) => {
-    try {
-      await client.put(`/admin/coming-soon/${item.id}`, body);
-      await load();
-    } catch (err) {
-      toast.error(apiError(err));
-    }
-  };
-
-  const move = async (item, dir) => {
-    const idx = items.findIndex((i) => i.id === item.id);
-    const swap = items[idx + dir];
-    if (!swap) return;
-    await patch(item, { sort_order: swap.sort_order });
-    await patch(swap, { sort_order: item.sort_order });
-  };
-
   const pickImage = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -86,10 +94,10 @@ function ComingSoonManager() {
     }
   };
 
-  const remove = async (item) => {
-    if (!window.confirm(`Take "${item.title}" off the coming-soon band?`)) return;
+  const remove = async () => {
     try {
-      await client.delete(`/admin/coming-soon/${item.id}`);
+      await client.delete(`/admin/coming-soon/${deleting.id}`);
+      setDeleting(null);
       await load();
       toast.info("Removed");
     } catch (err) {
@@ -225,7 +233,7 @@ function ComingSoonManager() {
                 type="button"
                 className="btn btn-ghost btn-xs btn-square"
                 disabled={idx === 0}
-                onClick={() => move(item, -1)}
+                onClick={() => move(items, item, -1)}
                 aria-label="Move up"
               >
                 <ArrowUp size={14} />
@@ -234,7 +242,7 @@ function ComingSoonManager() {
                 type="button"
                 className="btn btn-ghost btn-xs btn-square"
                 disabled={idx === items.length - 1}
-                onClick={() => move(item, 1)}
+                onClick={() => move(items, item, 1)}
                 aria-label="Move down"
               >
                 <ArrowDown size={14} />
@@ -252,7 +260,7 @@ function ComingSoonManager() {
               <button
                 type="button"
                 className="btn btn-ghost btn-xs text-error"
-                onClick={() => remove(item)}
+                onClick={() => setDeleting(item)}
                 aria-label={`Delete ${item.title}`}
               >
                 <Trash2 size={14} />
@@ -266,6 +274,17 @@ function ComingSoonManager() {
           </li>
         )}
       </ul>
+
+      {deleting && (
+        <ConfirmDialog
+          title={`Take “${deleting.title}” off the coming-soon band?`}
+          onConfirm={remove}
+          onCancel={() => setDeleting(null)}
+        >
+          It leaves the home page&rsquo;s look-ahead. You can add it back any
+          time.
+        </ConfirmDialog>
+      )}
     </section>
   );
 }
@@ -281,9 +300,12 @@ function TestimonialsManager() {
   const [items, setItems] = useState(null);
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState(null);
 
   const load = () =>
     client.get("/admin/testimonials").then(({ data }) => setItems(data));
+
+  const { patch, move } = sortableResource("/admin/testimonials", load, toast);
 
   useEffect(() => {
     load().catch(() => setItems([]));
@@ -316,27 +338,10 @@ function TestimonialsManager() {
     }
   };
 
-  const patch = async (item, body) => {
+  const remove = async () => {
     try {
-      await client.put(`/admin/testimonials/${item.id}`, body);
-      await load();
-    } catch (err) {
-      toast.error(apiError(err));
-    }
-  };
-
-  const move = async (item, dir) => {
-    const idx = items.findIndex((i) => i.id === item.id);
-    const swap = items[idx + dir];
-    if (!swap) return;
-    await patch(item, { sort_order: swap.sort_order });
-    await patch(swap, { sort_order: item.sort_order });
-  };
-
-  const remove = async (item) => {
-    if (!window.confirm(`Delete the testimonial from ${item.name}?`)) return;
-    try {
-      await client.delete(`/admin/testimonials/${item.id}`);
+      await client.delete(`/admin/testimonials/${deleting.id}`);
+      setDeleting(null);
       await load();
       toast.info("Deleted");
     } catch (err) {
@@ -472,7 +477,7 @@ function TestimonialsManager() {
                 type="button"
                 className="btn btn-ghost btn-xs btn-square"
                 disabled={idx === 0}
-                onClick={() => move(item, -1)}
+                onClick={() => move(items, item, -1)}
                 aria-label="Move up"
               >
                 <ArrowUp size={14} />
@@ -481,7 +486,7 @@ function TestimonialsManager() {
                 type="button"
                 className="btn btn-ghost btn-xs btn-square"
                 disabled={idx === items.length - 1}
-                onClick={() => move(item, 1)}
+                onClick={() => move(items, item, 1)}
                 aria-label="Move down"
               >
                 <ArrowDown size={14} />
@@ -499,7 +504,7 @@ function TestimonialsManager() {
               <button
                 type="button"
                 className="btn btn-ghost btn-xs text-error"
-                onClick={() => remove(item)}
+                onClick={() => setDeleting(item)}
                 aria-label={`Delete testimonial from ${item.name}`}
               >
                 <Trash2 size={14} />
@@ -513,6 +518,16 @@ function TestimonialsManager() {
           </li>
         )}
       </ul>
+
+      {deleting && (
+        <ConfirmDialog
+          title={`Delete the testimonial from ${deleting.name}?`}
+          onConfirm={remove}
+          onCancel={() => setDeleting(null)}
+        >
+          It comes off the home page. You can add it back any time.
+        </ConfirmDialog>
+      )}
     </section>
   );
 }

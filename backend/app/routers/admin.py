@@ -7,7 +7,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 
 from ..models import (
     DEFAULT_ANNOUNCEMENT,
@@ -332,8 +332,9 @@ def create_category(payload: CategoryCreateRequest, admin: CurrentAdmin, db: DbS
 
 @router.delete("/categories/{category_id}")
 def delete_category(category_id: int, admin: CurrentAdmin, db: DbSession):
-    """Retire a shelf — only once it is empty. Bakes must be moved or
-    removed first, so one slip can't unlink the whole case."""
+    """Retire a shelf — any shelf, occupied or not. Its bakes stay on the
+    case (moved off the shelf, awaiting a new one), so retiring a label
+    never loses a bake or a past order's line items."""
     category = db.get(Category, category_id)
     if category is None:
         raise HTTPException(status_code=404, detail="Shelf not found")
@@ -341,15 +342,18 @@ def delete_category(category_id: int, admin: CurrentAdmin, db: DbSession):
         select(func.count(Product.id)).where(Product.category_id == category_id)
     )
     if count:
-        raise HTTPException(
-            status_code=409,
-            detail=f"“{category.name}” still holds {count} "
-            f"{'bake' if count == 1 else 'bakes'} — move or remove them first.",
+        db.execute(
+            update(Product)
+            .where(Product.category_id == category_id)
+            .values(category_id=None)
         )
     name = category.name
     db.delete(category)
     db.commit()
-    return {"message": f"“{name}” shelf removed"}
+    message = f"“{name}” shelf removed"
+    if count:
+        message += f" — {count} {'bake' if count == 1 else 'bakes'} left off-shelf"
+    return {"message": message}
 
 
 # --------------------------------------------------------------------------
@@ -361,6 +365,7 @@ def all_products(
     admin: CurrentAdmin,
     db: DbSession,
     search: str | None = None,
+    category_id: int | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=15, ge=1, le=100),
 ):
@@ -368,6 +373,9 @@ def all_products(
     if search:
         term = f"%{search.strip()}%"
         query = query.where(or_(Product.name.ilike(term), Product.slug.ilike(term)))
+    # tapping a shelf on the desk shows just that shelf's bakes
+    if category_id is not None:
+        query = query.where(Product.category_id == category_id)
 
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     products = db.scalars(

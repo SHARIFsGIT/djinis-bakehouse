@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import client, { apiError } from "../../api/client";
 import { formatDate } from "../../lib/format";
 import { useToast } from "../../context/ToastContext";
+import ConfirmDialog from "../../components/ConfirmDialog";
 import { Loading } from "../../components/Loading";
 
 const EMPTY_FORM = { code: "", percent_off: "", description: "" };
@@ -215,23 +216,15 @@ export default function Promotions() {
 
       {/* Delete confirm */}
       {deleting && (
-        <div className="modal modal-open">
-          <div className="modal-box max-w-sm">
-            <h3 className="font-display text-lg font-bold">Retire {deleting.code}?</h3>
-            <p className="mt-1 text-sm opacity-70">
-              Customers can no longer apply it. Orders already placed with the code are untouched.
-            </p>
-            <div className="modal-action">
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setDeleting(null)}>
-                Keep it
-              </button>
-              <button type="button" className="btn btn-error btn-sm" onClick={confirmDelete}>
-                Yes, retire it
-              </button>
-            </div>
-          </div>
-          <div className="modal-backdrop" onClick={() => setDeleting(null)} />
-        </div>
+        <ConfirmDialog
+          title={`Retire ${deleting.code}?`}
+          confirmLabel="Yes, retire it"
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleting(null)}
+        >
+          Customers can no longer apply it. Orders already placed with the code
+          are untouched.
+        </ConfirmDialog>
       )}
     </div>
   );

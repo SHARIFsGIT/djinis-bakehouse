@@ -712,16 +712,29 @@ def test_admin_category_creation():
     )
     assert forbidden.status_code == 403
 
-    # an occupied shelf refuses to be deleted by a slip of the finger…
-    busy = client.delete(f"/api/admin/categories/{category['id']}", headers=headers)
-    assert busy.status_code == 409
+    # the desk can ask for one shelf's bakes alone
+    filtered = client.get(
+        f"/api/admin/products?category_id={category['id']}", headers=headers
+    )
+    assert filtered.status_code == 200
+    rows = filtered.json()["products"]
+    assert rows, "the shelf holds a bake, so the filtered list can't be empty"
+    assert {r["category_slug"] for r in rows} == {"savory-pies"}
 
-    # …an empty one retires cleanly (tidies up for later sweeps too)
-    client.delete(f"/api/admin/products/{product.json()['id']}", headers=headers)
-    removed = client.delete(f"/api/admin/categories/{category['id']}", headers=headers)
-    assert removed.status_code == 200
+    # an occupied shelf retires too — its bakes come off the shelf,
+    # not off the case
+    busy = client.delete(f"/api/admin/categories/{category['id']}", headers=headers)
+    assert busy.status_code == 200
+    leftover = client.get(
+        f"/api/admin/products/{product.json()['id']}", headers=headers
+    )
+    assert leftover.status_code == 200
+    assert leftover.json()["category_slug"] is None
     slugs = [c["slug"] for c in client.get("/api/products/categories").json()]
     assert "savory-pies" not in slugs
+
+    # …and the bake itself tidies up for later sweeps
+    client.delete(f"/api/admin/products/{product.json()['id']}", headers=headers)
 
 
 def test_admin_coupon_crud():

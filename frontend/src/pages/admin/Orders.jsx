@@ -17,6 +17,7 @@ import {
   statusLabel,
 } from "../../lib/format";
 import { useToast } from "../../context/ToastContext";
+import ConfirmDialog from "../../components/ConfirmDialog";
 import { Loading } from "../../components/Loading";
 
 /** Drawer with the full order + status/payment controls. */
@@ -207,6 +208,7 @@ function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
   const [status, setStatus] = useState(enquiry.status);
   const [note, setNote] = useState(enquiry.admin_note ?? "");
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
   const occasion = EVENT_TYPES.find((t) => t.value === enquiry.event_type)?.label ?? enquiry.event_type;
 
@@ -228,7 +230,6 @@ function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
   };
 
   const remove = async () => {
-    if (!window.confirm(`Delete the enquiry from ${enquiry.name}? This can't be undone.`)) return;
     try {
       await client.delete(`/admin/bulk-orders/${enquiry.id}`);
       onDeleted();
@@ -320,11 +321,27 @@ function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
             aria-label="Admin note"
           />
         </form>
-        <button type="button" className="btn btn-ghost btn-xs text-error" onClick={remove}>
+        <button
+          type="button"
+          className="btn btn-ghost btn-xs text-error"
+          onClick={() => setConfirming(true)}
+        >
           <Trash2 size={14} />
           Delete enquiry
         </button>
       </div>
+
+      {confirming && (
+        <ConfirmDialog
+          title={`Delete the enquiry from ${enquiry.name}?`}
+          confirmLabel="Yes, delete"
+          onConfirm={remove}
+          onCancel={() => setConfirming(false)}
+        >
+          This can&rsquo;t be undone — the lead and your notes on it go for
+          good.
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
