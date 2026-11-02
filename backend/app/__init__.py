@@ -45,7 +45,9 @@ _ADDITIVE_COLUMNS = {
         "min_subtotal": "ALTER TABLE coupons ADD COLUMN min_subtotal NUMERIC(10,2)",
     },
     "reviews": {
-        "is_approved": "ALTER TABLE reviews ADD COLUMN is_approved BOOLEAN NOT NULL DEFAULT 1",
+        # TRUE, not 1 — PostgreSQL refuses an integer default on a boolean
+        # column (SQLite happily takes either, which is how tests missed it).
+        "is_approved": "ALTER TABLE reviews ADD COLUMN is_approved BOOLEAN NOT NULL DEFAULT TRUE",
     },
 }
 
