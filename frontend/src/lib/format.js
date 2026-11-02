@@ -108,6 +108,26 @@ export const FREE_SHIPPING_THRESHOLD = 50;
 export const shippingFor = (subtotal) =>
   subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE;
 
+/* The checkout arithmetic, mirrored from the server (backend orders.py): every
+   figure is rounded to cents as it's charged, tax falls on the discounted
+   subtotal, and free delivery is judged on the pre-discount one. Every estimate
+   the shop quotes — the basket tally, the checkout summary — runs through this
+   one copy so the numbers a customer sees can never drift from the invoice. */
+export const computeTotals = (subtotal, percentOff = 0) => {
+  const cents = (n) => Math.round(n * 100) / 100;
+  const discount = cents((subtotal * percentOff) / 100);
+  const taxable = cents(subtotal - discount);
+  const tax = cents(taxable * TAX_RATE);
+  const shipping = shippingFor(subtotal);
+  return {
+    discount,
+    taxable,
+    tax,
+    shipping,
+    total: cents(taxable + tax + shipping),
+  };
+};
+
 /** "Tax (8.75%)" — the label and the math always come from the same constant. */
 export const taxLabel = () => {
   const percent = (TAX_RATE * 100).toFixed(2).replace(/\.?0+$/, "");

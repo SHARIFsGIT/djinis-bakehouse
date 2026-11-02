@@ -12,9 +12,8 @@ import { useToast } from "../context/ToastContext";
 import { getStoredCoupon, storeCoupon } from "../lib/coupon";
 import {
   FREE_SHIPPING_THRESHOLD,
-  TAX_RATE,
+  computeTotals,
   money,
-  shippingFor,
   taxLabel,
 } from "../lib/format";
 
@@ -148,8 +147,14 @@ export default function Cart() {
     );
   }
 
-  const shipping = shippingFor(subtotal);
-  const tax = subtotal * TAX_RATE;
+  // A tapped voucher changes the estimate right here — the same cents-at-a-
+  // time math the server will charge. The code only counts once it's on the
+  // live board: if the baker pauses it, this tally quietly stops promising it.
+  const appliedVoucher = vouchers.find((v) => v.code === appliedCode);
+  const { discount, tax, shipping, total } = computeTotals(
+    subtotal,
+    appliedVoucher?.percent_off ?? 0,
+  );
   const remaining = Math.max(0, FREE_SHIPPING_THRESHOLD - subtotal);
   const progress = Math.min(100, (subtotal / FREE_SHIPPING_THRESHOLD) * 100);
 
@@ -313,11 +318,16 @@ export default function Cart() {
               <span className="opacity-70">Subtotal</span>
               <span>{money(subtotal)}</span>
             </div>
-            {appliedCode && (
-              <div className="flex justify-between text-success">
-                <span className="font-semibold">
-                  {appliedCode} applied at checkout
+            {appliedVoucher && (
+              <div className="flex justify-between font-semibold text-success">
+                <span>
+                  {appliedVoucher.code} ({appliedVoucher.percent_off}% off)
+                  <span className="font-normal opacity-70">
+                    {" "}
+                    · applied at checkout
+                  </span>
                 </span>
+                <span>−{money(discount)}</span>
               </div>
             )}
             <div className="flex justify-between">
@@ -336,7 +346,7 @@ export default function Cart() {
             </div>
             <div className="dash-divider flex justify-between pt-3 text-lg font-bold">
               <span>Estimated total</span>
-              <span>{money(subtotal + tax + shipping)}</span>
+              <span>{money(total)}</span>
             </div>
           </div>
 

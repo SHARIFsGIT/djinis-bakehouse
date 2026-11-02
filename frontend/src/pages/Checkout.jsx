@@ -8,10 +8,9 @@ import { useCart } from "../context/CartContext";
 import { useToast } from "../context/ToastContext";
 import { getStoredCoupon, storeCoupon } from "../lib/coupon";
 import {
-  TAX_RATE,
+  computeTotals,
   isoDate,
   money,
-  shippingFor,
   taxLabel,
   todayISO,
 } from "../lib/format";
@@ -124,11 +123,11 @@ export default function Checkout() {
     );
   }
 
-  const discount = coupon ? Math.round(subtotal * coupon.percent_off) / 100 : 0;
-  const taxable = subtotal - discount;
-  const shipping = shippingFor(subtotal);
-  const tax = taxable * TAX_RATE;
-  const total = taxable + tax + shipping;
+  // Same cents-at-a-time arithmetic the invoice will carry — see format.js.
+  const { discount, tax, shipping, total } = computeTotals(
+    subtotal,
+    coupon?.percent_off ?? 0,
+  );
 
   const setField = (key, value) => setNewAddress((a) => ({ ...a, [key]: value }));
 
