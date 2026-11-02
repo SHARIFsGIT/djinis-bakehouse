@@ -152,7 +152,7 @@ export default function Navbar() {
         {/* Search (desktop) — narrows rather than pushing when space runs out */}
         <form
           onSubmit={submitSearch}
-          className="hidden min-w-0 lg:flex lg:w-36 xl:w-44"
+          className="hidden min-w-0 lg:flex lg:w-28 xl:w-44"
         >
           <SearchField value={search} onChange={setSearch} />
         </form>
