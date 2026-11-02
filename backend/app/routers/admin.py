@@ -716,6 +716,23 @@ def update_user(user_id: int, payload: UserAdminUpdateRequest, admin: CurrentAdm
     if user.id == admin.id and payload.is_active is False:
         raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
 
+    # The shop must never end up with zero active admins — that locks
+    # everyone out of the desk, with no way to promote anyone back.
+    if user.role == UserRole.ADMIN.value and (
+        (payload.role is not None and payload.role != UserRole.ADMIN) or payload.is_active is False
+    ):
+        active_admins = db.scalar(
+            select(func.count(User.id)).where(
+                User.role == UserRole.ADMIN.value, User.is_active.is_(True)
+            )
+        )
+        if active_admins <= 1:
+            raise HTTPException(
+                status_code=400,
+                detail="That would leave the shop with no active admin. "
+                "Promote another admin first, then make this change.",
+            )
+
     if payload.is_active is not None:
         user.is_active = payload.is_active
     if payload.role is not None:

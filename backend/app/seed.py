@@ -371,6 +371,36 @@ def _bootstrap_admin(db, settings) -> None:
     )
 
 
+def _ensure_admin(db, settings) -> None:
+    """The shop must never be left without an admin — the desk becomes
+    unreachable and nobody can promote anyone back. If role edits ever drain
+    the admin list (an admin demoting their own account from the Users
+    page), every boot restores the account the environment names (or the
+    demo admin in a dev database)."""
+    if db.scalar(select(func.count(User.id)).where(User.role == "admin")):
+        return
+    wanted = settings.admin_email or (
+        "admin@djinisbakehouse.com" if settings.demo_data_enabled else ""
+    )
+    user = db.scalar(select(User).where(User.email == wanted)) if wanted else None
+    if user is not None:
+        user.role = "admin"
+        db.commit()
+        logger.warning("No admin accounts were left — restored %s as admin on boot", user.email)
+    elif settings.admin_email and settings.admin_password:
+        _bootstrap_admin(db, settings)
+        db.commit()
+        logger.warning("No admin accounts were left — created %s as admin on boot", settings.admin_email)
+    elif settings.is_production:
+        raise RuntimeError(
+            "No admin accounts left, and ADMIN_EMAIL doesn't match an existing "
+            "user — nobody could reach the admin desk. Point ADMIN_EMAIL at an "
+            "existing account (and set ADMIN_PASSWORD to create it) and start again."
+        )
+    else:
+        logger.warning("No admin accounts left — set ADMIN_EMAIL to have boot restore one")
+
+
 def seed_db() -> None:
     settings = get_settings()
     if settings.is_production and settings.demo_data_enabled:
@@ -383,6 +413,7 @@ def seed_db() -> None:
     try:
         if db.scalar(select(func.count(Product.id))):
             _restore_promised_content(db)
+            _ensure_admin(db, settings)
             return  # already seeded
 
         categories: dict[str, Category] = {}

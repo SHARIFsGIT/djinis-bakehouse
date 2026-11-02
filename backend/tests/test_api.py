@@ -1127,3 +1127,59 @@ def test_database_url_normalization():
     )
     # A relative SQLite path stays anchored to the backend folder.
     assert Settings(database_url="sqlite:///./somewhere.db").resolved_database_url.endswith("/somewhere.db")
+
+
+# ----------------------------------------------------------------------
+# The last admin: the desk must never lock itself out
+# ----------------------------------------------------------------------
+
+def test_cannot_demote_the_last_admin():
+    """Editing your own account must never leave the shop with no active
+    admin — nobody could then reach the desk to promote anyone back."""
+    headers = admin_headers()
+    me = client.get("/api/auth/me", headers=headers).json()
+
+    demoted = client.put(f"/api/admin/users/{me['id']}", json={"role": "customer"}, headers=headers)
+    assert demoted.status_code == 400
+    assert "no active admin" in demoted.json()["detail"]
+    sidelined = client.put(f"/api/admin/users/{me['id']}", json={"is_active": False}, headers=headers)
+    assert sidelined.status_code == 400
+    assert client.get("/api/auth/me", headers=headers).json()["role"] == "admin"
+
+    # With a second admin in place, handing the desk over is allowed…
+    customer = login_customer()
+    customer_id = client.get("/api/auth/me", headers=auth_header(customer)).json()["id"]
+    assert client.put(f"/api/admin/users/{customer_id}", json={"role": "admin"}, headers=headers).status_code == 200
+    assert client.put(f"/api/admin/users/{me['id']}", json={"role": "customer"}, headers=headers).status_code == 200
+
+    # …and the new admin can hand it straight back.
+    new_admin = client.post("/api/auth/login", json=CUSTOMER).json()["access_token"]
+    new_headers = auth_header(new_admin)
+    assert client.put(f"/api/admin/users/{me['id']}", json={"role": "admin"}, headers=new_headers).status_code == 200
+    assert client.put(f"/api/admin/users/{customer_id}", json={"role": "customer"}, headers=new_headers).status_code == 200
+    assert client.get("/api/auth/me", headers=headers).json()["role"] == "admin"
+
+
+def test_boot_restores_the_last_admin(tmp_path, monkeypatch):
+    """The production incident itself: the only admin demotes their own
+    account to customer. The next boot must promote ADMIN_EMAIL back."""
+    from app.models import User
+
+    seed_module, Session = _catalog_only_seed_env(tmp_path, monkeypatch)
+    seed_module.seed_db()
+
+    db = Session()
+    try:
+        db.query(User).filter_by(email="owner@example.com").one().role = "customer"
+        db.commit()
+    finally:
+        db.close()
+
+    seed_module.seed_db()  # next boot
+
+    db = Session()
+    try:
+        assert db.query(User).filter_by(email="owner@example.com").one().role == "admin"
+        assert db.query(User).filter(User.role == "admin").count() == 1
+    finally:
+        db.close()
