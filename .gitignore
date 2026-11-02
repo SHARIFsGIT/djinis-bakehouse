@@ -1,0 +1,27 @@
+# --- secrets & environment ---
+backend/.env
+
+# --- Python ---
+venv/
+backend/venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# --- databases (runtime data, never source) ---
+backend/*.db
+backend/*.db-wal
+backend/*.db-shm
+
+# --- Node / frontend ---
+frontend/node_modules/
+frontend/dist/
+
+# --- runtime uploads (admin & customer photos) ---
+backend/static/uploads/
+
+# --- editor / OS noise ---
+.vscode/
+*.log
+.DS_Store
+Thumbs.db

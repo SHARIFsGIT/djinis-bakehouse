@@ -1,0 +1,259 @@
+@import "tailwindcss";
+
+@plugin "daisyui" {
+  themes: false;
+}
+
+/* ------------------------------------------------------------------ */
+/* "bakery" — pulled from the mark itself: cream paper, deep burgundy, */
+/* a lighter wine, honey gold                                          */
+/* ------------------------------------------------------------------ */
+@plugin "daisyui/theme" {
+  name: "bakery";
+  default: true;
+  color-scheme: light;
+
+  --color-base-100: oklch(97.5% 0.012 72);
+  --color-base-200: oklch(94.5% 0.018 73);
+  --color-base-300: oklch(89.5% 0.03 76);
+  --color-base-content: oklch(26% 0.05 12);
+
+  --color-primary: oklch(45% 0.16 12);
+  --color-primary-content: oklch(98% 0.01 80);
+  --color-secondary: oklch(54% 0.14 14);
+  --color-secondary-content: oklch(98% 0.01 80);
+  --color-accent: oklch(80% 0.11 70);
+  --color-accent-content: oklch(28% 0.05 55);
+  --color-neutral: oklch(30% 0.03 15);
+  --color-neutral-content: oklch(96% 0.012 80);
+
+  --color-info: oklch(46% 0.06 71);
+  --color-info-content: oklch(97% 0.012 80);
+  --color-success: oklch(57% 0.072 155);
+  --color-success-content: oklch(97% 0.012 80);
+  --color-warning: oklch(78% 0.14 75);
+  --color-warning-content: oklch(28% 0.05 60);
+  --color-error: oklch(50% 0.18 20);
+  --color-error-content: oklch(97% 0.015 92);
+
+  --radius-selector: 0.75rem;
+  --radius-field: 0.75rem;
+  --radius-box: 1.25rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1.5px;
+  --depth: 1;
+  --noise: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* "midnight" — espresso night. Brand surfaces keep the same           */
+/* burgundy→wine gradient (so cream button text always reads); the     */
+/* gold moves to the accent seat and the wine is lifted just enough    */
+/* to carry text and links on a dark ground.                           */
+/* ------------------------------------------------------------------ */
+@plugin "daisyui/theme" {
+  name: "midnight";
+  prefersdark: true;
+  color-scheme: dark;
+
+  --color-base-100: oklch(19.5% 0.021 30);
+  --color-base-200: oklch(23.5% 0.026 30);
+  --color-base-300: oklch(30% 0.032 32);
+  --color-base-content: oklch(91% 0.012 80);
+
+  --color-primary: oklch(45% 0.15 14);
+  --color-primary-content: oklch(97% 0.012 80);
+  --color-secondary: oklch(60% 0.135 14);
+  --color-secondary-content: oklch(97% 0.012 80);
+  --color-accent: oklch(83% 0.125 78);
+  --color-accent-content: oklch(25% 0.05 60);
+  --color-neutral: oklch(25% 0.028 30);
+  --color-neutral-content: oklch(91% 0.012 80);
+
+  --color-info: oklch(72% 0.07 72);
+  --color-info-content: oklch(20% 0.03 45);
+  --color-success: oklch(72% 0.09 155);
+  --color-success-content: oklch(18% 0.04 150);
+  --color-warning: oklch(82% 0.13 78);
+  --color-warning-content: oklch(25% 0.05 60);
+  --color-error: oklch(66% 0.17 25);
+  --color-error-content: oklch(97% 0.015 92);
+
+  --radius-selector: 0.75rem;
+  --radius-field: 0.75rem;
+  --radius-box: 1.25rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1.5px;
+  --depth: 1;
+  --noise: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Type — Fraunces (display) + Karla (body), both bundled locally       */
+/* ------------------------------------------------------------------ */
+@theme {
+  --font-sans: "Karla Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces Variable", "Iowan Old Style", Georgia, serif;
+}
+
+/* Fraunces' soft, slightly wonky letterforms — used for display text */
+.font-display {
+  font-family: var(--font-display);
+  font-variation-settings:
+    "SOFT" 55,
+    "WONK" 1;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-base-100 text-base-content font-sans antialiased;
+  }
+  ::selection {
+    @apply bg-secondary text-secondary-content;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Texture & flourish                                                  */
+/* ------------------------------------------------------------------ */
+
+/* Frosted-glass surface — works in both themes; pair with a ring/shadow.
+   Kept quiet: mostly solid base colour, just enough blur to soften what
+   scrolls behind it. */
+.glass {
+  background: color-mix(in oklab, var(--color-base-100) 88%, transparent);
+  backdrop-filter: blur(8px) saturate(1.15);
+  -webkit-backdrop-filter: blur(8px) saturate(1.15);
+}
+
+@supports not (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  .glass {
+    background: var(--color-base-100);
+  }
+}
+
+/* The shop's signature finish — burgundy easing into wine across every
+   brand surface, buttons and badges included. Buttons deepen a touch on
+   hover so the fill still reads as interactive; disabled ones drop the
+   image so their muted colour shows through. */
+.brand-gradient,
+.btn-primary,
+.btn-secondary,
+.badge-primary,
+.badge-secondary {
+  background-image: linear-gradient(
+    120deg,
+    var(--color-primary),
+    var(--color-secondary)
+  );
+}
+
+.btn-primary:hover,
+.btn-secondary:hover {
+  background-image: linear-gradient(
+    120deg,
+    color-mix(in oklab, var(--color-primary) 85%, black),
+    color-mix(in oklab, var(--color-secondary) 85%, black)
+  );
+}
+
+.btn-primary:disabled,
+.btn-secondary:disabled,
+.btn-primary[disabled],
+.btn-secondary[disabled],
+.btn-primary.btn-disabled,
+.btn-secondary.btn-disabled {
+  background-image: none;
+}
+
+/* Subtle flour-dust grain over the whole page */
+.grain-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  pointer-events: none;
+  opacity: 0.7;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+}
+
+/* Dashed "perforation" divider between sections */
+.dash-divider {
+  @apply border-t-2 border-dashed border-base-300;
+}
+
+/* ------------------------------------------------------------------ */
+/* Motion                                                              */
+/* ------------------------------------------------------------------ */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise-in {
+  animation: rise-in 0.3s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+@keyframes pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.animate-pop {
+  animation: pop-in 0.18s ease-out both;
+}
+
+@keyframes marquee-x {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.marquee-track {
+  animation: marquee-x 26s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise-in,
+  .animate-pop,
+  .marquee-track {
+    animation: none !important;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Product photo tiles                                                  */
+/* ------------------------------------------------------------------ */
+
+.photo-tile {
+  overflow: hidden;
+  background: var(--color-base-200);
+}
+.photo-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.25s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+.group:hover .photo-tile img {
+  transform: scale(1.05);
+}

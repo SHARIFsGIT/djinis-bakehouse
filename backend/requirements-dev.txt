@@ -1,0 +1,7 @@
+-r requirements.txt
+pytest>=8.0
+httpx>=0.27
+ruff>=0.6  # lint: python -m ruff check app/ tests/ run.py --select F
+# Optional: end-to-end browser checks against a running server
+# (uses the locally installed Chrome: playwright install chromium is not needed)
+playwright>=1.40

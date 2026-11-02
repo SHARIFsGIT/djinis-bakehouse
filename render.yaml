@@ -1,0 +1,51 @@
+# Render blueprint — production in one click for Djini's Bakehouse.
+#
+# How to use:
+#   1. Push this repo to GitHub/GitLab.
+#   2. Render dashboard -> New -> Blueprint -> pick the repo.
+#   3. Render asks for the two "sync: false" values (ADMIN_EMAIL and
+#      ADMIN_PASSWORD) — that's the shop's first login. Everything else
+#      (SECRET_KEY, the Postgres URL) is created for you.
+#   4. Deploy. Attach your domain in the service settings; TLS is automatic.
+#
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: djinis-bakehouse
+    runtime: python
+    plan: starter # always-on; the free tier sleeps between visits
+    region: oregon # pick the region nearest your customers
+    branch: main
+    buildCommand: pip install -r backend/requirements.txt && cd frontend && npm ci && npm run build && cd ..
+    startCommand: uvicorn app:app --app-dir backend --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"
+    healthCheckPath: /api/health
+    disk: # uploaded photos live on a disk so they survive redeploys
+      name: uploads
+      mountPath: /data/uploads
+      sizeGB: 1
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true # a long random secret, created and managed by Render
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bakehouse-db
+          property: connectionString
+      - key: SEED_DEMO_DATA
+        value: "false" # catalog only — no demo customers, orders or reviews
+      - key: ADMIN_EMAIL
+        sync: false # you set this when the blueprint is applied
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: UPLOADS_DIR
+        value: /data/uploads
+      - key: ENABLE_DOCS
+        value: "false" # hide /api/docs from the public internet
+      - key: SERVE_FRONTEND_DIST
+        value: "true" # one origin: the API also serves the built SPA
+
+databases:
+  - name: bakehouse-db
+    plan: basic-256mb # ~$7/mo; bump it when the order book grows
+    region: oregon

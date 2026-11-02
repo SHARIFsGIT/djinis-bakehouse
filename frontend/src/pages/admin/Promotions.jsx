@@ -1,0 +1,238 @@
+import { useEffect, useState } from "react";
+import client, { apiError } from "../../api/client";
+import { formatDate } from "../../lib/format";
+import { useToast } from "../../context/ToastContext";
+import { Loading } from "../../components/Loading";
+
+const EMPTY_FORM = { code: "", percent_off: "", description: "" };
+
+export default function Promotions() {
+  const toast = useToast();
+  const [coupons, setCoupons] = useState(null);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(null); // coupon row being renamed inline
+  const [deleting, setDeleting] = useState(null);
+
+  const load = () =>
+    client.get("/admin/coupons").then(({ data }) => setCoupons(data));
+
+  useEffect(() => {
+    load().catch((e) => toast.error(apiError(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const create = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await client.post("/admin/coupons", {
+        code: form.code.trim(),
+        percent_off: Number(form.percent_off),
+        description: form.description.trim() || null,
+      });
+      toast.success(`Coupon ${form.code.trim().toUpperCase()} is live`);
+      setForm(EMPTY_FORM);
+      await load();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleActive = async (coupon) => {
+    try {
+      await client.put(`/admin/coupons/${coupon.id}`, { is_active: !coupon.is_active });
+      await load();
+    } catch (err) {
+      toast.error(apiError(err));
+    }
+  };
+
+  const savePercent = async (coupon) => {
+    const value = Number(editing.value);
+    if (!value || value < 1 || value > 100) {
+      toast.error("Percent off must be between 1 and 100");
+      return;
+    }
+    try {
+      await client.put(`/admin/coupons/${coupon.id}`, { percent_off: value });
+      toast.success(`${coupon.code} now takes ${value}% off`);
+      setEditing(null);
+      await load();
+    } catch (err) {
+      toast.error(apiError(err));
+    }
+  };
+
+  const confirmDelete = async () => {
+    try {
+      await client.delete(`/admin/coupons/${deleting.id}`);
+      toast.info(`Retired ${deleting.code}`);
+      setDeleting(null);
+      await load();
+    } catch (err) {
+      toast.error(apiError(err));
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm opacity-70">
+        Coupons take a percent off the subtotal at checkout — tax is recalculated after the discount.
+        Existing orders keep whatever was applied.
+      </p>
+
+      {/* New coupon */}
+      <form
+        onSubmit={create}
+        className="grid gap-3 rounded-box glass p-5 shadow-sm ring-1 ring-base-300/60 sm:grid-cols-[160px_120px_1fr_auto] sm:items-end"
+      >
+        <div>
+          <label className="label text-xs">Code *</label>
+          <input
+            className="input input-bordered w-full font-mono uppercase"
+            required
+            minLength={3}
+            maxLength={50}
+            pattern="[A-Za-z0-9]+"
+            title="Letters and numbers only"
+            placeholder="WELCOME10"
+            value={form.code}
+            onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
+          />
+        </div>
+        <div>
+          <label className="label text-xs">Percent off *</label>
+          <input
+            type="number"
+            className="input input-bordered w-full"
+            required
+            min={1}
+            max={100}
+            placeholder="10"
+            value={form.percent_off}
+            onChange={(e) => setForm((f) => ({ ...f, percent_off: e.target.value }))}
+          />
+        </div>
+        <div>
+          <label className="label text-xs">Note for the counter</label>
+          <input
+            className="input input-bordered w-full"
+            maxLength={255}
+            placeholder="First-order welcome discount"
+            value={form.description}
+            onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+          />
+        </div>
+        <button type="submit" className="btn btn-primary" disabled={busy}>
+          {busy ? <span className="loading loading-spinner loading-xs" /> : "Add coupon"}
+        </button>
+      </form>
+
+      {/* List */}
+      {coupons === null ? (
+        <Loading label="Fetching the coupon tin…" />
+      ) : coupons.length === 0 ? (
+        <p className="rounded-box glass p-8 text-center text-sm opacity-60 ring-1 ring-base-300/60">
+          No coupons yet — add one above.
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
+          <table className="table table-sm">
+            <thead>
+              <tr className="text-xs uppercase opacity-50">
+                <th>Code</th>
+                <th className="text-right">Discount</th>
+                <th>Note</th>
+                <th>Status</th>
+                <th className="text-right">Added</th>
+                <th className="text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {coupons.map((c) => (
+                <tr key={c.id} className={c.is_active ? "hover:bg-base-200/50" : "opacity-55"}>
+                  <td className="font-mono font-bold">{c.code}</td>
+                  <td className="text-right">
+                    {editing?.id === c.id ? (
+                      <span className="inline-flex items-center gap-1">
+                        <input
+                          type="number"
+                          className="input input-bordered input-xs w-16"
+                          min={1}
+                          max={100}
+                          value={editing.value}
+                          onChange={(e) => setEditing({ id: c.id, value: e.target.value })}
+                          autoFocus
+                        />
+                        <button type="button" className="btn btn-secondary btn-xs" onClick={() => savePercent(c)}>
+                          Save
+                        </button>
+                        <button type="button" className="btn btn-ghost btn-xs" onClick={() => setEditing(null)}>
+                          Cancel
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs font-bold"
+                        title="Change the percent"
+                        onClick={() => setEditing({ id: c.id, value: String(c.percent_off) })}
+                      >
+                        {c.percent_off}% off
+                      </button>
+                    )}
+                  </td>
+                  <td className="max-w-64 truncate text-sm opacity-70">{c.description ?? "—"}</td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      className="toggle toggle-secondary toggle-sm"
+                      checked={c.is_active}
+                      onChange={() => toggleActive(c)}
+                      aria-label={`Toggle ${c.code}`}
+                    />
+                    <span className="ml-2 text-xs opacity-60">{c.is_active ? "live" : "paused"}</span>
+                  </td>
+                  <td className="text-right text-xs opacity-60">{formatDate(c.created_at)}</td>
+                  <td className="text-right">
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs text-error"
+                      onClick={() => setDeleting(c)}
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Delete confirm */}
+      {deleting && (
+        <div className="modal modal-open">
+          <div className="modal-box max-w-sm">
+            <h3 className="font-display text-lg font-bold">Retire {deleting.code}?</h3>
+            <p className="mt-1 text-sm opacity-70">
+              Customers can no longer apply it. Orders already placed with the code are untouched.
+            </p>
+            <div className="modal-action">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setDeleting(null)}>
+                Keep it
+              </button>
+              <button type="button" className="btn btn-error btn-sm" onClick={confirmDelete}>
+                Yes, retire it
+              </button>
+            </div>
+          </div>
+          <div className="modal-backdrop" onClick={() => setDeleting(null)} />
+        </div>
+      )}
+    </div>
+  );
+}
