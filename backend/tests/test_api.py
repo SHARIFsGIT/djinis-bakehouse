@@ -712,8 +712,16 @@ def test_admin_category_creation():
     )
     assert forbidden.status_code == 403
 
-    # tidy up so later sweeps see the seeded catalog
+    # an occupied shelf refuses to be deleted by a slip of the finger…
+    busy = client.delete(f"/api/admin/categories/{category['id']}", headers=headers)
+    assert busy.status_code == 409
+
+    # …an empty one retires cleanly (tidies up for later sweeps too)
     client.delete(f"/api/admin/products/{product.json()['id']}", headers=headers)
+    removed = client.delete(f"/api/admin/categories/{category['id']}", headers=headers)
+    assert removed.status_code == 200
+    slugs = [c["slug"] for c in client.get("/api/products/categories").json()]
+    assert "savory-pies" not in slugs
 
 
 def test_admin_coupon_crud():

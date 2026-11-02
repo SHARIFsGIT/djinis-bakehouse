@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ImagePlus } from "lucide-react";
+import { ImagePlus, Trash2 } from "lucide-react";
 import client, { apiError } from "../../api/client";
 import { money } from "../../lib/format";
 import { shrinkImage } from "../../lib/imageResize";
@@ -41,6 +41,7 @@ export default function AdminProducts() {
   const [editing, setEditing] = useState(null); // { id?, form }
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState(null);
+  const [deletingShelf, setDeletingShelf] = useState(null);
 
   const load = (p = page, s = search) => {
     const query = { page: p, per_page: 15 };
@@ -206,6 +207,18 @@ export default function AdminProducts() {
   const setField = (key, value) =>
     setEditing((s) => ({ ...s, form: { ...s.form, [key]: value } }));
 
+  const removeShelf = async () => {
+    try {
+      await client.delete(`/admin/categories/${deletingShelf.id}`);
+      toast.info(`Removed “${deletingShelf.name}” shelf`);
+      setDeletingShelf(null);
+      const { data } = await client.get("/products/categories");
+      setCategories(data);
+    } catch (err) {
+      toast.error(apiError(err));
+    }
+  };
+
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -227,6 +240,39 @@ export default function AdminProducts() {
         >
           New product
         </button>
+      </div>
+
+      {/* Shelves — the case's layout at a glance. An empty shelf can be
+          retired with one tap; an occupied one explains why not. */}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-semibold tracking-wide uppercase opacity-50">
+          Shelves
+        </span>
+        {categories.map((c) => (
+          <span
+            key={c.id}
+            className="badge badge-ghost gap-1.5 rounded-full py-2.5 pl-3 pr-2 text-sm"
+          >
+            {c.name}
+            <span className="opacity-50">{c.product_count}</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs btn-square text-error"
+              onClick={() => setDeletingShelf(c)}
+              disabled={c.product_count > 0}
+              title={
+                c.product_count > 0
+                  ? `Move or remove its ${c.product_count} ${
+                      c.product_count === 1 ? "bake" : "bakes"
+                    } first`
+                  : `Remove the ${c.name} shelf`
+              }
+              aria-label={`Remove the ${c.name} shelf`}
+            >
+              <Trash2 size={13} />
+            </button>
+          </span>
+        ))}
       </div>
 
       {data === null ? (
@@ -540,6 +586,38 @@ export default function AdminProducts() {
             </div>
           </div>
           <div className="modal-backdrop" onClick={closeDialog} />
+        </div>
+      )}
+
+      {/* Shelf delete confirm */}
+      {deletingShelf && (
+        <div className="modal modal-open">
+          <div className="modal-box max-w-sm">
+            <h3 className="font-display text-lg font-bold">
+              Remove the “{deletingShelf.name}” shelf?
+            </h3>
+            <p className="mt-1 text-sm opacity-70">
+              The shelf leaves the navbar, the shop sidebar and the home page.
+              It holds no bakes, so nothing on the case changes.
+            </p>
+            <div className="modal-action">
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setDeletingShelf(null)}
+              >
+                Keep it
+              </button>
+              <button
+                type="button"
+                className="btn btn-error btn-sm"
+                onClick={removeShelf}
+              >
+                Yes, remove
+              </button>
+            </div>
+          </div>
+          <div className="modal-backdrop" onClick={() => setDeletingShelf(null)} />
         </div>
       )}
 

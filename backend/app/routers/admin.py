@@ -330,6 +330,28 @@ def create_category(payload: CategoryCreateRequest, admin: CurrentAdmin, db: DbS
     )
 
 
+@router.delete("/categories/{category_id}")
+def delete_category(category_id: int, admin: CurrentAdmin, db: DbSession):
+    """Retire a shelf — only once it is empty. Bakes must be moved or
+    removed first, so one slip can't unlink the whole case."""
+    category = db.get(Category, category_id)
+    if category is None:
+        raise HTTPException(status_code=404, detail="Shelf not found")
+    count = db.scalar(
+        select(func.count(Product.id)).where(Product.category_id == category_id)
+    )
+    if count:
+        raise HTTPException(
+            status_code=409,
+            detail=f"“{category.name}” still holds {count} "
+            f"{'bake' if count == 1 else 'bakes'} — move or remove them first.",
+        )
+    name = category.name
+    db.delete(category)
+    db.commit()
+    return {"message": f"“{name}” shelf removed"}
+
+
 # --------------------------------------------------------------------------
 # Product management
 # --------------------------------------------------------------------------
