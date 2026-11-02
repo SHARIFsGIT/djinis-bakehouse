@@ -1,6 +1,6 @@
+import { Menu, Moon, Search, ShoppingBasket, Sun, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
-import { Menu, Moon, Search, ShoppingBasket, Sun, X } from "lucide-react";
 import client from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
@@ -93,7 +93,7 @@ export default function Navbar() {
   const shopLinks = [
     {
       to: "/products",
-      label: "Shop the case",
+      label: "Explore Our Bakes",
       active: browsing && !activeCategory && !saleActive,
     },
     ...categories.map((c) => ({

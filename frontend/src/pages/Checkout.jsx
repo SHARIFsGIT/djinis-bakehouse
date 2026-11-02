@@ -1,20 +1,20 @@
+import { Banknote, CreditCard, Lock } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { Banknote, CreditCard, Lock } from "lucide-react";
 import client, { apiError } from "../api/client";
-import {
-  money,
-  isoDate,
-  todayISO,
-  TAX_RATE,
-  shippingFor,
-  taxLabel,
-} from "../lib/format";
-import { getStoredCoupon, storeCoupon } from "../lib/coupon";
-import { useCart } from "../context/CartContext";
-import { useToast } from "../context/ToastContext";
 import EmptyState from "../components/EmptyState";
 import { Loading } from "../components/Loading";
+import { useCart } from "../context/CartContext";
+import { useToast } from "../context/ToastContext";
+import { getStoredCoupon, storeCoupon } from "../lib/coupon";
+import {
+  TAX_RATE,
+  isoDate,
+  money,
+  shippingFor,
+  taxLabel,
+  todayISO,
+} from "../lib/format";
 
 const EMPTY_ADDRESS = {
   label: "Home",
@@ -118,7 +118,7 @@ export default function Checkout() {
     return (
       <div className="mx-auto max-w-3xl px-4 py-8">
         <EmptyState title="Nothing to check out" hint="Your basket is empty — fill it with something warm first.">
-          <Link to="/products" className="btn btn-primary btn">Shop the case</Link>
+          <Link to="/products" className="btn btn-primary">Explore Our Bakes</Link>
         </EmptyState>
       </div>
     );
