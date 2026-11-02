@@ -37,12 +37,9 @@ from .security import hash_password
 logger = logging.getLogger("bakery")
 
 CATEGORIES = [
-    ("Breads", "breads", "/static/products/french-baguette.jpg",
-     "Daily loaves, baguettes, focaccia and soft rolls — baked every morning.", 1),
-    ("Pastries", "pastries", "/static/products/butter-croissant.jpg",
-     "Laminated dough, puffs and savoury bites from the pastry case.", 2),
-    ("Desserts", "desserts", "/static/products/glazed-doughnuts.jpg",
-     "Doughnuts, maritozzo and seasonal sweet things.", 3),
+    ("Breads", "breads", "/static/products/french-baguette.jpg", 1),
+    ("Pastries", "pastries", "/static/products/butter-croissant.jpg", 2),
+    ("Desserts", "desserts", "/static/products/glazed-doughnuts.jpg", 3),
 ]
 
 # name, slug, category, price, sale_price, featured, stock, prep_minutes,

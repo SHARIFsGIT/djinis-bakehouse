@@ -1,22 +1,22 @@
+import { BadgePercent, Plus, Truck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { BadgePercent, Plus, Truck } from "lucide-react";
 import client from "../api/client";
-import {
-  money,
-  FREE_SHIPPING_THRESHOLD,
-  TAX_RATE,
-  shippingFor,
-  taxLabel,
-} from "../lib/format";
-import { getStoredCoupon, storeCoupon } from "../lib/coupon";
-import { useAuth } from "../context/AuthContext";
-import { useCart } from "../context/CartContext";
-import { useToast } from "../context/ToastContext";
 import EmptyState from "../components/EmptyState";
 import PhotoTile from "../components/PhotoTile";
 import PriceTag from "../components/PriceTag";
 import QuantityInput from "../components/QuantityInput";
+import { useAuth } from "../context/AuthContext";
+import { useCart } from "../context/CartContext";
+import { useToast } from "../context/ToastContext";
+import { getStoredCoupon, storeCoupon } from "../lib/coupon";
+import {
+  FREE_SHIPPING_THRESHOLD,
+  TAX_RATE,
+  money,
+  shippingFor,
+  taxLabel,
+} from "../lib/format";
 
 /** One live voucher: the saving it offers and whether this basket earns it. */
 function VoucherCard({ voucher, subtotal, applied, onApply, onRemove }) {
@@ -140,8 +140,8 @@ export default function Cart() {
           title="Your basket is empty"
           hint="The oven is full and waiting — go pick something warm."
         >
-          <Link to="/products" className="btn btn-primary btn">
-            Shop the case
+          <Link to="/products" className="btn btn-primary">
+            Explore Our Bakes
           </Link>
         </EmptyState>
       </div>

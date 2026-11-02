@@ -1,6 +1,6 @@
+import { Mail, MapPin, Phone, Send } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
-import { Mail, MapPin, Phone, Send } from "lucide-react";
 import client from "../api/client";
 import { useToast } from "../context/ToastContext";
 
@@ -49,7 +49,7 @@ export default function Footer() {
         <div>
           <p className="mb-3 font-display font-semibold">The counter</p>
           <ul className="space-y-2 text-sm opacity-80">
-            <li><Link to="/products" className="link link-hover">Shop the case</Link></li>
+            <li><Link to="/products" className="link link-hover">Explore Our Bakes</Link></li>
             <li><Link to="/products?category=breads" className="link link-hover">Daily breads</Link></li>
             <li><Link to="/products?category=desserts" className="link link-hover">Desserts</Link></li>
             <li><Link to="/cart" className="link link-hover">Your basket</Link></li>

@@ -23,22 +23,18 @@ const PROMISES = [
   {
     Icon: Flame,
     title: "Out of the oven at 6",
-    text: "Baked the morning it ships — never yesterday's loaf.",
   },
   {
     Icon: Truck,
     title: "Free delivery over $50",
-    text: "Evening runs across Sweet Valley, Tue – Sat.",
   },
   {
     Icon: ShieldCheck,
     title: "Checkout you can trust",
-    text: "Card or cash, and a full refund if you cancel before baking.",
   },
   {
     Icon: Wheat,
     title: "Flour from two farms away",
-    text: "Stone-ground, additive-free, delivered in sacks not silos.",
   },
 ];
 
@@ -140,20 +136,18 @@ export default function Home() {
               <em className="text-secondary italic">patience</em>
             </h1>
             <p className="mt-6 max-w-md text-lg leading-relaxed opacity-80">
-              Every loaf proofs overnight, every croissant is laminated by hand,
-              and the ovens have been on since 4 a.m. Come see what&rsquo;s
-              fresh.
+              Made with patience, baked with love.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link to="/products" className="btn btn-primary btn-lg shadow-md">
-                Shop the case
+                Explore Our Bakes
               </Link>
               <Link
                 to="/bulk"
                 className="btn btn-ghost btn-lg border border-base-300 transition hover:bg-base-200"
               >
                 <Users size={20} />
-                Bulk order
+                Bulk Order
               </Link>
             </div>
             <div className="mt-10 flex gap-8 text-sm">
