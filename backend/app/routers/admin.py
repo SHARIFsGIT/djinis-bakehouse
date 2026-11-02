@@ -35,6 +35,8 @@ from ..models import (
 from ..schemas import (
     AdminNotificationList,
     AdminNotificationOut,
+    AdminReviewCounts,
+    AdminReviewList,
     AdminReviewOut,
     AdminStatsOut,
     BulkEnquiryOut,
@@ -547,6 +549,7 @@ def _admin_review(review: Review, verified: bool) -> AdminReviewOut:
         product_id=review.product_id,
         product_name=review.product.name,
         product_slug=review.product.slug,
+        product_image=review.product.image_url,
         author_name=review.user.full_name if review.user else None,
         author_email=review.user.email if review.user else None,
         rating=review.rating,
@@ -557,13 +560,14 @@ def _admin_review(review: Review, verified: bool) -> AdminReviewOut:
     )
 
 
-@router.get("/reviews", response_model=list[AdminReviewOut])
+@router.get("/reviews", response_model=AdminReviewList)
 def all_reviews(
     admin: CurrentAdmin,
     db: DbSession,
     status_filter: str = Query(default="all", alias="status", pattern="^(live|hidden|all)$"),
 ):
-    """Every review as the desk sees it: whose, on what, live or taken down."""
+    """Every review as the desk sees it: whose, on what, live or taken down —
+    with the shelf tallies so the tabs can count themselves."""
     query = select(Review).order_by(Review.created_at.desc())
     if status_filter == "live":
         query = query.where(Review.is_approved.is_(True))
@@ -579,7 +583,24 @@ def all_reviews(
     for product_id, user_ids in by_product.items():
         verified.update((product_id, uid) for uid in verified_buyers(db, product_id, user_ids))
 
-    return [_admin_review(r, (r.product_id, r.user_id) in verified) for r in reviews]
+    tallies = dict(
+        db.execute(
+            select(Review.is_approved, func.count(Review.id)).group_by(Review.is_approved)
+        ).all()
+    )
+    live_count = tallies.get(True, 0)
+    hidden_count = tallies.get(False, 0)
+    live_average = db.scalar(
+        select(func.avg(Review.rating)).where(Review.is_approved.is_(True))
+    )
+    counts = AdminReviewCounts(
+        live=live_count,
+        hidden=hidden_count,
+        all=live_count + hidden_count,
+        live_average=round(live_average, 1) if live_average is not None else None,
+    )
+    items = [_admin_review(r, (r.product_id, r.user_id) in verified) for r in reviews]
+    return AdminReviewList(items=items, counts=counts)
 
 
 @router.put("/reviews/{review_id}", response_model=AdminReviewOut)

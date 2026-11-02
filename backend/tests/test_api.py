@@ -387,9 +387,12 @@ def test_review_moderation():
     review_id = created.json()["id"]
 
     desk = client.get("/api/admin/reviews", params={"status": "live"}, headers=headers).json()
-    row = next(r for r in desk if r["id"] == review_id)
+    row = next(r for r in desk["items"] if r["id"] == review_id)
     assert row["author_email"] == "moderated@example.com"
     assert row["product_slug"] == "croffle"
+    assert row["product_image"] == product["image_url"]
+    assert desk["counts"]["all"] == desk["counts"]["live"] + desk["counts"]["hidden"]
+    live_before = desk["counts"]["live"]
 
     hidden = client.put(
         f"/api/admin/reviews/{review_id}", json={"is_approved": False}, headers=headers
@@ -411,7 +414,10 @@ def test_review_moderation():
     hidden_list = client.get(
         "/api/admin/reviews", params={"status": "hidden"}, headers=headers
     ).json()
-    assert any(r["id"] == review_id for r in hidden_list)
+    assert any(r["id"] == review_id for r in hidden_list["items"])
+    # the tallies follow the shelf
+    assert hidden_list["counts"]["live"] == live_before - 1
+    assert hidden_list["counts"]["hidden"] >= 1
 
     restored = client.put(
         f"/api/admin/reviews/{review_id}", json={"is_approved": True}, headers=headers

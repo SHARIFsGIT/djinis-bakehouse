@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { Bell, CalendarHeart, CheckCheck, ScrollText, Star, UserPlus } from "lucide-react";
 import client from "../api/client";
-import { formatDate } from "../lib/format";
+import { formatDateTime, stampTime } from "../lib/format";
 
 /* What each ping kind looks like on the panel. */
 const KIND_STYLES = {
@@ -14,18 +14,6 @@ const KIND_STYLES = {
 
 function kindStyle(kind) {
   return KIND_STYLES[kind] ?? { Icon: Bell, className: "bg-base-200" };
-}
-
-function timeAgo(value) {
-  const seconds = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = seconds / 60;
-  if (minutes < 60) return `${Math.floor(minutes)} min ago`;
-  const hours = minutes / 60;
-  if (hours < 24) return `${Math.floor(hours)} h ago`;
-  const days = hours / 24;
-  if (days < 7) return `${Math.floor(days)} d ago`;
-  return formatDate(value);
 }
 
 /** The baker's bell: every order, review, catering lead and signup pings the
@@ -127,8 +115,11 @@ export default function AdminBell() {
                         {n.body}
                       </span>
                     )}
-                    <span className="mt-1 block text-[11px] opacity-50">
-                      {timeAgo(n.created_at)}
+                    <span
+                      className="mt-1 block text-[11px] opacity-50"
+                      title={formatDateTime(n.created_at)}
+                    >
+                      {stampTime(n.created_at)}
                     </span>
                   </span>
                   {!n.is_read && (

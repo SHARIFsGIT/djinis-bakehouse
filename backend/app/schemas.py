@@ -437,6 +437,7 @@ class AdminReviewOut(ORMModel):
     product_id: int
     product_name: str
     product_slug: str
+    product_image: str | None = None
     author_name: str | None = None
     author_email: str | None = None
     rating: int
@@ -444,6 +445,20 @@ class AdminReviewOut(ORMModel):
     verified_purchase: bool = False
     is_approved: bool
     created_at: datetime
+
+
+class AdminReviewCounts(BaseModel):
+    """The shelf tallies for the tabs, plus the average the wall shows."""
+
+    live: int
+    hidden: int
+    all: int
+    live_average: float | None = None
+
+
+class AdminReviewList(BaseModel):
+    items: list[AdminReviewOut]
+    counts: AdminReviewCounts
 
 
 class AdminNotificationOut(ORMModel):

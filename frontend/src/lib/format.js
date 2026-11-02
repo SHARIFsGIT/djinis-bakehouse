@@ -21,6 +21,32 @@ export const formatDateTime = (value) => {
   });
 };
 
+/** A timestamp as the desk reads it: real time and date, short. The clock
+    always shows; only the label in front of it trades freshness words for
+    calendar words ("Today, 3:45 PM" → "Tue, 3:45 PM" → "Nov 12, 3:45 PM"). */
+export const stampTime = (value) => {
+  if (!value) return "—";
+  const d = new Date(value);
+  const now = new Date();
+  const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const sameDay = (a, b) =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+  if (sameDay(d, now)) return `Today, ${time}`;
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  if (sameDay(d, yesterday)) return `Yesterday, ${time}`;
+  if (now - d < 7 * 86_400_000) {
+    return `${d.toLocaleDateString("en-US", { weekday: "short" })}, ${time}`;
+  }
+  const date = d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  });
+  return `${date}, ${time}`;
+};
+
 /** Local-timezone YYYY-MM-DD — toISOString() is UTC and drifts a day near midnight. */
 export const isoDate = (date) => {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);

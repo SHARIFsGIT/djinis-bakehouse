@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from "react-router";
 import client from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
+import AdminBell from "./AdminBell";
 
 const NAV_LINK =
   "text-sm font-semibold whitespace-nowrap opacity-80 transition hover:text-secondary hover:opacity-100";
@@ -159,6 +160,10 @@ export default function Navbar() {
         >
           {theme === "bakery" ? <Moon size={19} /> : <Sun size={19} />}
         </button>
+
+        {/* The desk bell — rides the navbar so it follows the baker around
+            the shop, not just the back office */}
+        {isAdmin && <AdminBell />}
 
         {/* Cart — the count rides the basket's outer shoulder, small enough
             that the basket itself stays fully visible */}
