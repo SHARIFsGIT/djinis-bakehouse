@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 import client from "../api/client";
-import ProductCard from "../components/ProductCard";
 import EmptyState from "../components/EmptyState";
 import { ProductGridSkeleton } from "../components/Loading";
+import ProductCard from "../components/ProductCard";
 
 const SORTS = [
   { value: "newest", label: "Newest bakes" },
@@ -137,7 +137,7 @@ export default function Products() {
             <p className="font-display mb-2 font-semibold">Quick picks</p>
             <div className="flex flex-wrap gap-2">
               {[
-                { key: "on_sale", label: "On sale" },
+                { key: "on_sale", label: "On Sale" },
                 { key: "in_stock", label: "In stock" },
               ].map(({ key, label }) => {
                 const on = Boolean(filters[key]);

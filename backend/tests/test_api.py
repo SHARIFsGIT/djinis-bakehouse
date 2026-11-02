@@ -7,6 +7,7 @@ os.environ["DATABASE_URL"] = "sqlite:///./test_bakehouse.db"
 # repeated logins between tests are not throttled.
 os.environ["LOGIN_RATE_LIMIT"] = "1000"
 os.environ["REGISTER_RATE_LIMIT"] = "1000"
+os.environ["FORGOT_RATE_LIMIT"] = "1000"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -181,6 +182,53 @@ def test_password_change_revokes_old_tokens():
     assert client.get("/api/auth/me", headers=auth_header(new_tokens["access_token"])).status_code == 200
     assert client.post("/api/auth/login", json={"email": email, "password": "Rotate456!"}).status_code == 200
     assert client.post("/api/auth/login", json={"email": email, "password": old_password}).status_code == 401
+
+
+def test_password_reset_flow():
+    email, old_password, new_password = (
+        "forgetful@example.com",
+        "Original123!",
+        "Replacement456!",
+    )
+    registered = client.post(
+        "/api/auth/register",
+        json={"email": email, "password": old_password, "first_name": "For", "last_name": "Get"},
+    ).json()
+    old_access = registered["access_token"]
+
+    # Unknown and known emails get the same answer — no account probing.
+    unknown = client.post("/api/auth/forgot-password", json={"email": "nobody@example.com"})
+    known = client.post("/api/auth/forgot-password", json={"email": email})
+    assert unknown.status_code == known.status_code == 200
+    assert unknown.json()["message"] == known.json()["message"]
+    assert "reset_link" not in unknown.json()
+
+    # Tests run in dev, which hands the link back instead of emailing it.
+    link = known.json().get("reset_link", "")
+    assert link and "/reset-password?token=" in link
+    token = link.split("token=")[1]
+
+    # A made-up token is refused; the real one sets the new password.
+    bad = client.post(
+        "/api/auth/reset-password", json={"token": "x" * 43, "password": new_password}
+    )
+    assert bad.status_code == 400
+
+    done = client.post(
+        "/api/auth/reset-password", json={"token": token, "password": new_password}
+    )
+    assert done.status_code == 200
+
+    # Old password is dead, new one logs in, and the pre-reset token died too.
+    assert client.post("/api/auth/login", json={"email": email, "password": old_password}).status_code == 401
+    assert client.post("/api/auth/login", json={"email": email, "password": new_password}).status_code == 200
+    assert client.get("/api/auth/me", headers=auth_header(old_access)).status_code == 401
+
+    # Tokens are single-use: redeeming it a second time is refused.
+    again = client.post(
+        "/api/auth/reset-password", json={"token": token, "password": "Another789!"}
+    )
+    assert again.status_code == 400
 
 
 def test_addresses():

@@ -1,18 +1,26 @@
 """Authentication, profile and address management endpoints."""
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, status
+import hashlib
+import secrets
+from datetime import timedelta
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 
-from ..models import Address, User
+from ..config import get_settings
+from ..email import reset_password_email, send_email
+from ..models import Address, User, utcnow
 from ..schemas import (
     AccessTokenResponse,
     AddressCreate,
     AddressOut,
     AddressUpdate,
+    ForgotPasswordRequest,
     LoginRequest,
     PasswordChangeRequest,
     RefreshRequest,
     RegisterRequest,
+    ResetPasswordRequest,
     TokenResponse,
     UserOut,
     UserUpdateRequest,
@@ -30,6 +38,11 @@ from ..security import (
 from ..uploads import MAX_AVATAR_BYTES, delete_photo, save_photo
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+settings = get_settings()
+
+# How long an emailed reset link stays usable.
+RESET_TOKEN_MINUTES = 30
 
 
 def _check_rate_limit(request: Request, name: str) -> None:
@@ -74,6 +87,67 @@ def login(payload: LoginRequest, db: DbSession, request: Request):
     if not user.is_active:
         raise HTTPException(status_code=403, detail="This account has been deactivated")
     return _token_response(user)
+
+
+@router.post("/forgot-password")
+def forgot_password(
+    payload: ForgotPasswordRequest, db: DbSession, request: Request, background: BackgroundTasks
+):
+    """Email the account a one-shot reset link.
+
+    The answer is the same whether or not the email belongs to an account,
+    so nobody can probe the customer list from here.
+    """
+    _check_rate_limit(request, "forgot")
+    message = {
+        "message": f"If that email is with us, a reset link is on its way — "
+        f"it works for {RESET_TOKEN_MINUTES} minutes."
+    }
+    user = db.scalar(
+        select(User).where(User.email == payload.email.lower(), User.is_active.is_(True))
+    )
+    if user is None:
+        return message
+
+    token = secrets.token_urlsafe(32)
+    # Only the digest is stored; the secret lives in the email alone.
+    user.reset_token_hash = hashlib.sha256(token.encode()).hexdigest()
+    user.reset_token_expires = utcnow() + timedelta(minutes=RESET_TOKEN_MINUTES)
+    db.commit()
+
+    link = f"{str(request.base_url).rstrip('/')}/reset-password?token={token}"
+    subject, html, text = reset_password_email(user.first_name, link, RESET_TOKEN_MINUTES)
+    background.add_task(send_email, user.email, subject, html, text)
+    # Dev convenience: with SMTP unset the link lands in the server log, so
+    # hand it straight back for local testing. Never in production.
+    if not settings.is_production:
+        message["reset_link"] = link
+    return message
+
+
+@router.post("/reset-password")
+def reset_password(payload: ResetPasswordRequest, db: DbSession, request: Request):
+    """Redeem a reset link: set the new password and retire the token."""
+    _check_rate_limit(request, "reset")
+    digest = hashlib.sha256(payload.token.encode()).hexdigest()
+    user = db.scalar(select(User).where(User.reset_token_hash == digest))
+    if (
+        user is None
+        or not user.is_active
+        or user.reset_token_expires is None
+        or user.reset_token_expires <= utcnow()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="This reset link is invalid or has expired — request a fresh one.",
+        )
+    user.password_hash = hash_password(payload.password)
+    user.reset_token_hash = None
+    user.reset_token_expires = None
+    # Kill every outstanding session, exactly like an in-app password change.
+    user.token_version += 1
+    db.commit()
+    return {"message": "Password updated — log in with the new one."}
 
 
 @router.post("/refresh", response_model=AccessTokenResponse)

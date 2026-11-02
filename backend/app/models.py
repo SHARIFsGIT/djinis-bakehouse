@@ -64,6 +64,10 @@ class User(Base):
     # Bumped on password change; tokens carry the version they were issued at,
     # so raising it instantly invalidates every outstanding access/refresh token.
     token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Password reset: only the SHA-256 digest of the emailed token is kept,
+    # so a stolen database can't reset anyone's password.
+    reset_token_hash: Mapped[str | None] = mapped_column(String(64))
+    reset_token_expires: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     addresses: Mapped[list["Address"]] = relationship(

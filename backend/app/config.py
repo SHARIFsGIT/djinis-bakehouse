@@ -62,6 +62,16 @@ class Settings(BaseSettings):
     # Auth rate limiting (per IP, sliding window)
     login_rate_limit: int = 10  # attempts per minute
     register_rate_limit: int = 5  # accounts per minute
+    forgot_rate_limit: int = 5  # reset asks + redemptions per minute
+
+    # Outgoing email (password resets today; newsletters and marketing later).
+    # Empty SMTP_HOST = the log-only fallback: messages are logged with their
+    # links instead of sent, so the flow never fails silently.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "Djini's Bakehouse <no-reply@djinisbakehouse.com>"
 
     @property
     def is_production(self) -> bool:

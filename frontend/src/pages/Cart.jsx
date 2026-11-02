@@ -42,9 +42,6 @@ function VoucherCard({ voucher, subtotal, applied, onApply, onRemove }) {
             <BadgePercent size={12} aria-hidden="true" />
             {voucher.code}
           </span>
-          <span className="text-sm font-semibold">
-            {voucher.percent_off}% off
-          </span>
         </div>
         {applied ? (
           <button

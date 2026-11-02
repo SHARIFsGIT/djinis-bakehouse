@@ -103,7 +103,7 @@ export default function Navbar() {
     })),
     {
       to: "/products?on_sale=true",
-      label: "On sale",
+      label: "On Sale",
       active: browsing && saleActive,
     },
   ];

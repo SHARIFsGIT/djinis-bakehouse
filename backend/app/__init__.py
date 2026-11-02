@@ -29,6 +29,8 @@ _ADDITIVE_COLUMNS = {
     "users": {
         "token_version": "ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0",
         "avatar_url": "ALTER TABLE users ADD COLUMN avatar_url VARCHAR(255)",
+        "reset_token_hash": "ALTER TABLE users ADD COLUMN reset_token_hash VARCHAR(64)",
+        "reset_token_expires": "ALTER TABLE users ADD COLUMN reset_token_expires TIMESTAMP",
     },
     "orders": {
         "cancel_fee": "ALTER TABLE orders ADD COLUMN cancel_fee NUMERIC(10,2) NOT NULL DEFAULT 0",
@@ -71,6 +73,9 @@ def create_limiters(settings) -> dict[str, SlidingWindowLimiter]:
     return {
         "login": SlidingWindowLimiter(settings.login_rate_limit),
         "register": SlidingWindowLimiter(settings.register_rate_limit),
+        # Password reset — asking and redeeming share the same budget.
+        "forgot": SlidingWindowLimiter(settings.forgot_rate_limit),
+        "reset": SlidingWindowLimiter(settings.forgot_rate_limit),
         # Public write endpoints — tighter than auth because one blast of
         # signups or catering leads is plenty for anyone.
         "newsletter": SlidingWindowLimiter(5),
@@ -129,7 +134,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=f"{settings.bakery_name} API",
-        version="3.3.3",
+        version="3.4.0",
         description="Bakery e-commerce API — customers, catalog, orders, coupons, bulk enquiries, saved bakes, newsletter and admin.",
         lifespan=lifespan,
         docs_url="/api/docs" if settings.enable_docs else None,
