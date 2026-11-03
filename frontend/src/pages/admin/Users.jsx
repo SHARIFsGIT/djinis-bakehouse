@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router";
-import { Copy, Crown, Download, Heart, Hourglass, ScrollText, Search } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router";
+import { Copy, Crown, Download, Heart, Hourglass, ScrollText } from "lucide-react";
 import client, { apiError } from "../../api/client";
-import { formatDate, money, stampTime } from "../../lib/format";
+import { money } from "../../lib/format";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { Loading } from "../../components/Loading";
@@ -42,6 +42,8 @@ const SORTS = [
   { value: "joined", label: "Newest members" },
 ];
 
+const PER_PAGE = 10;
+
 function TierBadge({ loyalty }) {
   const tier = TIERS[loyalty] ?? TIERS.regular;
   const Icon = tier.Icon;
@@ -56,16 +58,47 @@ function TierBadge({ loyalty }) {
 export default function AdminUsers() {
   const toast = useToast();
   const { user: me } = useAuth();
-  const [users, setUsers] = useState(null);
-  const [query, setQuery] = useState("");
-  const [tier, setTier] = useState("all");
-  const [sort, setSort] = useState("spend");
+  const [params, setParams] = useSearchParams();
+  const [data, setData] = useState(null);
 
-  const load = () => client.get("/admin/users").then(({ data }) => setUsers(data));
+  const tier = TIER_FILTERS.some((f) => f.value === params.get("tier"))
+    ? params.get("tier")
+    : "all";
+  const sort = SORTS.some((s) => s.value === params.get("sort"))
+    ? params.get("sort")
+    : "spend";
+  const page = Math.max(1, Number(params.get("page")) || 1);
+
+  // The shelf is served ready-cut by the desk: filtered by tier, ordered,
+  // one page at a time — the tier counts ride along so the chips count the
+  // whole roll from any page.
+  const load = () =>
+    client
+      .get("/admin/users", {
+        params: {
+          tier: tier === "all" ? undefined : tier,
+          sort,
+          page,
+          per_page: PER_PAGE,
+        },
+      })
+      .then(({ data }) => setData(data))
+      .catch((err) => toast.error(apiError(err)));
 
   useEffect(() => {
+    setData(null);
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tier, sort, page]);
+
+  // A new shelf means starting from its first page.
+  const setParam = (key, value) => {
+    const next = new URLSearchParams(params);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    if (key !== "page") next.delete("page");
+    setParams(next);
+  };
 
   const update = async (id, payload) => {
     try {
@@ -100,35 +133,11 @@ export default function AdminUsers() {
     }
   };
 
-  // The desk's own eye: find a regular by name or email, keep one tier on
-  // the shelf, and put the most valuable regulars on top.
-  const needle = query.trim().toLowerCase();
-  const visible = useMemo(() => {
-    if (!users) return [];
-    const filtered = users.filter((u) => {
-      if (tier !== "all" && u.loyalty !== tier) return false;
-      if (!needle) return true;
-      return `${u.first_name} ${u.last_name} ${u.email}`
-        .toLowerCase()
-        .includes(needle);
-    });
-    const comparers = {
-      spend: (a, b) => b.lifetime_spend - a.lifetime_spend,
-      orders: (a, b) => b.order_count - a.order_count,
-      last: (a, b) =>
-        new Date(b.last_order_at ?? 0) - new Date(a.last_order_at ?? 0),
-      joined: (a, b) => new Date(b.created_at) - new Date(a.created_at),
-    };
-    return [...filtered].sort(comparers[sort] ?? comparers.spend);
-  }, [users, tier, needle, sort]);
+  if (data === null) return <Loading label="Rolling out the regulars…" />;
 
-  if (users === null) return <Loading label="Rolling out the regulars…" />;
-
-  const tierCounts = users.reduce(
-    (acc, u) => ({ ...acc, [u.loyalty]: (acc[u.loyalty] ?? 0) + 1 }),
-    {},
-  );
+  const tierCounts = data.tier_counts;
   const worthAVoucher = (tierCounts.vip ?? 0) + (tierCounts.loyal ?? 0);
+  const users = data.items;
 
   return (
     <div className="space-y-4">
@@ -138,7 +147,7 @@ export default function AdminUsers() {
             <button
               key={f.value}
               type="button"
-              onClick={() => setTier(f.value)}
+              onClick={() => setParam("tier", f.value === "all" ? "" : f.value)}
               className={`btn btn-sm gap-2 ${tier === f.value ? "btn-secondary text-secondary-content" : "btn-ghost border border-base-300"}`}
             >
               {f.label}
@@ -153,21 +162,10 @@ export default function AdminUsers() {
           ))}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <label className="input input-bordered input-sm flex w-full max-w-56 items-center gap-2 bg-base-100 sm:w-56">
-            <Search size={15} className="opacity-50" />
-            <input
-              type="search"
-              className="grow"
-              placeholder="Search the roll…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              aria-label="Search customers"
-            />
-          </label>
           <select
             className="select select-bordered select-sm"
             value={sort}
-            onChange={(e) => setSort(e.target.value)}
+            onChange={(e) => setParam("sort", e.target.value)}
             aria-label="Sort customers"
           >
             {SORTS.map((s) => (
@@ -198,13 +196,12 @@ export default function AdminUsers() {
               <th className="text-right">Lifetime</th>
               <th>Loyalty</th>
               <th>Role</th>
-              <th>Joined</th>
               <th>Active</th>
               <th />
             </tr>
           </thead>
           <tbody>
-            {visible.map((u) => (
+            {users.map((u) => (
               <tr key={u.id} className="hover:bg-base-200/50">
                 <td>
                   <div className="flex items-center gap-3">
@@ -228,14 +225,7 @@ export default function AdminUsers() {
                     </div>
                   </div>
                 </td>
-                <td className="text-right">
-                  <p className="font-bold">{u.order_count}</p>
-                  {u.last_order_at ? (
-                    <p className="text-xs opacity-55">{stampTime(u.last_order_at)}</p>
-                  ) : (
-                    <p className="text-xs opacity-55">not yet</p>
-                  )}
-                </td>
+                <td className="text-right font-bold">{u.order_count}</td>
                 <td className="text-right font-bold">
                   {u.order_count > 0 ? money(u.lifetime_spend) : "—"}
                 </td>
@@ -251,7 +241,6 @@ export default function AdminUsers() {
                     <option value="admin">admin</option>
                   </select>
                 </td>
-                <td className="text-xs whitespace-nowrap opacity-60">{formatDate(u.created_at)}</td>
                 <td>
                   <input
                     type="checkbox"
@@ -287,16 +276,40 @@ export default function AdminUsers() {
                 </td>
               </tr>
             ))}
-            {visible.length === 0 && (
+            {users.length === 0 && (
               <tr>
-                <td colSpan={8} className="py-10 text-center text-sm opacity-60">
-                  Nobody matches — try another tier or clear the search.
+                <td colSpan={7} className="py-10 text-center text-sm opacity-60">
+                  Nobody matches — try another tier.
                 </td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
+
+      {data.pagination.total_pages > 1 && (
+        <div className="flex justify-center">
+          <div className="join">
+            <button
+              className="btn join-item btn-sm"
+              disabled={page <= 1}
+              onClick={() => setParam("page", String(page - 1))}
+            >
+              «
+            </button>
+            <button className="btn join-item btn-sm pointer-events-none">
+              Page {data.pagination.page} / {data.pagination.total_pages}
+            </button>
+            <button
+              className="btn join-item btn-sm"
+              disabled={page >= data.pagination.total_pages}
+              onClick={() => setParam("page", String(page + 1))}
+            >
+              »
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -523,7 +523,18 @@ def test_users_loyalty_and_export():
         == 200
     )
 
-    roll = {u["email"]: u for u in client.get("/api/admin/users", headers=headers).json()}
+    # the roll comes as shelves: default shelf is ten rows, tier chips count
+    # the whole roll from any page
+    first = client.get("/api/admin/users", headers=headers).json()
+    assert len(first["items"]) <= 10
+    assert first["pagination"]["per_page"] == 10
+    assert first["pagination"]["page"] == 1
+
+    whole = client.get("/api/admin/users", params={"per_page": 50}, headers=headers).json()
+    assert whole["pagination"]["total_items"] == len(whole["items"])
+    assert sum(whole["tier_counts"].values()) == len(whole["items"])
+
+    roll = {u["email"]: u for u in whole["items"]}
     assert roll["loyal@example.com"]["order_count"] == 3
     assert roll["loyal@example.com"]["loyalty"] == "loyal"
     assert roll["loyal@example.com"]["last_order_at"] is not None
@@ -537,6 +548,20 @@ def test_users_loyalty_and_export():
     assert roll["ghost@example.com"]["order_count"] == 1
     assert roll["ghost@example.com"]["loyalty"] == "regular"
     assert roll["admin@djinisbakehouse.com"]["loyalty"] == "regular"
+
+    # a tier shelf holds only that tier, counted from the whole roll
+    vip_shelf = client.get(
+        "/api/admin/users", params={"tier": "vip", "per_page": 50}, headers=headers
+    ).json()
+    assert vip_shelf["pagination"]["total_items"] == whole["tier_counts"]["vip"]
+    assert {u["loyalty"] for u in vip_shelf["items"]} == {"vip"}
+
+    # and the desk's sort is served, not improvised client-side
+    by_orders = client.get(
+        "/api/admin/users", params={"sort": "orders", "per_page": 50}, headers=headers
+    ).json()["items"]
+    counts = [u["order_count"] for u in by_orders]
+    assert counts == sorted(counts, reverse=True)
 
     # the export is the voucher mailing list
     export = client.get("/api/admin/users/export", headers=headers)
@@ -1059,7 +1084,9 @@ def test_admin_csv_export():
 
 def test_admin_users():
     headers = admin_headers()
-    users = client.get("/api/admin/users", headers=headers).json()
+    users = client.get(
+        "/api/admin/users", params={"per_page": 50}, headers=headers
+    ).json()["items"]
     assert any(u["email"] == CUSTOMER["email"] for u in users)
 
     customer_id = next(u["id"] for u in users if u["email"] == CUSTOMER["email"])

@@ -434,6 +434,16 @@ class AdminCustomerOut(UserOut):
     loyalty: str = "regular"
 
 
+class AdminUserPage(BaseModel):
+    """One shelf of the roll: the page itself, the whole roll's tier counts
+    (so the filter chips stay honest from any page), and where this page
+    sits in it."""
+
+    items: list[AdminCustomerOut]
+    tier_counts: dict[str, int]
+    pagination: PaginationOut
+
+
 # --------------------------------------------------------------------------
 # Review moderation + the baker's bell
 # --------------------------------------------------------------------------

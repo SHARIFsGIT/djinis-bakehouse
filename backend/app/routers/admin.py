@@ -4,6 +4,7 @@ import csv
 import io
 import re
 import uuid
+from collections import Counter
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
@@ -41,6 +42,7 @@ from ..schemas import (
     AdminReviewList,
     AdminReviewOut,
     AdminStatsOut,
+    AdminUserPage,
     BulkEnquiryOut,
     BulkEnquiryUpdate,
     CategoryCreateRequest,
@@ -936,12 +938,11 @@ def _customer_out(user: User, stats_row=None) -> AdminCustomerOut:
     )
 
 
-@router.get("/users", response_model=list[AdminCustomerOut])
-def all_users(admin: CurrentAdmin, db: DbSession):
-    """The regulars' roll, newest members first, with each one's kept
-    orders, lifetime spend, last visit and loyalty tier."""
+def _customer_roll(db: DbSession) -> list[AdminCustomerOut]:
+    """Every customer with their measured loyalty — the full roll, newest
+    members first. One aggregate pass for everyone, never a query per row;
+    the page below (and the CSV export) slice it however they need."""
     users = list(db.scalars(select(User).order_by(User.created_at.desc())))
-    # One aggregate pass for everyone — never a query per row.
     stats = {
         row.user_id: row
         for row in db.execute(
@@ -958,6 +959,48 @@ def all_users(admin: CurrentAdmin, db: DbSession):
     return [_customer_out(u, stats.get(u.id)) for u in users]
 
 
+# How the roll can be ordered — heaviest/newest first. The "last" key pairs
+# a has-visited flag with the date, so never-ordered customers sink to the
+# bottom without ever comparing None to a date.
+_USER_SORTS = {
+    "spend": lambda c: c.lifetime_spend,
+    "orders": lambda c: c.order_count,
+    "last": lambda c: (c.last_order_at is not None, c.last_order_at),
+    "joined": lambda c: c.created_at,
+}
+
+
+@router.get("/users", response_model=AdminUserPage)
+def all_users(
+    admin: CurrentAdmin,
+    db: DbSession,
+    tier: str | None = Query(None, pattern="^(vip|loyal|lapsed|regular)$"),
+    sort: str = Query("spend", pattern="^(spend|orders|last|joined)$"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(10, ge=5, le=50),
+):
+    """The regulars' roll, one shelf at a time: tier-filtered, ordered and
+    paginated — with the whole roll's tier counts alongside, so the chips
+    count loyal hands from any page."""
+    roll = _customer_roll(db)
+    tier_counts = Counter(c.loyalty for c in roll)
+    if tier:
+        roll = [c for c in roll if c.loyalty == tier]
+    roll.sort(key=_USER_SORTS.get(sort, _USER_SORTS["spend"]), reverse=True)
+    total = len(roll)
+    start = (page - 1) * per_page
+    return AdminUserPage(
+        items=roll[start : start + per_page],
+        tier_counts=dict(tier_counts),
+        pagination=PaginationOut(
+            page=page,
+            per_page=per_page,
+            total_items=total,
+            total_pages=max(1, -(-total // per_page)),
+        ),
+    )
+
+
 @router.get("/users/export")
 def export_users(admin: CurrentAdmin, db: DbSession):
     """CSV of the roll with loyalty stats — the mailing list for a
@@ -968,7 +1011,7 @@ def export_users(admin: CurrentAdmin, db: DbSession):
         ["name", "email", "phone", "joined", "kept_orders", "lifetime_spend",
          "last_order", "loyalty", "role", "active"]
     )
-    for customer in all_users(admin, db):
+    for customer in _customer_roll(db):
         writer.writerow(
             [
                 f"{customer.first_name} {customer.last_name}",

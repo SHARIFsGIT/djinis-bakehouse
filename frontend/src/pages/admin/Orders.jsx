@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { CalendarHeart, Trash2, Users } from "lucide-react";
 import client, { apiError } from "../../api/client";
@@ -540,7 +540,7 @@ function OrdersTab() {
 /* Tab 2 — event & catering enquiries                                  */
 /* ------------------------------------------------------------------ */
 
-function BulkTab({ refreshCounts }) {
+function BulkTab() {
   const [params, setParams] = useSearchParams();
   const [items, setItems] = useState(null);
   const [selected, setSelected] = useState(null);
@@ -552,8 +552,6 @@ function BulkTab({ refreshCounts }) {
     const query = {};
     if (filter) query.status = filter;
     client.get("/admin/bulk-orders", { params: query }).then(({ data }) => setItems(data));
-    // Status changes and deletes move leads off "new" — retally the badge
-    refreshCounts();
   };
 
   useEffect(() => {
@@ -704,25 +702,8 @@ function BulkTab({ refreshCounts }) {
 
 export default function AdminOrders() {
   const [params, setParams] = useSearchParams();
-  const [newCount, setNewCount] = useState(0);
 
   const tab = params.get("tab") === "bulk" ? "bulk" : "orders";
-
-  // The badge says "new leads are waiting" the moment this page opens — not
-  // only after someone happens to click the enquiry tab. One light call,
-  // kept warm at the bell's cadence.
-  const countNew = useCallback(() => {
-    client
-      .get("/admin/bulk-orders", { params: { status: "new" } })
-      .then(({ data }) => setNewCount(data.length))
-      .catch(() => {}); // a missed tally is never worth a toast
-  }, []);
-
-  useEffect(() => {
-    countNew();
-    const timer = setInterval(countNew, 30_000);
-    return () => clearInterval(timer);
-  }, [countNew]);
 
   const switchTab = (value) => {
     // A fresh sheet per tab — no stale filters carried across
@@ -749,18 +730,13 @@ export default function AdminOrders() {
           onClick={() => switchTab("bulk")}
         >
           Bulk enquiries
-          {newCount > 0 && (
-            <span className="badge badge-warning badge-xs ml-2 font-bold text-warning-content">
-              {newCount}
-            </span>
-          )}
         </button>
       </div>
 
       {tab === "orders" ? (
         <OrdersTab />
       ) : (
-        <BulkTab refreshCounts={countNew} />
+        <BulkTab />
       )}
     </div>
   );
