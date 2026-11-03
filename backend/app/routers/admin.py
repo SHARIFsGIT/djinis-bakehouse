@@ -992,7 +992,7 @@ def _customer_out(user: User, stats_row=None) -> AdminCustomerOut:
 def _customer_roll(db: DbSession) -> list[AdminCustomerOut]:
     """Every customer with their measured loyalty — the full roll, newest
     members first. One aggregate pass for everyone, never a query per row;
-    the page below (and the CSV export) slice it however they need."""
+    the page below slices it however it needs."""
     users = list(db.scalars(select(User).order_by(User.created_at.desc())))
     stats = {
         row.user_id: row
@@ -1061,39 +1061,6 @@ def all_users(
             total_items=total,
             total_pages=max(1, -(-total // per_page)),
         ),
-    )
-
-
-@router.get("/users/export")
-def export_users(admin: CurrentAdmin, db: DbSession):
-    """CSV of the roll with loyalty stats — the mailing list for a
-    special-voucher thank-you."""
-    buffer = io.StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(
-        ["name", "email", "phone", "joined", "kept_orders", "lifetime_spend",
-         "last_order", "loyalty", "role", "active"]
-    )
-    for customer in _customer_roll(db):
-        writer.writerow(
-            [
-                f"{customer.first_name} {customer.last_name}",
-                customer.email,
-                customer.phone or "",
-                customer.created_at.strftime("%Y-%m-%d"),
-                customer.order_count,
-                f"{customer.lifetime_spend:.2f}",
-                customer.last_order_at.strftime("%Y-%m-%d") if customer.last_order_at else "",
-                customer.loyalty,
-                customer.role.value if hasattr(customer.role, "value") else customer.role,
-                "yes" if customer.is_active else "no",
-            ]
-        )
-    buffer.seek(0)
-    return StreamingResponse(
-        iter([buffer.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=bakehouse-customers.csv"},
     )
 
 

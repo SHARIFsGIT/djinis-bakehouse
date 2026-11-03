@@ -498,7 +498,7 @@ def test_bakers_bell_notifications():
     assert client.get("/api/admin/notifications", headers=auth_header(customer)).status_code == 403
 
 
-def test_users_loyalty_and_export():
+def test_users_loyalty_roll():
     """The roll measures what special vouchers reward — kept orders, spend,
     last visit — and cancelled orders never count towards any of it."""
     headers = admin_headers()
@@ -591,14 +591,6 @@ def test_users_loyalty_and_export():
         "/api/admin/users", params={"tier": "vip", "search": "example"}, headers=headers
     ).json()
     assert {u["loyalty"] for u in still_vip["items"]} <= {"vip"}
-
-    # the export is the voucher mailing list
-    export = client.get("/api/admin/users/export", headers=headers)
-    assert export.status_code == 200
-    assert export.headers["content-type"].startswith("text/csv")
-    assert "loyal@example.com" in export.text
-    vip_csv = next(row for row in export.text.splitlines() if "vip@example.com" in row)
-    assert vip_csv.split(",")[7] == "vip"
 
     # the roll is the baker's alone
     assert client.get("/api/admin/users", headers=loyal).status_code == 403

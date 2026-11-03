@@ -377,17 +377,10 @@ class CouponOut(ORMModel):
     created_at: datetime
 
 
-class CouponAppliedOut(BaseModel):
-    """Public coupon preview returned by the checkout validation endpoint."""
-
-    code: str
-    percent_off: int
-    description: str | None
-    min_subtotal: float | None = None
-
-
-class VoucherOut(BaseModel):
-    """A live voucher, shown on the basket page to tempt a bigger box."""
+class CouponPreviewOut(BaseModel):
+    """A coupon as a shopper sees it — no ids, no admin bookkeeping, just
+    the deal. The checkout's code check and the basket's voucher list both
+    speak this one shape."""
 
     code: str
     percent_off: int

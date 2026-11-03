@@ -22,11 +22,11 @@ from ..models import (
 from ..schemas import (
     BulkEnquiryCreate,
     BulkEnquiryOut,
+    CouponPreviewOut,
     NewsletterRequest,
     NewsletterResponse,
     StorefrontOut,
     SubscriberOut,
-    VoucherOut,
 )
 from ..config import get_settings
 from ..notifications import notify_admin
@@ -127,7 +127,7 @@ def create_bulk_enquiry(payload: BulkEnquiryCreate, db: DbSession, request: Requ
     return enquiry
 
 
-@router.get("/coupons", response_model=list[VoucherOut])
+@router.get("/coupons", response_model=list[CouponPreviewOut])
 def public_vouchers(db: DbSession):
     """The live voucher board for the basket page.
 

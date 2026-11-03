@@ -159,19 +159,24 @@ ovens start keeps a late-cancellation fee the admin tunes under Settings
 reorder a past box with one click.
 
 **Baker's desk (admin)** — the whole desk sits in one sidebar (Dashboard,
-Orders, Products, Promotions, Users, Settings) alongside the baker's own
-profile and address book, so nothing needs a second click to reach; hovering a
-corner button deepens the active tab's wine tint. Dashboard with
+Orders, Products, Reviews, Promotions, Users, Settings) alongside the baker's
+own profile and address book, so nothing needs a second click to reach; on a
+phone the sidebar flattens into a thumb-swipe rail of the same tabs, and the
+Store link leads back to the counter. Dashboard with
 revenue/orders/customers stats, best sellers, low stock and recent orders;
 order management with a status timeline
 (pending → confirmed → baking → ready → out for delivery → delivered), payment
-controls and a CSV export for bookkeeping, plus a Bulk enquiries tab (with a
-badge counting fresh leads) for the catering pipeline; full product CRUD with
+controls and a CSV export for bookkeeping, plus a Bulk enquiries tab for the
+catering pipeline (fresh leads ring the navbar bell, which deep-links
+straight to them); the reviews desk hides and restores customer reviews, with
+the wall's average always honest; full product CRUD with
 photo uploads from your own PC or phone, and shelves aren't a fixed list — the
 product form offers "+ New shelf…" so a category can be named on the spot (it
 lands in the navbar, the shop sidebar and the home tiles straight away);
 coupon management (create, pause, retune the percent and the minimum basket);
-user management (roles, activate/deactivate); newsletter subscribers with CSV
+user management as the regulars' roll — measured loyalty tiers, tier chips,
+search, sorting and shelves of ten, with a gift button per VIP/loyal regular
+that copies the coupon code their tier earns; newsletter subscribers with CSV
 export; and Settings, ordered the way the day runs — the home page photo on
 top (swappable from the desk, resettable to the shipped one), the storefront
 copy (announcement bar and the home page's "today" note; clearing a line hides

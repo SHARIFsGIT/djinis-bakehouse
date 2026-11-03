@@ -28,7 +28,7 @@ from ..models import (
 )
 from ..schemas import (
     CheckoutRequest,
-    CouponAppliedOut,
+    CouponPreviewOut,
     OrderDetailOut,
     OrderListResponse,
     OrderOut,
@@ -264,11 +264,11 @@ def checkout(payload: CheckoutRequest, user: CurrentUser, db: DbSession, backgro
     return _serialize(order, detailed=True)
 
 
-@router.get("/coupons/{code}", response_model=CouponAppliedOut)
+@router.get("/coupons/{code}", response_model=CouponPreviewOut)
 def check_coupon(code: str, user: CurrentUser, db: DbSession):
     """Preview a coupon while the customer is at the checkout screen."""
     coupon = _load_coupon(db, code)
-    return CouponAppliedOut(
+    return CouponPreviewOut(
         code=coupon.code,
         percent_off=coupon.percent_off,
         description=coupon.description,
