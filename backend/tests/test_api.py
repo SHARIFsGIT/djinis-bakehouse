@@ -3,6 +3,10 @@
 import os
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_bakehouse.db"
+# The developer's backend/.env must not leak in here — the shared fixture
+# database expects the dev-style demo dataset, whatever the local .env says
+# (SEED_DEMO_DATA=false there since the fresh-start wipe).
+os.environ["SEED_DEMO_DATA"] = "true"
 # The whole suite shares one TestClient IP — relax the auth rate limits so
 # repeated logins between tests are not throttled.
 os.environ["LOGIN_RATE_LIMIT"] = "1000"
@@ -17,6 +21,7 @@ from app.models import (  # noqa: E402
     DEFAULT_HERO_IMAGE,
     DEFAULT_TODAY_NOTE,
 )
+from app.routers import orders as orders_module  # noqa: E402
 
 
 def remove_test_db():
@@ -763,6 +768,64 @@ def test_checkout_creates_order_and_decrements_stock():
 def test_order_requires_authentication():
     response = client.post("/api/orders", json=checkout_payload())
     assert response.status_code == 401
+
+
+def test_card_checkout_refused_when_cards_disabled(monkeypatch):
+    """Launching on cash only: with the simulated card branch off, a card
+    checkout is refused outright (before any address side effects) while
+    cash on delivery still lands."""
+    headers = auth_header(register_and_login(CUSTOMER["email"], CUSTOMER["password"]))
+    # A property on the Settings class — patch the class, not the instance
+    monkeypatch.setattr(type(orders_module.settings), "card_payments_enabled", False)
+
+    refused = client.post("/api/orders", json=checkout_payload(), headers=headers)
+    assert refused.status_code == 400
+    assert "cash on delivery" in refused.json()["detail"]
+
+    placed = client.post(
+        "/api/orders",
+        json=checkout_payload(payment_method="cash_on_delivery"),
+        headers=headers,
+    )
+    assert placed.status_code == 201
+    assert placed.json()["payment_status"] == "pending"
+
+
+def test_shop_contact_details_reach_the_footer():
+    """The baker's real address, phone and hours set in Settings surface on
+    the public storefront — and clearing them clears the footer lines."""
+    headers = admin_headers()
+    saved = client.put(
+        "/api/admin/settings",
+        json={
+            "contact_address": "12 Crumb Lane, Portland",
+            "contact_phone": "+1 (503) 555-0100",
+            "contact_email": "counter@djinisbakehouse.com",
+            "opening_hours": "Tue – Fri: 7:00 – 18:00\nSat: 7:00 – 15:00",
+        },
+        headers=headers,
+    )
+    assert saved.status_code == 200
+
+    store = client.get("/api/store").json()
+    assert store["contact_address"] == "12 Crumb Lane, Portland"
+    assert store["contact_phone"] == "+1 (503) 555-0100"
+    assert store["contact_email"] == "counter@djinisbakehouse.com"
+    assert store["opening_hours"].startswith("Tue – Fri")
+
+    cleared = client.put(
+        "/api/admin/settings",
+        json={
+            "contact_address": "",
+            "contact_phone": "",
+            "contact_email": "",
+            "opening_hours": "",
+        },
+        headers=headers,
+    )
+    assert cleared.status_code == 200
+    store = client.get("/api/store").json()
+    assert store["contact_address"] is None and store["opening_hours"] is None
 
 
 def test_stock_validation():

@@ -552,6 +552,10 @@ export default function Settings() {
         announcement: data.announcement ?? "",
         today_note: data.today_note ?? "",
         marquee: data.marquee_items ?? "",
+        contact_address: data.contact_address ?? "",
+        contact_phone: data.contact_phone ?? "",
+        contact_email: data.contact_email ?? "",
+        hours: data.opening_hours ?? "",
       });
     });
   }, []);
@@ -566,6 +570,11 @@ export default function Settings() {
     form.announcement !== (saved.announcement ?? "") ||
     form.today_note !== (saved.today_note ?? "") ||
     form.marquee !== (saved.marquee_items ?? "");
+  const contactDirty =
+    form.contact_address !== (saved.contact_address ?? "") ||
+    form.contact_phone !== (saved.contact_phone ?? "") ||
+    form.contact_email !== (saved.contact_email ?? "") ||
+    form.hours !== (saved.opening_hours ?? "");
   const example = (40 * parsed) / 100; // a $40 box, for scale
 
   const save = async (part) => {
@@ -574,6 +583,13 @@ export default function Settings() {
       const body =
         part === "fee"
           ? { late_cancel_fee_percent: parsed }
+          : part === "contact"
+          ? {
+              contact_address: form.contact_address,
+              contact_phone: form.contact_phone,
+              contact_email: form.contact_email,
+              opening_hours: form.hours,
+            }
           : {
               announcement: form.announcement,
               today_note: form.today_note,
@@ -588,6 +604,8 @@ export default function Settings() {
             ? `Late cancels now keep ${data.late_cancel_fee_percent}% of the order`
             : "Late cancellations are free again",
         );
+      } else if (part === "contact") {
+        toast.success("Contact details saved");
       } else {
         toast.success("Storefront copy saved");
       }
@@ -755,6 +773,87 @@ export default function Settings() {
           {copyDirty && (
             <span className="text-xs opacity-60">Unsaved change</span>
           )}
+        </div>
+      </section>
+
+      <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
+        <h2 className="font-display text-xl font-semibold">Contact &amp; hours</h2>
+        <p className="mt-1 text-sm opacity-70">
+          The real lines for the footer — customers see exactly what you type
+          here, and anything left empty simply doesn&rsquo;t show.
+        </p>
+
+        <div className="mt-5 grid gap-5 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <label className="label mb-1.5 text-xs font-semibold" htmlFor="contact-address">
+              Street address
+            </label>
+            <input
+              id="contact-address"
+              className="input input-bordered w-full"
+              maxLength={255}
+              placeholder="12 Crumb Lane, Portland"
+              value={form.contact_address}
+              onChange={(e) => setForm({ ...form, contact_address: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="label mb-1.5 text-xs font-semibold" htmlFor="contact-phone">
+              Phone
+            </label>
+            <input
+              id="contact-phone"
+              className="input input-bordered w-full"
+              maxLength={50}
+              placeholder="+1 (503) 555-0100"
+              value={form.contact_phone}
+              onChange={(e) => setForm({ ...form, contact_phone: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="label mb-1.5 text-xs font-semibold" htmlFor="contact-email">
+              Contact email
+            </label>
+            <input
+              id="contact-email"
+              type="email"
+              className="input input-bordered w-full"
+              maxLength={255}
+              placeholder="hello@yourbakery.com"
+              value={form.contact_email}
+              onChange={(e) => setForm({ ...form, contact_email: e.target.value })}
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label mb-1.5 text-xs font-semibold" htmlFor="opening-hours">
+              Bake hours — one line per row
+            </label>
+            <textarea
+              id="opening-hours"
+              rows={4}
+              maxLength={500}
+              className="textarea textarea-bordered w-full resize-none"
+              placeholder={"Tue – Fri: 7:00 – 18:00\nSaturday: 7:00 – 15:00\nSun – Mon: closed"}
+              value={form.hours}
+              onChange={(e) => setForm({ ...form, hours: e.target.value })}
+            />
+            <p className="mt-1.5 text-xs opacity-60">
+              Each line shows in the footer as you write it. Clear the box to
+              hide the hours column.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 flex items-center gap-3">
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => save("contact")}
+            disabled={!contactDirty || saving !== ""}
+          >
+            {saving === "contact" ? "Saving…" : "Save contact"}
+          </button>
+          {contactDirty && <span className="text-xs opacity-60">Unsaved change</span>}
         </div>
       </section>
 

@@ -1,4 +1,4 @@
-import { Banknote, CreditCard, Lock } from "lucide-react";
+import { Banknote, Lock } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import client, { apiError } from "../api/client";
@@ -48,7 +48,6 @@ export default function Checkout() {
   const [mode, setMode] = useState("saved"); // "saved" | "new"
   const [addressId, setAddressId] = useState(null);
   const [newAddress, setNewAddress] = useState(EMPTY_ADDRESS);
-  const [payment, setPayment] = useState("card");
   const [deliveryDate, setDeliveryDate] = useState("");
   const [note, setNote] = useState("");
   const [placing, setPlacing] = useState(false);
@@ -147,7 +146,7 @@ export default function Checkout() {
     try {
       const payload = {
         items: items.map((i) => ({ product_id: i.product_id, quantity: i.quantity })),
-        payment_method: payment,
+        payment_method: "cash_on_delivery",
       };
       if (mode === "saved" && addressId) payload.address_id = addressId;
       else payload.new_address = newAddress;
@@ -281,35 +280,14 @@ export default function Checkout() {
               </div>
               <div>
                 <label className="label text-xs">Payment</label>
-                <div className="space-y-2">
-                  <label className="flex cursor-pointer items-center gap-3 rounded-xl border-2 border-base-300 p-3 has-checked:border-secondary has-checked:bg-secondary/10">
-                    <input
-                      type="radio"
-                      name="payment"
-                      className="radio radio-secondary radio-sm"
-                      checked={payment === "card"}
-                      onChange={() => setPayment("card")}
-                    />
-                    <CreditCard size={20} className="text-secondary" />
-                    <div>
-                      <p className="text-sm font-semibold">Card</p>
-                      <p className="text-xs opacity-60">Simulated — marked paid instantly</p>
-                    </div>
-                  </label>
-                  <label className="flex cursor-pointer items-center gap-3 rounded-xl border-2 border-base-300 p-3 has-checked:border-secondary has-checked:bg-secondary/10">
-                    <input
-                      type="radio"
-                      name="payment"
-                      className="radio radio-secondary radio-sm"
-                      checked={payment === "cash_on_delivery"}
-                      onChange={() => setPayment("cash_on_delivery")}
-                    />
-                    <Banknote size={20} className="text-secondary" />
-                    <div>
-                      <p className="text-sm font-semibold">Cash on delivery</p>
-                      <p className="text-xs opacity-60">Pay the courier at your door</p>
-                    </div>
-                  </label>
+                {/* Cash on delivery is the shop's one real payment rail — the
+                    card option returns when a genuine gateway is behind it. */}
+                <div className="flex items-center gap-3 rounded-xl border-2 border-secondary bg-secondary/10 p-3">
+                  <Banknote size={20} className="text-secondary" />
+                  <div>
+                    <p className="text-sm font-semibold">Cash on delivery</p>
+                    <p className="text-xs opacity-60">Pay the courier at your door</p>
+                  </div>
                 </div>
               </div>
             </div>

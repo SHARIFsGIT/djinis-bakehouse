@@ -136,7 +136,7 @@ export default function OrderDetail() {
             <p className="font-bold">Order confirmed</p>
             <p className="text-sm">
               {order.payment_method === "card"
-                ? "Your card was charged (simulated) — receipt sent to your email."
+                ? "Paid by card — your receipt was emailed to you."
                 : "Pay the courier at the door — cash only, please."}
             </p>
             <Link

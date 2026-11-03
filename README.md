@@ -137,8 +137,10 @@ each code can carry a minimum basket) take a percent off the subtotal once that
 minimum is met; tax is recalculated on the discounted amount. The seeder
 restores these codes on startup if they're ever deleted from the console,
 because the storefront copy promises them.
-Card payments are simulated (instant "paid"); cash on delivery is settled by staff
-when the order is marked delivered. Free delivery over $50, tax and shipping
+Payment is cash on delivery, settled by staff when the order is marked delivered. (A
+simulated instant-"paid" card branch exists for dev and demos — production refuses
+it unless `CARD_PAYMENTS_ENABLED=true` is set; replace it with a real gateway such
+as Stripe before ever turning that on.) Free delivery over $50, tax and shipping
 calculated server-side.
 
 **Photo uploads** — admins add or replace a product's photo straight from the
@@ -153,9 +155,9 @@ profile page and in the admin user list, and can be removed with one click.
 frontend), profile & password management, an address book with default addresses.
 Orders keep a snapshot of the delivery address, so editing addresses later never
 changes past orders. Customers can cancel while an order is pending/confirmed/
-baking — stock is restored, card payments auto-refund, and cancelling after the
+baking — stock is restored, pre-paid orders auto-refund, and cancelling after the
 ovens start keeps a late-cancellation fee the admin tunes under Settings
-(card refunds pay back the total minus the fee; 0% turns it off). Customers can
+(refunds pay back the total minus the fee; 0% turns it off). Customers can
 reorder a past box with one click.
 
 **Baker's desk (admin)** — the whole desk sits in one sidebar (Dashboard,
@@ -320,10 +322,12 @@ hand-off). Keep it that way on GitHub/GitLab — the PaaS deploys track the
 `main` branch, and `backend/.env`, databases, `node_modules`, `dist/` and
 uploaded photos stay out of history via `.gitignore`.
 
-**Still simulated / to wire up for the real market**
+**Still to wire up for the real market**
 
-- Real payments: replace the simulated card branch in
-  `backend/app/routers/orders.py` checkout with a Stripe intent call.
-- Transactional email: hook an email service into `OrderEvent` creation.
+- Real payments: checkout runs on cash on delivery; a Stripe intent call
+  replaces the (dev-only, env-gated) simulated card branch when cards return.
+- Transactional email: set `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASSWORD`
+  (plus `SMTP_FROM`) and receipts and password resets go out — the sending
+  code is ready in `backend/app/email.py`.
 - To refresh photography: drop new shots into `images/` and re-run
   `python scripts/prepare_images.py` (requires Pillow).

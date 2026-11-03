@@ -59,6 +59,10 @@ def storefront(db: DbSession):
         hero_image=settings.hero_image or DEFAULT_HERO_IMAGE,
         marquee=_marquee_lines(settings.marquee_items),
         demo_accounts=get_settings().demo_data_enabled,
+        contact_address=settings.contact_address,
+        contact_phone=settings.contact_phone,
+        contact_email=settings.contact_email,
+        opening_hours=settings.opening_hours,
     )
 
 

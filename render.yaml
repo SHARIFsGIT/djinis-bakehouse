@@ -34,6 +34,8 @@ services:
           property: connectionString
       - key: SEED_DEMO_DATA
         value: "false" # catalog only — no demo customers, orders or reviews
+      - key: CARD_PAYMENTS_ENABLED
+        value: "false" # cash on delivery only — the card branch is simulated until a real gateway is wired
       - key: ADMIN_EMAIL
         sync: false # you set this when the blueprint is applied
       - key: ADMIN_PASSWORD

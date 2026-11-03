@@ -40,6 +40,10 @@ _ADDITIVE_COLUMNS = {
         "today_note": "ALTER TABLE store_settings ADD COLUMN today_note VARCHAR(255)",
         "hero_image": "ALTER TABLE store_settings ADD COLUMN hero_image VARCHAR(255)",
         "marquee_items": "ALTER TABLE store_settings ADD COLUMN marquee_items TEXT",
+        "contact_address": "ALTER TABLE store_settings ADD COLUMN contact_address VARCHAR(255)",
+        "contact_phone": "ALTER TABLE store_settings ADD COLUMN contact_phone VARCHAR(50)",
+        "contact_email": "ALTER TABLE store_settings ADD COLUMN contact_email VARCHAR(255)",
+        "opening_hours": "ALTER TABLE store_settings ADD COLUMN opening_hours TEXT",
     },
     "coupons": {
         "min_subtotal": "ALTER TABLE coupons ADD COLUMN min_subtotal NUMERIC(10,2)",

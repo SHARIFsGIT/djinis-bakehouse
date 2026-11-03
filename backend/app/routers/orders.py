@@ -116,6 +116,15 @@ def _serialize(order: Order, detailed: bool = False, cancel_fee_preview: float =
 
 @router.post("", response_model=OrderDetailOut, status_code=status.HTTP_201_CREATED)
 def checkout(payload: CheckoutRequest, user: CurrentUser, db: DbSession, background: BackgroundTasks):
+    # Cash on delivery is the only real payment rail. The simulated card
+    # branch marks an order paid with no money moving, so it stays behind
+    # CARD_PAYMENTS_ENABLED (dev yes, production no) until a gateway lands.
+    if payload.payment_method == PaymentMethod.CARD and not settings.card_payments_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="Card payments aren't available yet — please choose cash on delivery",
+        )
+
     # Resolve delivery address (existing id or a new one created on the fly)
     if payload.address_id:
         address = db.scalar(

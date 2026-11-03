@@ -1,14 +1,34 @@
 import { Mail, MapPin, Phone, Send } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import client from "../api/client";
 import { useToast } from "../context/ToastContext";
 
+/* Contact details and bake hours come from the shop's Settings tab, so the
+ * real address and phone live in the database — nothing fictional ships.
+ * Until the baker fills them in, the lines simply don't render. */
+
 export default function Footer() {
   const toast = useToast();
+  const [store, setStore] = useState(null);
   const [email, setEmail] = useState("");
   const [sending, setSending] = useState(false);
   const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    client
+      .get("/store")
+      .then(({ data }) => setStore(data))
+      .catch(() => setStore({}));
+  }, []);
+
+  const hours = (store?.opening_hours ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const address = store?.contact_address?.trim();
+  const phone = store?.contact_phone?.trim();
+  const contactEmail = store?.contact_email?.trim();
 
   const subscribe = async (e) => {
     e.preventDefault();
@@ -57,30 +77,40 @@ export default function Footer() {
           </ul>
         </div>
 
-        <div>
-          <p className="mb-3 font-display font-semibold">Bake hours</p>
-          <ul className="space-y-2 text-sm opacity-80">
-            <li className="flex justify-between gap-4"><span>Tue – Fri</span><span>7:00 – 18:00</span></li>
-            <li className="flex justify-between gap-4"><span>Saturday</span><span>7:00 – 15:00</span></li>
-            <li className="flex justify-between gap-4"><span>Sun – Mon</span><span>Closed</span></li>
-          </ul>
-        </div>
+        {hours.length > 0 && (
+          <div>
+            <p className="mb-3 font-display font-semibold">Bake hours</p>
+            <ul className="space-y-2 text-sm opacity-80">
+              {hours.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div>
-          <p className="mb-3 font-display font-semibold">Say hello</p>
+          {(address || phone || contactEmail) && (
+            <p className="mb-3 font-display font-semibold">Say hello</p>
+          )}
           <ul className="space-y-2.5 text-sm opacity-80">
-            <li className="flex items-start gap-2.5">
-              <MapPin size={16} className="mt-0.5 shrink-0 opacity-60" />
-              <span>42 Flour Lane, Sweet Valley</span>
-            </li>
-            <li className="flex items-center gap-2.5">
-              <Phone size={16} className="shrink-0 opacity-60" />
-              <span>(555) 010-CAKE</span>
-            </li>
-            <li className="flex items-center gap-2.5">
-              <Mail size={16} className="shrink-0 opacity-60" />
-              <span>hello@djinisbakehouse.com</span>
-            </li>
+            {address && (
+              <li className="flex items-start gap-2.5">
+                <MapPin size={16} className="mt-0.5 shrink-0 opacity-60" />
+                <span>{address}</span>
+              </li>
+            )}
+            {phone && (
+              <li className="flex items-center gap-2.5">
+                <Phone size={16} className="shrink-0 opacity-60" />
+                <span>{phone}</span>
+              </li>
+            )}
+            {contactEmail && (
+              <li className="flex items-center gap-2.5">
+                <Mail size={16} className="shrink-0 opacity-60" />
+                <span>{contactEmail}</span>
+              </li>
+            )}
           </ul>
 
           <form onSubmit={subscribe} className="mt-5">
@@ -118,7 +148,13 @@ export default function Footer() {
       </div>
 
       <div className="border-t border-base-300/60 py-4 text-center text-xs opacity-60">
-        © {new Date().getFullYear()} Djini&rsquo;s Bakehouse · Demo project — card payments are simulated
+        © {new Date().getFullYear()} Djini&rsquo;s Bakehouse
+        <span className="mx-2" aria-hidden="true">·</span>
+        <Link to="/privacy" className="link link-hover">Privacy</Link>
+        <span className="mx-2" aria-hidden="true">·</span>
+        <Link to="/terms" className="link link-hover">Terms</Link>
+        <span className="mx-2" aria-hidden="true">·</span>
+        <Link to="/refunds" className="link link-hover">Refunds &amp; cancellations</Link>
       </div>
     </footer>
   );

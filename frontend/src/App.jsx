@@ -15,6 +15,7 @@ import Register from "./pages/Register";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import NotFound from "./pages/NotFound";
+import { PrivacyPolicy, RefundPolicy, TermsOfService } from "./pages/Legal";
 import AccountLayout from "./pages/account/AccountLayout";
 import Profile from "./pages/account/Profile";
 import Addresses from "./pages/account/Addresses";
@@ -67,6 +68,9 @@ export default function App() {
           <Route path="register" element={<Register />} />
           <Route path="forgot-password" element={<ForgotPassword />} />
           <Route path="reset-password" element={<ResetPassword />} />
+          <Route path="privacy" element={<PrivacyPolicy />} />
+          <Route path="terms" element={<TermsOfService />} />
+          <Route path="refunds" element={<RefundPolicy />} />
 
           <Route element={<ProtectedRoute />}>
             <Route path="checkout" element={<Checkout />} />

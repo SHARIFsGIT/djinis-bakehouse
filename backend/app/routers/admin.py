@@ -227,6 +227,11 @@ def update_shop_settings(payload: StoreSettingsUpdate, admin: CurrentAdmin, db: 
     if payload.marquee_items is not None:
         # Empty clears the strip on purpose — the band hides until refilled
         settings.marquee_items = payload.marquee_items.strip()
+    for field in ("contact_address", "contact_phone", "contact_email", "opening_hours"):
+        value = getattr(payload, field)
+        if value is not None:
+            # Empty clears the line — an unset detail never shows a placeholder
+            setattr(settings, field, value.strip() or None)
     db.commit()
     db.refresh(settings)
     settings.hero_image = settings.hero_image or DEFAULT_HERO_IMAGE

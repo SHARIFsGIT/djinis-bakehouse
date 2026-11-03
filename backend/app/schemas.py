@@ -301,6 +301,10 @@ class StoreSettingsOut(ORMModel):
     today_note: str
     hero_image: str
     marquee_items: str
+    contact_address: str | None = None
+    contact_phone: str | None = None
+    contact_email: str | None = None
+    opening_hours: str | None = None
     updated_at: datetime
 
 
@@ -310,17 +314,26 @@ class StoreSettingsUpdate(BaseModel):
     today_note: str | None = Field(default=None, max_length=255)
     hero_image: str | None = Field(default=None, max_length=255)
     marquee_items: str | None = Field(default=None, max_length=1000)
+    contact_address: str | None = Field(default=None, max_length=255)
+    contact_phone: str | None = Field(default=None, max_length=50)
+    contact_email: str | None = Field(default=None, max_length=255)
+    opening_hours: str | None = Field(default=None, max_length=500)
 
 
 class StorefrontOut(BaseModel):
     """Public shop copy — the announcement bar and the hero 'today' chip.
     demo_accounts tells the login page whether the one-tap demo logins exist
-    on this deployment (dev yes, a real production database no)."""
+    on this deployment (dev yes, a real production database no). The contact
+    lines feed the footer; None means the baker hasn't filled them in yet."""
     announcement: str
     today_note: str
     hero_image: str
     marquee: list[str] = []
     demo_accounts: bool = False
+    contact_address: str | None = None
+    contact_phone: str | None = None
+    contact_email: str | None = None
+    opening_hours: str | None = None
 
 
 # --------------------------------------------------------------------------

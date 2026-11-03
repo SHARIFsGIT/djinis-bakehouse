@@ -440,6 +440,13 @@ class StoreSetting(Base):
     marquee_items: Mapped[str | None] = mapped_column(Text)
     # The photo above the today note; NULL/empty falls back to the shipped one.
     hero_image: Mapped[str | None] = mapped_column(String(255))
+    # Real-world contact lines for the footer — set from the Settings tab.
+    # NULL/empty means "not filled in yet", so nothing false ships publicly.
+    contact_address: Mapped[str | None] = mapped_column(String(255))
+    contact_phone: Mapped[str | None] = mapped_column(String(50))
+    contact_email: Mapped[str | None] = mapped_column(String(255))
+    # One line per opening-hours row, free text ("Tue – Fri: 7:00 – 18:00").
+    opening_hours: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
