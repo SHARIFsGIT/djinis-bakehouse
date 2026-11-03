@@ -22,6 +22,24 @@ logger = logging.getLogger("bakery.payments")
 # expiry webhook and the order cancels itself with the stock returned.
 SESSION_LIFETIME_SECONDS = 30 * 60
 
+# Dressing for Stripe's hosted page, drawn from the storefront's own tokens:
+# the cream paper and burgundy brand colour, and "lora" — the closest of
+# Stripe's fixed Checkout fonts to the site's Fraunces display face. The
+# page layout itself stays Stripe's; these are the knobs their API allows.
+BRAND_BACKGROUND_COLOR = "#f6f1ee"
+BRAND_BUTTON_COLOR = "#7f2230"
+BRAND_FONT_FAMILY = "lora"
+
+# The two copy slots the hosted page offers: a line under the pay button
+# and one on the confirmation screen.
+PAY_BUTTON_NOTE = (
+    "Fresh from the oven — your bake is reserved the moment this payment lands."
+)
+AFTER_PAYMENT_NOTE = (
+    "Thank you! Your receipt is on its way to your inbox, and your order "
+    "page follows every step from oven to door."
+)
+
 
 class GatewayUnavailable(Exception):
     """Stripe could not be reached or refused the call — no money moved."""
@@ -41,46 +59,137 @@ def cents(amount: float) -> int:
     return int(round(amount * 100))
 
 
+def _tax_label(settings) -> str:
+    """The tax row's name, matching the storefront's checkout ("Tax (8.75%)")."""
+    percent = f"{settings.tax_rate * 100:.2f}".rstrip("0").rstrip(".")
+    return f"Tax ({percent}%)"
+
+
+def _item_photo(item, base_url: str) -> str | None:
+    """The product photo as an absolute URL for the hosted page's thumbnail.
+
+    Stripe fetches the image itself when the session is created, so it must
+    be publicly reachable. A photo problem must never be able to break
+    payment — hence the guard and the None.
+    """
+    try:
+        product = getattr(item, "product", None)
+        url = product.image_url if product is not None else None
+    except Exception:
+        return None
+    if not url:
+        return None
+    if url.startswith(("http://", "https://")):
+        return url
+    return base_url.rstrip("/") + url
+
+
+def _line_items(order, base_url: str, settings) -> list[dict]:
+    """The hosted page's order summary: one line per product, then delivery
+    and tax — the same rows the shop's own checkout shows, so the customer
+    meets no surprises on the payment page. Delivery is sent even at 0
+    (Stripe renders a zero line as free, like the storefront's FREE row);
+    tax only when there is any."""
+    lines = []
+    for item in order.items:
+        product_data = {"name": item.product_name}
+        photo = _item_photo(item, base_url)
+        if photo:
+            product_data["images"] = [photo]
+        lines.append(
+            {
+                "price_data": {
+                    "currency": settings.stripe_currency,
+                    "product_data": product_data,
+                    "unit_amount": cents(float(item.unit_price)),
+                },
+                "quantity": item.quantity,
+            }
+        )
+    lines.append(
+        {
+            "price_data": {
+                "currency": settings.stripe_currency,
+                "product_data": {"name": "Delivery"},
+                "unit_amount": cents(float(order.shipping_fee)),
+            },
+            "quantity": 1,
+        }
+    )
+    if float(order.tax) > 0:
+        lines.append(
+            {
+                "price_data": {
+                    "currency": settings.stripe_currency,
+                    "product_data": {"name": _tax_label(settings)},
+                    "unit_amount": cents(float(order.tax)),
+                },
+                "quantity": 1,
+            }
+        )
+    return lines
+
+
 def create_checkout_session(order, base_url: str) -> dict:
     """One hosted Stripe Checkout page for a whole order.
 
     The card details live on Stripe's page, never on this server, and
-    Stripe handles 3-D Secure / SCA. A single line item carries the exact
-    order total — items, coupon, tax and delivery folded in — so the
-    payment page can never disagree with the invoice by a cent; the
-    itemised receipt travels in the email instead.
+    Stripe handles 3-D Secure / SCA. The page mirrors the shop's own
+    checkout — every product on its own line (photo included), delivery
+    and tax rows, the coupon shown as a real discount, the bakery's cream
+    and burgundy palette — yet it can never disagree with the invoice: the
+    lines sum to subtotal + tax + delivery in integer cents and the
+    discount comes off as a Stripe coupon, all straight from the stored
+    order.
 
     Returns {"id", "url"}; raises GatewayUnavailable on any failure.
     """
     settings = get_settings()
     stripe.api_key = settings.stripe_secret_key
-    summary = ", ".join(f"{item.quantity} × {item.product_name}" for item in order.items)
+    discount_amount = float(order.discount_amount or 0)
     try:
-        session = stripe.checkout.Session.create(
-            mode="payment",
-            success_url=f"{base_url}/account/orders/{order.id}?placed=1&stripe=return",
-            cancel_url=f"{base_url}/account/orders/{order.id}?stripe=cancelled",
-            customer_email=order.user.email,
-            expires_at=int(time.time()) + SESSION_LIFETIME_SECONDS,
-            line_items=[
-                {
-                    "price_data": {
-                        "currency": settings.stripe_currency,
-                        "product_data": {
-                            "name": f"{settings.bakery_name} order {order.order_number}",
-                            "description": summary[:200],
-                        },
-                        "unit_amount": cents(float(order.total)),
-                    },
-                    "quantity": 1,
-                }
-            ],
-            metadata={"order_id": str(order.id)},
-            payment_intent_data={
+        discounts = None
+        if discount_amount > 0:
+            # Stripe has no negative line items, so a coupon discount rides
+            # as a one-off Coupon object — the hosted page then shows
+            # "CODE −$x.xx" in Stripe's own dressing.
+            coupon = stripe.Coupon.create(
+                amount_off=cents(discount_amount),
+                currency=settings.stripe_currency,
+                duration="once",
+                name=order.coupon_code or "Discount",
+                metadata={"order_number": order.order_number},
+            )
+            discounts = [{"coupon": coupon.id}]
+        session_kwargs = {
+            "mode": "payment",
+            "success_url": f"{base_url}/account/orders/{order.id}?placed=1&stripe=return",
+            "cancel_url": f"{base_url}/account/orders/{order.id}?stripe=cancelled",
+            # The order number, visible in Stripe's dashboard and exports
+            "client_reference_id": order.order_number,
+            "customer_email": order.user.email,
+            "expires_at": int(time.time()) + SESSION_LIFETIME_SECONDS,
+            "line_items": _line_items(order, base_url, settings),
+            "branding_settings": {
+                "background_color": BRAND_BACKGROUND_COLOR,
+                "button_color": BRAND_BUTTON_COLOR,
+                "border_style": "rounded",
+                "font_family": BRAND_FONT_FAMILY,
+                "display_name": settings.bakery_name,
+            },
+            "custom_text": {
+                "submit": {"message": PAY_BUTTON_NOTE},
+                "after_submit": {"message": AFTER_PAYMENT_NOTE},
+            },
+            "metadata": {"order_id": str(order.id)},
+            "payment_intent_data": {
                 "description": f"Order {order.order_number}",
                 "metadata": {"order_id": str(order.id)},
             },
-        )
+        }
+        if discounts:
+            session_kwargs["discounts"] = discounts
+        session = stripe.checkout.Session.create(**session_kwargs)
     except Exception:
         logger.exception("creating a checkout session for %s failed", order.order_number)
         raise GatewayUnavailable("Stripe did not answer") from None

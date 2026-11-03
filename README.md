@@ -146,6 +146,11 @@ plus — once Stripe is configured — **online card payments through Stripe's h
 Checkout**: the order is placed unpaid, the customer pays on Stripe's page (card
 details never touch this server, and 3-D Secure/SCA is handled there), and the
 `checkout.session.completed` webhook marks the order paid and emails the receipt.
+The hosted page mirrors the shop — one line per product with its photo, delivery
+and tax rows, the coupon as a real discount row, the bakery's cream/burgundy
+palette and a serif face (`app/stripe_gateway.py` builds the session; the lines
+always sum to the stored order total in integer cents). Logo and bank-statement
+descriptor come from the Stripe dashboard's branding settings.
 A synchronous confirm check runs when the customer returns so the page is correct
 even if the webhook is still in flight. Unpaid card orders can be paid again with
 a fresh link (`POST /api/payments/{id}/session`) and cancel themselves — stock

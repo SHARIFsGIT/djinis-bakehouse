@@ -416,6 +416,10 @@ class OrderItem(Base):
     subtotal: Mapped[float] = mapped_column(Numeric(10, 2))
 
     order: Mapped[Order] = relationship(back_populates="items")
+    # The live product, for the payment page's thumbnails. The snapshot
+    # above keeps the line intact when the product is deleted (product_id
+    # is SET NULL → this relationship simply becomes None).
+    product: Mapped["Product | None"] = relationship()
 
 
 class OrderEvent(Base):
