@@ -82,7 +82,7 @@ export default function BulkOrder() {
         onSubmit={submit}
         className="rounded-box glass mt-8 p-6 shadow-sm ring-1 ring-base-300/60 md:p-8"
       >
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <label className="label text-xs" htmlFor="bulk-name">
               Your name

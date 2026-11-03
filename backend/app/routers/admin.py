@@ -8,7 +8,7 @@ from collections import Counter
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 
 from ..database import utcnow
 from ..models import (
@@ -22,6 +22,7 @@ from ..models import (
     Category,
     ComingSoonItem,
     Coupon,
+    LoyaltyVoucher,
     Order,
     OrderEvent,
     OrderItem,
@@ -53,6 +54,7 @@ from ..schemas import (
     CouponCreateRequest,
     CouponOut,
     CouponUpdateRequest,
+    LoyaltyVouchersOut,
     OrderDetailOut,
     OrderListResponse,
     OrderStatusUpdateRequest,
@@ -71,6 +73,7 @@ from ..schemas import (
     TestimonialUpdate,
     UserAdminUpdateRequest,
     UserOut,
+    VoucherLinkRequest,
 )
 from ..security import CurrentAdmin, DbSession
 from ..serialize import product_to_card, review_summary, verified_buyers
@@ -686,9 +689,57 @@ def delete_coupon(coupon_id: int, admin: CurrentAdmin, db: DbSession):
     coupon = db.get(Coupon, coupon_id)
     if coupon is None:
         raise HTTPException(status_code=404, detail="Coupon not found")
+    # Any tier handing this code out goes back to "no code chosen" — cleared
+    # here rather than by the FK cascade alone, so it holds on the dev
+    # database too, where SQLite runs without foreign keys enforced.
+    db.execute(delete(LoyaltyVoucher).where(LoyaltyVoucher.coupon_id == coupon_id))
     db.delete(coupon)
     db.commit()
     return {"message": "Coupon deleted"}
+
+
+# --------------------------------------------------------------------------
+# Loyalty vouchers — which coupon each tier of regulars gets
+# --------------------------------------------------------------------------
+
+VOUCHER_TIERS = ("vip", "loyal")
+
+
+def _tier_vouchers(db: DbSession) -> dict[str, Coupon | None]:
+    """The coupon each tier hands out today; a tier with nothing chosen
+    sits at None rather than missing from the map."""
+    linked = {v.tier: v.coupon for v in db.scalars(select(LoyaltyVoucher))}
+    return {tier: linked.get(tier) for tier in VOUCHER_TIERS}
+
+
+@router.get("/loyalty-vouchers", response_model=LoyaltyVouchersOut)
+def get_loyalty_vouchers(admin: CurrentAdmin, db: DbSession):
+    """The code a VIP earns and the code a loyal regular earns — so the
+    roll's gift buttons know what to hand over."""
+    return LoyaltyVouchersOut(**_tier_vouchers(db))
+
+
+@router.put("/loyalty-vouchers/{tier}", response_model=LoyaltyVouchersOut)
+def link_loyalty_voucher(
+    tier: str, payload: VoucherLinkRequest, admin: CurrentAdmin, db: DbSession
+):
+    """Choose (or clear) a tier's code. Coupons are minted on the Promotions
+    desk; this only decides which tier gets which."""
+    if tier not in VOUCHER_TIERS:
+        raise HTTPException(status_code=404, detail="Unknown loyalty tier")
+    if payload.coupon_id is not None and db.get(Coupon, payload.coupon_id) is None:
+        raise HTTPException(status_code=404, detail="Coupon not found")
+
+    voucher = db.get(LoyaltyVoucher, tier)
+    if payload.coupon_id is None:
+        if voucher:
+            db.delete(voucher)
+    elif voucher:
+        voucher.coupon_id = payload.coupon_id
+    else:
+        db.add(LoyaltyVoucher(tier=tier, coupon_id=payload.coupon_id))
+    db.commit()
+    return LoyaltyVouchersOut(**_tier_vouchers(db))
 
 
 # --------------------------------------------------------------------------
@@ -976,16 +1027,28 @@ def all_users(
     db: DbSession,
     tier: str | None = Query(None, pattern="^(vip|loyal|lapsed|regular)$"),
     sort: str = Query("spend", pattern="^(spend|orders|last|joined)$"),
+    search: str | None = Query(None, min_length=1, max_length=100),
     page: int = Query(1, ge=1),
     per_page: int = Query(10, ge=5, le=50),
 ):
-    """The regulars' roll, one shelf at a time: tier-filtered, ordered and
-    paginated — with the whole roll's tier counts alongside, so the chips
-    count loyal hands from any page."""
+    """The regulars' roll, one shelf at a time: tier-filtered, searched,
+    ordered and paginated — with the whole roll's tier counts alongside, so
+    the chips count loyal hands from any page and any search."""
     roll = _customer_roll(db)
     tier_counts = Counter(c.loyalty for c in roll)
     if tier:
         roll = [c for c in roll if c.loyalty == tier]
+    if search:
+        # Matched against name, email or phone — the things the baker
+        # actually knows about a regular.
+        needle = search.strip().lower()
+        roll = [
+            c
+            for c in roll
+            if needle in c.email.lower()
+            or needle in f"{c.first_name} {c.last_name}".lower()
+            or needle in (c.phone or "").lower()
+        ]
     roll.sort(key=_USER_SORTS.get(sort, _USER_SORTS["spend"]), reverse=True)
     total = len(roll)
     start = (page - 1) * per_page

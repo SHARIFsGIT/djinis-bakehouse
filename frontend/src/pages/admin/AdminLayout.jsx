@@ -14,7 +14,7 @@ export default function AdminLayout() {
         {/* The bell lives in the navbar now — it rings wherever the baker is */}
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-[240px_1fr]">
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[240px_1fr]">
         <div className="h-fit lg:sticky lg:top-24">
           <CornerNav ariaLabel="Admin" />
         </div>

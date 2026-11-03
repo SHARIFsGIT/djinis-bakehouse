@@ -444,6 +444,20 @@ class AdminUserPage(BaseModel):
     pagination: PaginationOut
 
 
+class VoucherLinkRequest(BaseModel):
+    """Point a loyalty tier at one of the shop's coupons — or clear the
+    tier's code with None."""
+
+    coupon_id: int | None
+
+
+class LoyaltyVouchersOut(BaseModel):
+    """The coupon each loyalty tier hands its regulars, if one is chosen."""
+
+    vip: CouponOut | None = None
+    loyal: CouponOut | None = None
+
+
 # --------------------------------------------------------------------------
 # Review moderation + the baker's bell
 # --------------------------------------------------------------------------

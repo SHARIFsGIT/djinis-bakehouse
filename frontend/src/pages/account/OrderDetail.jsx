@@ -193,7 +193,7 @@ export default function OrderDetail() {
         </div>
       )}
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_360px]">
+      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[1fr_360px]">
         <div className="space-y-6">
           {/* Items */}
           <section className="rounded-box glass p-5 shadow-sm ring-1 ring-base-300/60">

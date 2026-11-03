@@ -186,6 +186,22 @@ class Coupon(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class LoyaltyVoucher(Base):
+    """Which coupon a loyalty tier hands its regulars — VIPs one code, loyals
+    another. The codes themselves are ordinary coupons minted on the
+    Promotions desk; this table only records who gets which."""
+
+    __tablename__ = "loyalty_vouchers"
+
+    tier: Mapped[str] = mapped_column(String(10), primary_key=True)  # vip | loyal
+    coupon_id: Mapped[int] = mapped_column(
+        ForeignKey("coupons.id", ondelete="CASCADE"), index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    coupon: Mapped[Coupon] = relationship()
+
+
 class Review(Base):
     __tablename__ = "reviews"
     __table_args__ = (UniqueConstraint("product_id", "user_id"),)

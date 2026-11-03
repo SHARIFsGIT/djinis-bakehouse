@@ -14,7 +14,7 @@ export default function AccountLayout() {
           : "Orders, saved bakes, addresses and your baker’s profile."}
       </p>
 
-      <div className="dash-divider mt-6 grid gap-8 pt-6 lg:grid-cols-[240px_1fr]">
+      <div className="dash-divider mt-6 grid grid-cols-1 gap-8 pt-6 lg:grid-cols-[240px_1fr]">
         <div className="h-fit lg:sticky lg:top-24">
           <CornerNav ariaLabel="Account" />
         </div>

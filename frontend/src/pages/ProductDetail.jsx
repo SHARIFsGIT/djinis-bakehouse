@@ -156,7 +156,7 @@ export default function ProductDetail() {
         </ul>
       </nav>
 
-      <div className="grid gap-10 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-10 lg:grid-cols-2">
         {/* Photo */}
         <div className="rise-in relative">
           <div className="overflow-hidden rounded-box shadow-lg ring-1 ring-base-300/60">
@@ -309,7 +309,7 @@ export default function ProductDetail() {
 
       {/* Reviews */}
       <section className="dash-divider mt-16 pt-10">
-        <div className="grid gap-10 lg:grid-cols-[1fr_1.4fr]">
+        <div className="grid grid-cols-1 gap-10 lg:grid-cols-[1fr_1.4fr]">
           <div>
             <h2 className="font-display text-2xl font-semibold">
               What the neighborhood says

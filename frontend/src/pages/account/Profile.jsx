@@ -81,7 +81,7 @@ export default function Profile() {
   };
 
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       {/* Details */}
       <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
         <h2 className="font-display text-2xl font-semibold">Your profile</h2>

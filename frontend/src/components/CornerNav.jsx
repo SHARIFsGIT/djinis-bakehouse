@@ -54,6 +54,10 @@ const DESK_SECTIONS = [
   },
 ];
 
+// The way back out to the counter. end:true so the chip only lights up on
+// the storefront itself, not on every route under it.
+const STORE_TAB = { to: "/", label: "Store", Icon: Store, end: true };
+
 // Hover = the active tab's own wine tint, one shade deeper — a quiet cue
 // that stays inside the palette instead of shouting across it.
 const ITEM =
@@ -96,14 +100,44 @@ function Section({ title, tabs, first = false }) {
 
 /* One sidebar for both corners. Admins get the whole desk grouped by how a
    shift runs — with their personal tabs beneath it. Customers simply see
-   their own four. */
+   their own four. On a phone the card would stack a full screen tall above
+   the work, so below lg it flattens into a single thumb-swipe rail instead;
+   the grouped card returns at lg. Log out stays off the rail — the navbar's
+   mobile menu already carries it. */
 export default function CornerNav({ ariaLabel = "Account" }) {
   const { isAdmin, logout } = useAuth();
   const navigate = useNavigate();
 
+  const railTabs = isAdmin
+    ? [...DESK_SECTIONS.flatMap((s) => s.tabs), ...MY_TABS_ADMIN, STORE_TAB]
+    : MY_TABS;
+
   return (
     <nav aria-label={ariaLabel}>
-      <ul className="w-full space-y-0.5 rounded-box glass p-2 shadow-sm ring-1 ring-base-300/60">
+      {/* Phones: the whole desk as one horizontal shelf */}
+      <ul className="-mx-4 flex items-center gap-2 overflow-x-auto px-4 pb-1 lg:hidden">
+        {railTabs.map((t) => (
+          <li key={`${t.to}-${t.label}`} className="shrink-0">
+            <NavLink
+              to={t.to}
+              end={t.end}
+              className={({ isActive }) =>
+                `btn btn-sm gap-1.5 rounded-full whitespace-nowrap font-semibold ${
+                  isActive
+                    ? "btn-secondary text-secondary-content"
+                    : "btn-ghost border border-base-300"
+                }`
+              }
+            >
+              <t.Icon size={14} className="shrink-0 opacity-70" aria-hidden="true" />
+              {t.label}
+            </NavLink>
+          </li>
+        ))}
+      </ul>
+
+      {/* lg up: the desk card, grouped the way a shift runs */}
+      <ul className="hidden w-full space-y-0.5 rounded-box glass p-2 shadow-sm ring-1 ring-base-300/60 lg:block">
         {DESK_SECTIONS.map((section, i) =>
           isAdmin ? (
             <Section
@@ -123,7 +157,7 @@ export default function CornerNav({ ariaLabel = "Account" }) {
           {isAdmin && (
             <NavLink to="/" className={ITEM}>
               <Store size={18} className="shrink-0 opacity-70" />
-              Shopfront
+              Store
             </NavLink>
           )}
           <button

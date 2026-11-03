@@ -39,7 +39,7 @@ export default function Dashboard() {
   return (
     <div className="space-y-8">
       {/* Headline stats */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile Icon={BadgeDollarSign} label="Paid revenue" value={money(stats.paid_revenue)} sub={`${money(stats.total_revenue)} incl. pending`} />
         <StatTile
           Icon={ScrollText}
@@ -55,7 +55,7 @@ export default function Dashboard() {
         <StatTile Icon={TrendingUp} label="Avg order" value={money(stats.avg_order_value)} sub="across all orders" />
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         {/* Status breakdown */}
         <section className="glass rounded-box p-6 shadow-sm ring-1 ring-base-300/60">
           <h2 className="font-display text-xl font-semibold">Orders by status</h2>
@@ -107,7 +107,7 @@ export default function Dashboard() {
         </section>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_360px]">
         {/* Recent orders */}
         <section className="glass rounded-box p-6 shadow-sm ring-1 ring-base-300/60">
           <div className="flex items-center justify-between">

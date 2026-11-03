@@ -166,7 +166,7 @@ export default function Cart() {
         {count} {count === 1 ? "item" : "items"}
       </p>
 
-      <div className="mt-8 grid gap-8 lg:grid-cols-[1fr_380px]">
+      <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-[1fr_380px]">
         {/* Items */}
         <div className="space-y-4">
           {items.map((item) => (

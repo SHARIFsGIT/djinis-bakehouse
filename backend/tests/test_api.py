@@ -506,6 +506,17 @@ def test_users_loyalty_and_export():
     loyal = auth_header(register_and_login("loyal@example.com", "Loyal123!"))
     vip = auth_header(register_and_login("vip@example.com", "Vipuser123!"))
     ghost = auth_header(register_and_login("ghost@example.com", "Ghost123!"))
+    # a regular with a memorable name and phone, for the search shelf
+    client.post(
+        "/api/auth/register",
+        json={
+            "email": "colton@example.com",
+            "password": "Colton123!",
+            "first_name": "Colton",
+            "last_name": "Mustard",
+            "phone": "555-0142",
+        },
+    )
 
     def place(token):
         placed = client.post("/api/orders", json=checkout_payload(), headers=token)
@@ -563,6 +574,24 @@ def test_users_loyalty_and_export():
     counts = [u["order_count"] for u in by_orders]
     assert counts == sorted(counts, reverse=True)
 
+    # search narrows by name, email or phone — and rides with the tier filter
+    shelf = client.get(
+        "/api/admin/users", params={"search": "mustard", "per_page": 50}, headers=headers
+    ).json()
+    assert [u["email"] for u in shelf["items"]] == ["colton@example.com"]
+    by_phone = client.get(
+        "/api/admin/users", params={"search": "555-0142", "per_page": 50}, headers=headers
+    ).json()
+    assert [u["email"] for u in by_phone["items"]] == ["colton@example.com"]
+    nothing = client.get(
+        "/api/admin/users", params={"search": "no-such-regular"}, headers=headers
+    ).json()
+    assert nothing["items"] == [] and nothing["pagination"]["total_items"] == 0
+    still_vip = client.get(
+        "/api/admin/users", params={"tier": "vip", "search": "example"}, headers=headers
+    ).json()
+    assert {u["loyalty"] for u in still_vip["items"]} <= {"vip"}
+
     # the export is the voucher mailing list
     export = client.get("/api/admin/users/export", headers=headers)
     assert export.status_code == 200
@@ -573,6 +602,88 @@ def test_users_loyalty_and_export():
 
     # the roll is the baker's alone
     assert client.get("/api/admin/users", headers=loyal).status_code == 403
+
+
+def test_loyalty_vouchers():
+    """Each tier of regulars earns its own code: the desk links a coupon to
+    vip and loyal, re-points or clears it at will, and retiring the coupon
+    clears the link along with it."""
+    headers = admin_headers()
+
+    # the codes are the baker's alone to see
+    assert client.get("/api/admin/loyalty-vouchers").status_code == 401
+    empty = client.get("/api/admin/loyalty-vouchers", headers=headers).json()
+    assert empty == {"vip": None, "loyal": None}
+
+    vip_code = client.post(
+        "/api/admin/coupons",
+        json={"code": "vipgift15", "percent_off": 15},
+        headers=headers,
+    ).json()
+    loyal_code = client.post(
+        "/api/admin/coupons",
+        json={"code": "loyalthanks", "percent_off": 10, "description": "for the regulars"},
+        headers=headers,
+    ).json()
+
+    linked = client.put(
+        "/api/admin/loyalty-vouchers/vip",
+        json={"coupon_id": vip_code["id"]},
+        headers=headers,
+    ).json()
+    assert linked["vip"]["code"] == "VIPGIFT15"
+    assert linked["loyal"] is None
+
+    both = client.put(
+        "/api/admin/loyalty-vouchers/loyal",
+        json={"coupon_id": loyal_code["id"]},
+        headers=headers,
+    ).json()
+    assert both["vip"]["code"] == "VIPGIFT15"
+    assert both["loyal"]["percent_off"] == 10
+
+    # re-pointing swaps the code; clearing drops the tier back to None
+    swapped = client.put(
+        "/api/admin/loyalty-vouchers/vip",
+        json={"coupon_id": loyal_code["id"]},
+        headers=headers,
+    ).json()
+    assert swapped["vip"]["code"] == "LOYALTHANKS"
+    cleared = client.put(
+        "/api/admin/loyalty-vouchers/loyal",
+        json={"coupon_id": None},
+        headers=headers,
+    ).json()
+    assert cleared["loyal"] is None
+
+    # only the two voucher tiers exist, and only real coupons
+    assert (
+        client.put(
+            "/api/admin/loyalty-vouchers/regular",
+            json={"coupon_id": vip_code["id"]},
+            headers=headers,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.put(
+            "/api/admin/loyalty-vouchers/vip",
+            json={"coupon_id": 99999},
+            headers=headers,
+        ).status_code
+        == 404
+    )
+
+    # retiring a coupon clears whatever tier was handing it out
+    assert (
+        client.delete(f"/api/admin/coupons/{loyal_code['id']}", headers=headers).status_code
+        == 200
+    )
+    final = client.get("/api/admin/loyalty-vouchers", headers=headers).json()
+    assert final == {"vip": None, "loyal": None}
+
+    # leave the coupon tin as we found it
+    client.delete(f"/api/admin/coupons/{vip_code['id']}", headers=headers)
 
 
 def test_favorites():

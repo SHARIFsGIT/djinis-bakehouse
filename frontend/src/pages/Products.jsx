@@ -99,7 +99,7 @@ export default function Products() {
         )}
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-[260px_1fr]">
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[260px_1fr]">
         {/* Sidebar filters */}
         <aside className="space-y-6">
           <div>

@@ -173,7 +173,7 @@ export default function Checkout() {
       <h1 className="font-display text-4xl font-semibold">Checkout</h1>
       <p className="mt-1 opacity-70">Almost there — the oven is preheating.</p>
 
-      <form onSubmit={placeOrder} className="mt-8 grid gap-8 lg:grid-cols-[1fr_400px]">
+      <form onSubmit={placeOrder} className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-[1fr_400px]">
         <div className="space-y-8">
           {/* Delivery address */}
           <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
