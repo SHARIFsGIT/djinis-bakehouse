@@ -379,7 +379,11 @@ Notes: charges go out in `STRIPE_CURRENCY` (default `usd` — set `eur` when
 the catalog moves to euro prices); refunds on cancellation are issued
 through the gateway automatically; every gateway call lives behind
 `backend/app/stripe_gateway.py` so the rest of the app never imports the
-Stripe SDK.
+Stripe SDK — and everything crossing that seam is a plain dict (the SDK's
+Event/Session objects refuse `.get()` by design, which once turned every
+live webhook delivery into a 500 while the dict-returning test fake kept
+the suite green; `tests/test_stripe_gateway.py` now pins signed payloads
+through the real verification).
 
 **Turning on Facebook and phone sign-in**
 

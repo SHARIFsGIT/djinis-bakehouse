@@ -1,4 +1,5 @@
-"""The real gateway's checkout-page builder, proven without the wire.
+"""The real gateway's checkout-page builder and webhook seam, proven
+without the wire.
 
 test_api.py swaps the whole stripe_gateway module for a fake so the API
 suite never talks to Stripe; this file loads a private second copy of the
@@ -7,9 +8,19 @@ and runs the real create_checkout_session against a stub SDK. What matters
 here is the hosted page's shape: itemised lines that sum to the invoice to
 the cent, the coupon as a real discount, the bakery branding, the copy
 slots — and that nothing about a photo can break a payment.
+
+The webhook half pins a contract, not just code: genuinely signed payloads
+go through the real SDK verification (offline — it is pure HMAC) and must
+come back as the plain JSON the handler speaks. The production bug this
+guards against: the SDK's Event object refuses .get() by design, so a
+hand-written-dict handler 500ed on every live delivery while the fake,
+which returns dicts, kept the whole suite green.
 """
 
+import hashlib
+import hmac
 import importlib.util
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,16 +31,45 @@ MODULE_PATH = Path(__file__).resolve().parents[1] / "app" / "stripe_gateway.py"
 BASE_URL = "https://shop.test"
 
 
+class StubSession:
+    """Shaped like the SDK's Session on purpose: no .get() — StripeObject
+    refuses dict method names — only the documented conversions."""
+
+    def __init__(self, data: dict):
+        self._data = data
+
+    def get(self, key, default=None):
+        raise AttributeError(
+            f"'get' is a dict method, but a {type(self).__name__} is not a dict"
+        )
+
+    def to_dict(self, recursive: bool = True, for_json: bool = False) -> dict:
+        return self._data
+
+
 class StubStripe:
     """Records every gateway call; no request leaves the process."""
 
     api_key = None
     raise_on_create = False
+    raise_on_retrieve = False
 
     def __init__(self):
         self.coupons: list[dict] = []
         self.sessions: list[dict] = []
-        self.checkout = SimpleNamespace(Session=SimpleNamespace(create=self._session))
+        self.retrieved: list[str] = []
+        self.retrieve_result = StubSession(
+            {
+                "id": "cs_test_page",
+                "status": "complete",
+                "payment_status": "paid",
+                "payment_intent": "pi_test_1",
+                "url": "https://checkout.stripe.test/cs_test_page",
+            }
+        )
+        self.checkout = SimpleNamespace(
+            Session=SimpleNamespace(create=self._session, retrieve=self._retrieve)
+        )
         self.Coupon = SimpleNamespace(create=self._coupon)
 
     def _coupon(self, **kwargs):
@@ -42,12 +82,21 @@ class StubStripe:
         self.sessions.append(kwargs)
         return SimpleNamespace(id="cs_test_page", url="https://checkout.stripe.test/cs_test_page")
 
+    def _retrieve(self, session_id: str):
+        if self.raise_on_retrieve:
+            raise RuntimeError("stripe down")
+        self.retrieved.append(session_id)
+        return self.retrieve_result
 
-def load_real_gateway(stub: StubStripe):
+
+def load_real_gateway(stub: StubStripe | None = None):
     spec = importlib.util.spec_from_file_location("app._stripe_gateway_real", MODULE_PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module.stripe = stub
+    if stub is not None:
+        # Only the API-calling tests swap the SDK — webhook verification
+        # needs the real stripe.Webhook, which runs offline.
+        module.stripe = stub
     return module
 
 
@@ -224,3 +273,110 @@ def test_a_silent_stripe_becomes_gateway_unavailable() -> None:
     with pytest.raises(gateway.GatewayUnavailable):
         gateway.create_checkout_session(make_order(), BASE_URL)
     assert stub.sessions == []
+
+
+# ── The webhook seam: verified bytes in, plain JSON out ──────────────────
+
+WEBHOOK_SECRET = "whsec_unit_tests"
+
+
+def signed_header(
+    payload: bytes, secret: str = WEBHOOK_SECRET, timestamp: int | None = None
+) -> str:
+    """A real Stripe-Signature header: t=…,v1=HMAC-SHA256(secret, "t.payload")."""
+    t = int(time.time()) if timestamp is None else timestamp
+    digest = hmac.new(secret.encode(), f"{t}.".encode() + payload, hashlib.sha256).hexdigest()
+    return f"t={t},v1={digest}"
+
+
+def completed_event_payload() -> bytes:
+    return json.dumps(
+        {
+            "id": "evt_test_1",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "id": "cs_test_page",
+                    "payment_status": "paid",
+                    "payment_intent": "pi_test_1",
+                    "metadata": {"order_id": "7"},
+                }
+            },
+        }
+    ).encode()
+
+
+def test_verify_webhook_hands_back_plain_json(monkeypatch) -> None:
+    gateway = load_real_gateway()  # the real stripe.Webhook — offline, pure HMAC
+    monkeypatch.setattr(gateway.get_settings(), "stripe_webhook_secret", WEBHOOK_SECRET)
+    payload = completed_event_payload()
+
+    event = gateway.verify_webhook(payload, signed_header(payload))
+
+    # Exactly the access the live handler does — the calls that 500ed in
+    # production when the event was an SDK object.
+    assert isinstance(event, dict)
+    assert event.get("type") == "checkout.session.completed"
+    session = event.get("data", {}).get("object")
+    assert isinstance(session, dict)
+    assert session.get("metadata", {}).get("order_id") == "7"
+    assert session["payment_intent"] == "pi_test_1"
+
+
+def test_verify_webhook_rejects_everything_not_provably_from_stripe(monkeypatch) -> None:
+    gateway = load_real_gateway()
+    monkeypatch.setattr(gateway.get_settings(), "stripe_webhook_secret", WEBHOOK_SECRET)
+    payload = completed_event_payload()
+    array_payload = json.dumps(["not", "an", "event"]).encode()
+
+    with pytest.raises(gateway.BadSignature):
+        gateway.verify_webhook(payload, signed_header(payload, secret="whsec_someone_elses"))
+    with pytest.raises(gateway.BadSignature):
+        gateway.verify_webhook(payload, "")  # no header at all
+    with pytest.raises(gateway.BadSignature):
+        gateway.verify_webhook(payload, "v1=deadbeef")  # unparseable header
+    with pytest.raises(gateway.BadSignature):
+        gateway.verify_webhook(  # replayed from an hour ago
+            payload, signed_header(payload, timestamp=int(time.time()) - 3600)
+        )
+    with pytest.raises(gateway.BadSignature):
+        gateway.verify_webhook(b"not even json", signed_header(b"not even json"))
+    with pytest.raises(gateway.BadSignature):
+        gateway.verify_webhook(array_payload, signed_header(array_payload))
+
+
+def test_verify_webhook_without_a_configured_secret_accepts_nothing(monkeypatch) -> None:
+    gateway = load_real_gateway()
+    monkeypatch.setattr(gateway.get_settings(), "stripe_webhook_secret", "")
+    payload = completed_event_payload()
+
+    with pytest.raises(gateway.BadSignature):
+        gateway.verify_webhook(payload, signed_header(payload))
+
+
+def test_retrieve_session_returns_plain_values() -> None:
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+
+    session = gateway.retrieve_session("cs_test_page")
+
+    assert stub.retrieved == ["cs_test_page"]
+    assert session == {
+        "status": "complete",
+        "payment_status": "paid",
+        "payment_intent": "pi_test_1",
+        "url": "https://checkout.stripe.test/cs_test_page",
+    }
+
+    # A sparse session — still open, nothing paid yet — yields Nones, never
+    # an attribute error; an unreachable Stripe stays GatewayUnavailable.
+    stub.retrieve_result = StubSession({"id": "cs_test_page", "status": "open"})
+    assert gateway.retrieve_session("cs_test_page") == {
+        "status": "open",
+        "payment_status": None,
+        "payment_intent": None,
+        "url": None,
+    }
+    stub.raise_on_retrieve = True
+    with pytest.raises(gateway.GatewayUnavailable):
+        gateway.retrieve_session("cs_test_page")

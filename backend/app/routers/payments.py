@@ -95,7 +95,9 @@ async def stripe_webhook(request: Request, background: BackgroundTasks, db: DbSe
     except stripe_gateway.BadSignature as exc:
         raise HTTPException(status_code=400, detail=f"Webhook rejected: {exc}") from None
 
-    session = event.get("data", {}).get("object") or {}
+    session = event.get("data", {}).get("object")
+    if not isinstance(session, dict):
+        session = {}  # a malformed event is ignored, never a 500
     event_type = event.get("type")
     # DB work off the event loop — the endpoint is async only for the raw body.
     if event_type in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):

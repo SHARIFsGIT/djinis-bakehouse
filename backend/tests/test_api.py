@@ -21,6 +21,7 @@ os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_fake"
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app import create_app, stripe_gateway  # noqa: E402
+from app.config import get_settings  # noqa: E402
 from app.models import (  # noqa: E402
     DEFAULT_ANNOUNCEMENT,
     DEFAULT_HERO_IMAGE,
@@ -1334,6 +1335,105 @@ def test_confirm_syncs_payment_when_webhook_is_late():
     again = client.post(f"/api/payments/confirm/{order['id']}", headers=headers)
     assert again.status_code == 200
     assert again.json()["payment_status"] == "paid"
+
+
+def test_webhook_accepts_a_genuinely_signed_stripe_event(monkeypatch):
+    """The production bug this pins: the fake verify_webhook returns dicts,
+    but the real SDK's construct_event hands back an Event object that
+    refuses .get() by design — so every live delivery 500ed while the whole
+    suite stayed green. Here the endpoint runs the REAL signature
+    verification (offline, pure HMAC — no key, no network) against a
+    payload signed exactly the way Stripe signs them."""
+    import hashlib
+    import hmac
+    import importlib.util
+    import json
+    import time
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "app._stripe_gateway_signed",
+        Path(__file__).resolve().parents[1] / "app" / "stripe_gateway.py",
+    )
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    secret = "whsec_signed_integration"
+    monkeypatch.setattr(stripe_gateway, "verify_webhook", fresh.verify_webhook)
+    # the fresh copy's exception class must be the one the endpoint catches —
+    # in production both come from the same module object
+    monkeypatch.setattr(stripe_gateway, "BadSignature", fresh.BadSignature)
+    monkeypatch.setattr(get_settings(), "stripe_webhook_secret", secret)
+
+    headers = auth_header(login_customer())
+    order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    payload = json.dumps(
+        {
+            "id": "evt_signed_1",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "id": last_session_id(order["id"]),
+                    "payment_status": "paid",
+                    "payment_intent": f"pi_signed_{order['id']}",
+                    "metadata": {"order_id": str(order["id"])},
+                }
+            },
+        }
+    ).encode()
+    timestamp = int(time.time())
+    signature = hmac.new(
+        secret.encode(), f"{timestamp}.".encode() + payload, hashlib.sha256
+    ).hexdigest()
+
+    delivered = client.post(
+        "/api/payments/webhook",
+        content=payload,
+        headers={"stripe-signature": f"t={timestamp},v1={signature}"},
+    )
+    assert delivered.status_code == 200
+    assert delivered.json() == {"received": True}
+    paid = client.get(f"/api/orders/{order['id']}", headers=headers).json()
+    assert paid["payment_status"] == "paid"
+    assert any("Payment received" in e["comment"] for e in paid["timeline"])
+
+    # The same bytes signed with someone else's secret never reach the ledger
+    forgery = hmac.new(
+        b"whsec_attacker", f"{timestamp}.".encode() + payload, hashlib.sha256
+    ).hexdigest()
+    refused = client.post(
+        "/api/payments/webhook",
+        content=payload,
+        headers={"stripe-signature": f"t={timestamp},v1={forgery}"},
+    )
+    assert refused.status_code == 400
+    assert "rejected" in refused.json()["detail"].lower()
+
+
+def test_webhook_ignores_malformed_events_instead_of_erroring():
+    """Shape surprises inside a signed event — no data object, a non-dict
+    one, an unknown type like payment_intent.succeeded, not even a type —
+    are ignored with a 200. Stripe retries 500 responses for days, so a
+    malformed event must never raise."""
+    headers = auth_header(login_customer())
+    order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+
+    for event in (
+        {"id": "evt_1", "type": "checkout.session.completed", "data": {}},
+        {"id": "evt_2", "type": "checkout.session.completed", "data": {"object": "not a dict"}},
+        {"id": "evt_3", "type": "checkout.session.completed"},  # no data at all
+        {"id": "evt_4", "type": "payment_intent.succeeded", "data": {"object": {"id": "pi_1"}}},
+        {"id": "evt_5"},  # not even a type
+    ):
+        response = client.post(
+            "/api/payments/webhook",
+            json=event,
+            headers={"stripe-signature": "t=1,v1=fake"},
+        )
+        assert response.status_code == 200
+
+    detail = client.get(f"/api/orders/{order['id']}", headers=headers).json()
+    assert detail["status"] == "pending"
+    assert detail["payment_status"] == "pending"
 
 
 def test_pay_again_replaces_session_and_old_expiry_is_ignored():

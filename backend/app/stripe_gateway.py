@@ -9,6 +9,7 @@ Money crosses exactly one boundary here: Stripe speaks integer minor units
 (cents), never floats, so every amount goes through cents() on its way out.
 """
 
+import json
 import logging
 import time
 
@@ -203,14 +204,17 @@ def retrieve_session(session_id: str) -> dict:
     stripe.api_key = settings.stripe_secret_key
     try:
         session = stripe.checkout.Session.retrieve(session_id)
+        # SDK objects refuse dict access on purpose — their API fields may
+        # collide with dict method names — so nothing SDK-shaped leaves here.
+        data = session.to_dict()
     except Exception:
         logger.exception("retrieving checkout session %s failed", session_id)
         raise GatewayUnavailable("Stripe did not answer") from None
     return {
-        "status": session.get("status"),
-        "payment_status": session.get("payment_status"),
-        "payment_intent": session.get("payment_intent"),
-        "url": session.get("url"),
+        "status": data.get("status"),
+        "payment_status": data.get("payment_status"),
+        "payment_intent": data.get("payment_intent"),
+        "url": data.get("url"),
     }
 
 
@@ -230,18 +234,26 @@ def refund(payment_intent: str, amount_cents: int) -> None:
 
 
 def verify_webhook(payload: bytes, signature: str) -> dict:
-    """Check the signature, then hand back the parsed event.
+    """Check the signature, then hand back the event as a plain dict.
 
     The signature IS the credential on this endpoint, so without a
-    configured secret nothing is accepted at all.
+    configured secret nothing is accepted at all. construct_event verifies
+    the exact raw bytes — that check is the whole point of calling it — but
+    the Event object it returns deliberately refuses dict access
+    (.get() raises), which the app's handler speaks. The same verified
+    bytes are parsed again here, so the event the app sees is plain JSON
+    and identical to what Stripe signed.
     """
     settings = get_settings()
     if not settings.stripe_webhook_secret:
         raise BadSignature("STRIPE_WEBHOOK_SECRET is not set")
     try:
-        event = stripe.Webhook.construct_event(
+        stripe.Webhook.construct_event(
             payload, signature, settings.stripe_webhook_secret
         )
+        event = json.loads(payload)
+        if not isinstance(event, dict):
+            raise ValueError("the event is not a JSON object")
     except Exception:
         raise BadSignature("webhook signature verification failed") from None
     return event
