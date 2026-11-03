@@ -288,6 +288,9 @@ class OrderDetailOut(OrderOut):
     # What a cancellation right now would cost (non-zero only once baking
     # has started and the admin keeps a late-cancel fee) — shown pre-cancel.
     cancellation_fee: float = 0
+    # Stripe's hosted checkout page, set on the checkout response for card
+    # orders (and on a fresh pay link) — null everywhere else.
+    payment_url: str | None = None
 
 
 class OrderListResponse(BaseModel):
@@ -324,12 +327,15 @@ class StorefrontOut(BaseModel):
     """Public shop copy — the announcement bar and the hero 'today' chip.
     demo_accounts tells the login page whether the one-tap demo logins exist
     on this deployment (dev yes, a real production database no). The contact
-    lines feed the footer; None means the baker hasn't filled them in yet."""
+    lines feed the footer; None means the baker hasn't filled them in yet.
+    card_payments tells checkout whether the online-card option exists (it
+    appears the moment STRIPE_SECRET_KEY is configured)."""
     announcement: str
     today_note: str
     hero_image: str
     marquee: list[str] = []
     demo_accounts: bool = False
+    card_payments: bool = False
     contact_address: str | None = None
     contact_phone: str | None = None
     contact_email: str | None = None

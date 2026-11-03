@@ -2,14 +2,17 @@
 
 The cart lives client-side; the server re-validates every line item
 (price, availability, stock) at checkout so tampering is impossible.
+Card orders are placed unpaid and only become paid when Stripe says so
+(webhook or confirm check — see routers/payments.py).
 """
 
 import random
 from datetime import date, timedelta
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
 from sqlalchemy import func, select, update
 
+from .. import stripe_gateway
 from ..config import get_settings
 from ..email import send_order_receipt
 from ..notifications import notify_admin
@@ -63,7 +66,9 @@ def _late_cancel_fee(order: Order, db) -> float:
     return round(float(order.total) * percent / 100, 2)
 
 
-def _serialize(order: Order, detailed: bool = False, cancel_fee_preview: float = 0.0) -> OrderOut | OrderDetailOut:
+def _serialize(
+    order: Order, detailed: bool = False, cancel_fee_preview: float = 0.0, payment_url: str | None = None
+) -> OrderOut | OrderDetailOut:
     data = OrderOut(
         id=order.id,
         order_number=order.order_number,
@@ -111,18 +116,76 @@ def _serialize(order: Order, detailed: bool = False, cancel_fee_preview: float =
         customer_name=order.user.full_name if order.user else None,
         customer_email=order.user.email if order.user else None,
         cancellation_fee=round(cancel_fee_preview, 2),
+        payment_url=payment_url,
     )
 
 
+def _receipt_dict(order: Order) -> dict:
+    """The plain-values receipt payload. Background tasks run after the
+    request's session has closed, so they must never reach back into the
+    ORM for more — everything they need travels in this dict."""
+    return {
+        "email": order.user.email,
+        "first_name": order.user.first_name,
+        "order_number": order.order_number,
+        "placed_at": order.created_at.strftime("%b %d, %Y, %I:%M %p"),
+        "items": [
+            {"name": i.product_name, "quantity": i.quantity, "subtotal": float(i.subtotal)}
+            for i in order.items
+        ],
+        "subtotal": float(order.subtotal),
+        "discount": float(order.discount_amount),
+        "coupon_code": order.coupon_code,
+        "tax": float(order.tax),
+        "shipping": float(order.shipping_fee),
+        "total": float(order.total),
+        "payment_method": order.payment_method,
+        "payment_status": order.payment_status,
+    }
+
+
+def mark_order_paid(
+    order: Order, db, background: BackgroundTasks, *, payment_intent: str | None = None
+) -> bool:
+    """A completed Stripe payment landed on this order.
+
+    Idempotent — it only acts while the order is still pending, so the
+    webhook and the customer-facing confirm check can race safely and the
+    receipt goes out exactly once.
+    """
+    if order.payment_status != PaymentStatus.PENDING.value:
+        return False
+    order.payment_status = PaymentStatus.PAID.value
+    if payment_intent:
+        order.stripe_payment_intent_id = payment_intent
+    db.add(
+        OrderEvent(
+            order_id=order.id, status=order.status, comment="Payment received — paid by card"
+        )
+    )
+    db.commit()
+    db.refresh(order)
+    # The card receipt travels with the payment, not the placement — by
+    # now it can honestly say "paid".
+    background.add_task(send_order_receipt, _receipt_dict(order))
+    return True
+
+
 @router.post("", response_model=OrderDetailOut, status_code=status.HTTP_201_CREATED)
-def checkout(payload: CheckoutRequest, user: CurrentUser, db: DbSession, background: BackgroundTasks):
-    # Cash on delivery is the only real payment rail. The simulated card
-    # branch marks an order paid with no money moving, so it stays behind
-    # CARD_PAYMENTS_ENABLED (dev yes, production no) until a gateway lands.
-    if payload.payment_method == PaymentMethod.CARD and not settings.card_payments_enabled:
+def checkout(
+    payload: CheckoutRequest,
+    user: CurrentUser,
+    db: DbSession,
+    background: BackgroundTasks,
+    request: Request,
+):
+    # Cash on delivery is always real. Card orders run through Stripe —
+    # until STRIPE_SECRET_KEY is configured there is no honest card option
+    # to offer, so the request is refused before any side effects.
+    if payload.payment_method == PaymentMethod.CARD and not stripe_gateway.configured():
         raise HTTPException(
             status_code=400,
-            detail="Card payments aren't available yet — please choose cash on delivery",
+            detail="Online payments aren't set up yet — please choose cash on delivery",
         )
 
     # Resolve delivery address (existing id or a new one created on the fly)
@@ -186,11 +249,9 @@ def checkout(payload: CheckoutRequest, user: CurrentUser, db: DbSession, backgro
     shipping = 0.0 if subtotal >= settings.free_shipping_threshold else settings.shipping_fee
     total = round(taxable + tax + shipping, 2)
 
-    payment_status = (
-        PaymentStatus.PAID.value
-        if payload.payment_method == PaymentMethod.CARD
-        else PaymentStatus.PENDING.value
-    )
+    # Both rails start pending: cash settles at the door, card settles when
+    # Stripe confirms the payment.
+    payment_status = PaymentStatus.PENDING.value
 
     order = Order(
         order_number=_generate_order_number(db),
@@ -260,30 +321,38 @@ def checkout(payload: CheckoutRequest, user: CurrentUser, db: DbSession, backgro
     db.commit()
     db.refresh(order)
 
-    # The receipt every order earns as proof of purchase. Plain values only —
-    # the background task runs after this request's session has closed, so it
-    # must never reach back into the ORM for more.
-    receipt = {
-        "email": user.email,
-        "first_name": user.first_name,
-        "order_number": order.order_number,
-        "placed_at": order.created_at.strftime("%b %d, %Y, %I:%M %p"),
-        "items": [
-            {"name": i.product_name, "quantity": i.quantity, "subtotal": float(i.subtotal)}
-            for i in order.items
-        ],
-        "subtotal": float(order.subtotal),
-        "discount": float(order.discount_amount),
-        "coupon_code": order.coupon_code,
-        "tax": float(order.tax),
-        "shipping": float(order.shipping_fee),
-        "total": float(order.total),
-        "payment_method": order.payment_method,
-        "payment_status": order.payment_status,
-    }
-    background.add_task(send_order_receipt, receipt)
+    # Card orders now need a hosted Stripe page to pay at. If Stripe can't
+    # be reached, the order is cancelled on the spot — no order may sit in
+    # the book with no way to pay it.
+    payment_url = None
+    if payload.payment_method == PaymentMethod.CARD:
+        try:
+            session = stripe_gateway.create_checkout_session(
+                order, str(request.base_url).rstrip("/")
+            )
+        except stripe_gateway.GatewayUnavailable:
+            _cancel_order(
+                order,
+                db,
+                by_customer=False,
+                comment="Payment provider unreachable — cancelled automatically",
+            )
+            db.commit()
+            raise HTTPException(
+                status_code=503,
+                detail="The payment provider didn't answer — nothing was charged. Please try again.",
+            )
+        order.stripe_session_id = session["id"]
+        db.commit()
+        payment_url = session["url"]
 
-    return _serialize(order, detailed=True)
+    # The receipt every order earns as proof of purchase — cash orders get
+    # theirs at placement (the bill to settle); card orders get theirs when
+    # the payment lands, when it can honestly say "paid".
+    if payload.payment_method != PaymentMethod.CARD:
+        background.add_task(send_order_receipt, _receipt_dict(order))
+
+    return _serialize(order, detailed=True, payment_url=payment_url)
 
 
 @router.get("/coupons/{code}", response_model=CouponPreviewOut)
@@ -339,9 +408,37 @@ def order_detail(order_id: int, user: CurrentUser, db: DbSession):
     return _serialize(order, detailed=True, cancel_fee_preview=_late_cancel_fee(order, db))
 
 
+def _refund_paid_order(order: Order, fee: float) -> str | None:
+    """Settle the money side of cancelling a paid order. Returns a note for
+    the timeline when the settlement needs a human's eye, else None.
+
+    Card refunds go back to the card through Stripe (the total less any
+    kept fee); cash refunds are handed back in person or by transfer, so
+    only the status flips. A card order with no payment intent is demo
+    history from the old simulated branch — no money ever moved.
+    """
+    if order.payment_status != PaymentStatus.PAID.value:
+        return None  # nothing collected, nothing owed
+    refunded_status = (
+        PaymentStatus.PARTIALLY_REFUNDED.value if fee else PaymentStatus.REFUNDED.value
+    )
+    if order.payment_method == PaymentMethod.CARD.value and order.stripe_payment_intent_id:
+        try:
+            stripe_gateway.refund(
+                order.stripe_payment_intent_id,
+                stripe_gateway.cents(float(order.total)) - stripe_gateway.cents(fee),
+            )
+        except stripe_gateway.GatewayUnavailable:
+            # The cancellation stands; the money doesn't. Say so on the
+            # timeline rather than promising a refund that hasn't happened.
+            return "refund could not be sent — retry it from the Stripe dashboard"
+    order.payment_status = refunded_status
+    return None
+
+
 def _cancel_order(order: Order, db, *, by_customer: bool, comment: str | None = None) -> None:
     """One cancellation path for every caller: flip the status, settle the
-    refund, put the stock back and log the event.
+    money, put the stock back and log the event.
 
     Once the ovens have started the shop keeps a slice of the total — the
     percent is the admin's to tune (Settings, back of house). Bakery-side
@@ -351,10 +448,7 @@ def _cancel_order(order: Order, db, *, by_customer: bool, comment: str | None = 
 
     order.status = OrderStatus.CANCELLED.value
     order.cancel_fee = fee
-    if order.payment_status == PaymentStatus.PAID.value:
-        order.payment_status = (
-            PaymentStatus.PARTIALLY_REFUNDED.value if fee else PaymentStatus.REFUNDED.value
-        )
+    refund_note = _refund_paid_order(order, fee)
 
     # Return reserved stock
     for item in order.items:
@@ -368,6 +462,8 @@ def _cancel_order(order: Order, db, *, by_customer: bool, comment: str | None = 
     )
     if fee:
         text += f" — late-cancellation fee of ${fee:.2f} kept (baking had started)"
+    if refund_note:
+        text += f" — {refund_note}"
 
     db.add(OrderEvent(order_id=order.id, status=OrderStatus.CANCELLED.value, comment=text))
 

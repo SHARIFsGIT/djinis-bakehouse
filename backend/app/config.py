@@ -59,10 +59,14 @@ class Settings(BaseSettings):
     # (Render/Railway containers) so admin photos survive redeploys.
     uploads_dir: str = ""
 
-    # The simulated "pay by card" branch: checkout marks the order paid with
-    # no money moving. Fine for dev and demos; production refuses it until a
-    # real gateway is wired. CARD_PAYMENTS_ENABLED=true/false forces either way.
-    simulated_card_payments: bool | None = None
+    # Online card payments via Stripe's hosted Checkout. Set STRIPE_SECRET_KEY
+    # and the card option comes alive at checkout; leave it empty and the shop
+    # runs on cash on delivery alone. STRIPE_WEBHOOK_SECRET verifies the
+    # payment-confirmation webhook (create the endpoint in the Stripe
+    # dashboard to get one). Keys belong in the environment, never in code.
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_currency: str = "usd"
 
     # Auth rate limiting (per IP, sliding window)
     login_rate_limit: int = 10  # attempts per minute
@@ -81,14 +85,6 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env.strip().lower() == "production"
-
-    @property
-    def card_payments_enabled(self) -> bool:
-        """The simulated card branch runs only where no real money is at
-        stake: dev by default, production only with an explicit opt-in."""
-        if self.simulated_card_payments is not None:
-            return self.simulated_card_payments
-        return not self.is_production
 
     @property
     def demo_data_enabled(self) -> bool:

@@ -49,13 +49,29 @@ export default function OrderDetail() {
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [reordering, setReordering] = useState(false);
+  const [paying, setPaying] = useState(false);
 
   useEffect(() => {
     client
       .get(`/orders/${id}`)
-      .then(({ data }) => setOrder(data))
+      .then(({ data }) => {
+        setOrder(data);
+        // Back from Stripe with the payment in flight — reconcile with the
+        // gateway now so the page tells the truth without waiting on the
+        // webhook.
+        if (
+          params.get("placed") === "1" &&
+          data.payment_method === "card" &&
+          data.payment_status === "pending"
+        ) {
+          client
+            .post(`/payments/confirm/${id}`)
+            .then(({ data: fresh }) => setOrder(fresh))
+            .catch(() => {});
+        }
+      })
       .catch((e) => setError(apiError(e, "Order not found")));
-  }, [id]);
+  }, [id, params]);
 
   if (error) {
     return (
@@ -89,6 +105,20 @@ export default function OrderDetail() {
       toast.error(apiError(err));
     } finally {
       setCancelling(false);
+    }
+  };
+
+  // A card order that was placed but never paid gets a fresh Stripe link —
+  // the customer shouldn't have to rebuild the basket from scratch.
+  const completePayment = async () => {
+    if (paying) return;
+    setPaying(true);
+    try {
+      const { data } = await client.post(`/payments/${order.id}/session`);
+      window.location.assign(data.payment_url);
+    } catch (err) {
+      toast.error(apiError(err, "Couldn't open the payment page — try again"));
+      setPaying(false);
     }
   };
 
@@ -131,12 +161,14 @@ export default function OrderDetail() {
   return (
     <div>
       {params.get("placed") === "1" && (
-        <div className="alert alert-success animate-pop mb-6 shadow-md">
+        <div className={`alert animate-pop mb-6 shadow-md ${order.payment_status === "paid" ? "alert-success" : "alert-info"}`}>
           <div>
             <p className="font-bold">Order confirmed</p>
             <p className="text-sm">
               {order.payment_method === "card"
-                ? "Paid by card — your receipt was emailed to you."
+                ? order.payment_status === "paid"
+                  ? "Paid — your receipt was emailed to you."
+                  : "Payment is still landing — give it a moment, then check below."
                 : "Pay the courier at the door — cash only, please."}
             </p>
             <Link
@@ -145,6 +177,18 @@ export default function OrderDetail() {
             >
               View receipt
             </Link>
+          </div>
+        </div>
+      )}
+
+      {params.get("stripe") === "cancelled" && order.payment_status !== "paid" && (
+        <div className="alert alert-warning mb-6">
+          <div>
+            <p className="font-bold">You left the payment page before paying</p>
+            <p className="text-sm">
+              The order is saved — complete the payment below, or it cancels
+              itself and the stock goes back to the case.
+            </p>
           </div>
         </div>
       )}
@@ -300,6 +344,26 @@ export default function OrderDetail() {
               <p className="mt-3 rounded-box bg-base-100/70 p-3 text-xs italic opacity-80">“{order.note}”</p>
             )}
           </section>
+
+          {order.payment_method === "card" &&
+            order.payment_status === "pending" &&
+            order.status !== "cancelled" && (
+              <section className="rounded-box border border-dashed border-secondary/50 bg-secondary/5 p-5">
+                <p className="text-sm font-semibold">Payment not completed</p>
+                <p className="mt-1 text-xs opacity-70">
+                  This order is saved but not paid yet. If it stays unpaid, it
+                  cancels itself automatically and the stock goes back.
+                </p>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm mt-3 w-full text-secondary-content"
+                  onClick={completePayment}
+                  disabled={paying}
+                >
+                  {paying ? "Opening Stripe…" : "Complete payment"}
+                </button>
+              </section>
+            )}
 
           {order.can_be_cancelled && (
             <section className="rounded-box border border-dashed border-base-300 p-5">

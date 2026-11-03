@@ -12,16 +12,19 @@ os.environ["SEED_DEMO_DATA"] = "true"
 os.environ["LOGIN_RATE_LIMIT"] = "1000"
 os.environ["REGISTER_RATE_LIMIT"] = "1000"
 os.environ["FORGOT_RATE_LIMIT"] = "1000"
+# Card checkout runs through Stripe — the suite swaps the whole gateway for
+# a fake (below), but the key must exist so checkout considers it configured.
+os.environ["STRIPE_SECRET_KEY"] = "sk_test_fake_gateway"
+os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_fake"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import create_app  # noqa: E402
+from app import create_app, stripe_gateway  # noqa: E402
 from app.models import (  # noqa: E402
     DEFAULT_ANNOUNCEMENT,
     DEFAULT_HERO_IMAGE,
     DEFAULT_TODAY_NOTE,
 )
-from app.routers import orders as orders_module  # noqa: E402
 
 
 def remove_test_db():
@@ -38,6 +41,85 @@ remove_test_db()
 # whole test session instead of just one request.
 client = TestClient(create_app())
 client.__enter__()
+
+# --------------------------------------------------------------------------
+# The Stripe fake — no test ever talks to the real gateway
+# --------------------------------------------------------------------------
+
+# Everything the fake gateway was asked to do, for refund assertions.
+gateway_calls: list[tuple] = []
+# Live session state, shaped like Stripe's answer: session id -> dict.
+fake_sessions: dict[str, dict] = {}
+
+
+def fake_create_checkout_session(order, base_url):
+    session_id = f"cs_fake_{order.id}_{len(gateway_calls)}"
+    gateway_calls.append(("create_session", order.id, float(order.total)))
+    fake_sessions[session_id] = {
+        "id": session_id,
+        "status": "open",
+        "payment_status": "unpaid",
+        "payment_intent": None,
+    }
+    return {"id": session_id, "url": f"https://checkout.stripe.test/{session_id}"}
+
+
+def fake_retrieve_session(session_id):
+    session = fake_sessions.get(session_id)
+    if session is None:
+        raise stripe_gateway.GatewayUnavailable("unknown session")
+    return dict(session)
+
+
+def fake_refund(payment_intent, amount_cents):
+    gateway_calls.append(("refund", payment_intent, amount_cents))
+
+
+def fake_verify_webhook(payload, signature):
+    import json
+
+    if not signature:
+        raise stripe_gateway.BadSignature("missing signature header")
+    return json.loads(payload)
+
+
+stripe_gateway.create_checkout_session = fake_create_checkout_session
+stripe_gateway.retrieve_session = fake_retrieve_session
+stripe_gateway.refund = fake_refund
+stripe_gateway.verify_webhook = fake_verify_webhook
+
+
+def last_session_id(order_id: int) -> str:
+    """The newest fake session created for an order."""
+    ids = [sid for sid in fake_sessions if sid.startswith(f"cs_fake_{order_id}_")]
+    assert ids, f"no fake session was created for order {order_id}"
+    return sorted(ids, key=lambda s: int(s.rsplit("_", 1)[1]))[-1]
+
+
+def pay_order_via_webhook(order_id: int) -> None:
+    """Deliver Stripe's payment confirmation for an order's latest session."""
+    session_id = last_session_id(order_id)
+    fake_sessions[session_id].update(
+        status="complete", payment_status="paid", payment_intent=f"pi_fake_{order_id}"
+    )
+    session = dict(fake_sessions[session_id], metadata={"order_id": str(order_id)})
+    response = client.post(
+        "/api/payments/webhook",
+        json={"type": "checkout.session.completed", "data": {"object": session}},
+        headers={"stripe-signature": "t=1,v1=fake"},
+    )
+    assert response.status_code == 200
+
+
+def expire_order_via_webhook(order_id: int) -> None:
+    """Deliver the expiry event for an order's latest session."""
+    session = {"id": last_session_id(order_id), "metadata": {"order_id": str(order_id)}}
+    response = client.post(
+        "/api/payments/webhook",
+        json={"type": "checkout.session.expired", "data": {"object": session}},
+        headers={"stripe-signature": "t=1,v1=fake"},
+    )
+    assert response.status_code == 200
 
 
 def auth_header(token: str) -> dict:
@@ -753,7 +835,8 @@ def test_checkout_creates_order_and_decrements_stock():
     order = response.json()
 
     assert order["status"] == "pending"
-    assert order["payment_status"] == "paid"  # card pays instantly
+    assert order["payment_status"] == "pending"  # card settles when Stripe says so
+    assert order["payment_url"].startswith("https://checkout.stripe.test/")
     assert order["can_be_cancelled"] is True
     assert order["items"][0]["quantity"] == 2
 
@@ -770,13 +853,11 @@ def test_order_requires_authentication():
     assert response.status_code == 401
 
 
-def test_card_checkout_refused_when_cards_disabled(monkeypatch):
-    """Launching on cash only: with the simulated card branch off, a card
-    checkout is refused outright (before any address side effects) while
-    cash on delivery still lands."""
+def test_card_checkout_refused_until_stripe_is_configured(monkeypatch):
+    """No STRIPE_SECRET_KEY, no card option: the request is refused before
+    any address side effects, while cash on delivery still lands."""
     headers = auth_header(register_and_login(CUSTOMER["email"], CUSTOMER["password"]))
-    # A property on the Settings class — patch the class, not the instance
-    monkeypatch.setattr(type(orders_module.settings), "card_payments_enabled", False)
+    monkeypatch.setattr(stripe_gateway, "configured", lambda: False)
 
     refused = client.post("/api/orders", json=checkout_payload(), headers=headers)
     assert refused.status_code == 400
@@ -877,6 +958,10 @@ def test_order_listing_and_cancel():
     detail = client.get(f"/api/orders/{order_id}", headers=headers).json()
     assert detail["timeline"][0]["status"] == "pending"
 
+    # The newest order is a card order still awaiting its payment — let it
+    # land, then cancelling refunds it.
+    pay_order_via_webhook(order_id)
+
     stock_before = get_product("butter-croissant")["stock"]
     cancelled = client.post(f"/api/orders/{order_id}/cancel", headers=headers)
     assert cancelled.status_code == 200
@@ -898,8 +983,9 @@ def test_late_cancel_fee_when_baking():
     ).json()
     assert tuned["late_cancel_fee_percent"] == 25
 
-    # customer buys by card; the bakery moves it into the oven
+    # customer buys by card and pays; the bakery moves it into the oven
     order = client.post("/api/orders", json=checkout_payload(), headers=customer).json()
+    pay_order_via_webhook(order["id"])
     baking = client.put(
         f"/api/admin/orders/{order['id']}/status", json={"status": "baking"}, headers=admin
     )
@@ -915,16 +1001,21 @@ def test_late_cancel_fee_when_baking():
     assert cancelled["cancel_fee"] == fee
     assert cancelled["payment_status"] == "partially_refunded"
     assert "late-cancellation fee" in cancelled["timeline"][-1]["comment"]
+    # the refund actually went out: the total less the kept fee, in cents
+    expected_refund = int(round((order["total"] - fee) * 100))
+    assert ("refund", f"pi_fake_{order['id']}", expected_refund) in gateway_calls
 
     # a zero percent turns the penalty off entirely
     client.put("/api/admin/settings", json={"late_cancel_fee_percent": 0}, headers=admin)
     order2 = client.post("/api/orders", json=checkout_payload(), headers=customer).json()
+    pay_order_via_webhook(order2["id"])
     client.put(
         f"/api/admin/orders/{order2['id']}/status", json={"status": "baking"}, headers=admin
     )
     cancelled2 = client.post(f"/api/orders/{order2['id']}/cancel", headers=customer).json()
     assert cancelled2["cancel_fee"] == 0
     assert cancelled2["payment_status"] == "refunded"
+    assert ("refund", f"pi_fake_{order2['id']}", int(round(order2["total"] * 100))) in gateway_calls
 
     # settings are admin-only and the percent is range-checked
     assert client.get("/api/admin/settings").status_code == 401
@@ -954,6 +1045,7 @@ def test_admin_cancel_via_status_dial():
         json=checkout_payload(items=[{"product_id": product["id"], "quantity": 2}]),
         headers=customer,
     ).json()
+    pay_order_via_webhook(order["id"])
     assert get_product("fresh-bagels")["stock"] == before - 2
 
     cancelled = client.put(
@@ -964,6 +1056,8 @@ def test_admin_cancel_via_status_dial():
     assert body["status"] == "cancelled"
     assert body["payment_status"] == "refunded"  # card order, bakery-side cancel is free
     assert body["cancel_fee"] == 0
+    # the full amount went back to the card
+    assert ("refund", f"pi_fake_{order['id']}", int(round(order["total"] * 100))) in gateway_calls
     assert get_product("fresh-bagels")["stock"] == before
 
     # cancelling twice and reopening a cancelled order are both refused
@@ -979,6 +1073,160 @@ def test_admin_cancel_via_status_dial():
         ).status_code
         == 400
     )
+
+
+# --------------------------------------------------------------------------
+# Stripe payments
+# --------------------------------------------------------------------------
+
+def test_card_payment_lands_via_webhook_and_emails_receipt(caplog):
+    """The full card journey: placed unpaid with a Stripe link and no
+    receipt yet, then the webhook flips it paid and the receipt — an
+    honestly 'paid' one — goes out. Replaying the webhook changes nothing."""
+    import logging
+
+    headers = auth_header(login_customer())
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+        assert order["payment_status"] == "pending"
+        logged = "\n".join(r.getMessage() for r in caplog.records)
+        assert f"Receipt {order['order_number']}" not in logged  # not before the money
+
+        pay_order_via_webhook(order["id"])
+
+    paid = client.get(f"/api/orders/{order['id']}", headers=headers).json()
+    assert paid["payment_status"] == "paid"
+    assert any("Payment received" in e["comment"] for e in paid["timeline"])
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert f"Receipt {order['order_number']}" in logged
+    assert "Paid by Card — this email is your proof of purchase" in logged
+
+    # the webhook is idempotent — Stripe retries, the event must not double
+    events_before = len(paid["timeline"])
+    pay_order_via_webhook(order["id"])
+    replayed = client.get(f"/api/orders/{order['id']}", headers=headers).json()
+    assert replayed["payment_status"] == "paid"
+    assert len(replayed["timeline"]) == events_before
+
+
+def test_webhook_without_signature_is_rejected():
+    response = client.post(
+        "/api/payments/webhook",
+        json={"type": "checkout.session.completed", "data": {"object": {}}},
+    )
+    assert response.status_code == 400
+    assert "rejected" in response.json()["detail"].lower()
+
+
+def test_expired_session_cancels_order_and_restores_stock():
+    headers = auth_header(login_customer())
+    stock_before = get_product("butter-croissant")["stock"]
+    order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+
+    expire_order_via_webhook(order["id"])
+
+    detail = client.get(f"/api/orders/{order['id']}", headers=headers).json()
+    assert detail["status"] == "cancelled"
+    assert detail["payment_status"] == "pending"  # nothing was ever collected
+    assert "Payment window expired" in detail["timeline"][-1]["comment"]
+    assert get_product("butter-croissant")["stock"] == stock_before
+
+
+def test_confirm_syncs_payment_when_webhook_is_late():
+    """Back from Stripe, the order page reconciles with the gateway instead
+    of waiting on the webhook."""
+    headers = auth_header(login_customer())
+    order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    fake_sessions[last_session_id(order["id"])].update(
+        status="complete", payment_status="paid", payment_intent=f"pi_fake_{order['id']}"
+    )
+
+    confirmed = client.post(f"/api/payments/confirm/{order['id']}", headers=headers)
+    assert confirmed.status_code == 200
+    assert confirmed.json()["payment_status"] == "paid"
+
+    # a second confirm (page refresh) is a no-op, not an error
+    again = client.post(f"/api/payments/confirm/{order['id']}", headers=headers)
+    assert again.status_code == 200
+    assert again.json()["payment_status"] == "paid"
+
+
+def test_pay_again_replaces_session_and_old_expiry_is_ignored():
+    """A failed payment shouldn't mean a rebuilt basket: a fresh link is
+    issued for the same order, and only the current session's expiry may
+    cancel it."""
+    headers = auth_header(login_customer())
+    order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    first_session = last_session_id(order["id"])
+
+    fresh = client.post(f"/api/payments/{order['id']}/session", headers=headers)
+    assert fresh.status_code == 201
+    assert fresh.json()["payment_url"].startswith("https://checkout.stripe.test/")
+    assert last_session_id(order["id"]) != first_session
+
+    # the superseded session's expiry event must not cancel the order
+    stale_expiry = client.post(
+        "/api/payments/webhook",
+        json={
+            "type": "checkout.session.expired",
+            "data": {"object": {"id": first_session, "metadata": {"order_id": str(order["id"])}}},
+        },
+        headers={"stripe-signature": "t=1,v1=fake"},
+    )
+    assert stale_expiry.status_code == 200
+    assert client.get(f"/api/orders/{order['id']}", headers=headers).json()["status"] == "pending"
+
+    # the current session expiring does cancel it
+    expire_order_via_webhook(order["id"])
+    assert (
+        client.get(f"/api/orders/{order['id']}", headers=headers).json()["status"] == "cancelled"
+    )
+
+
+def test_unpaid_card_cancel_promises_nothing():
+    """Cancelling a card order that never collected money flips no refund
+    status and touches no gateway refund."""
+    headers = auth_header(login_customer())
+    order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    refunds_before = [c for c in gateway_calls if c[0] == "refund"]
+
+    cancelled = client.post(f"/api/orders/{order['id']}/cancel", headers=headers)
+    assert cancelled.status_code == 200
+    assert cancelled.json()["payment_status"] == "pending"
+    assert [c for c in gateway_calls if c[0] == "refund"] == refunds_before
+
+
+def test_refund_failure_keeps_payment_status_honest(monkeypatch):
+    """If Stripe can't take the refund, the order still cancels — but it
+    must not claim a refund that didn't happen."""
+    headers = auth_header(login_customer())
+    order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    pay_order_via_webhook(order["id"])
+
+    def broken_refund(payment_intent, amount_cents):
+        raise stripe_gateway.GatewayUnavailable("Stripe is down")
+
+    monkeypatch.setattr(stripe_gateway, "refund", broken_refund)
+    cancelled = client.post(f"/api/orders/{order['id']}/cancel", headers=headers).json()
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["payment_status"] == "paid"  # still the truth
+    assert "Stripe dashboard" in cancelled["timeline"][-1]["comment"]
+
+
+def test_storefront_advertises_card_payments():
+    """/api/store tells checkout whether the card option exists — with the
+    key configured it's true; with the key gone it's false."""
+    assert client.get("/api/store").json()["card_payments"] is True
+    # configured() reads settings at call time, so drop the key for a beat
+    from app.config import get_settings
+
+    settings = get_settings()
+    saved = settings.stripe_secret_key
+    settings.stripe_secret_key = ""
+    try:
+        assert client.get("/api/store").json()["card_payments"] is False
+    finally:
+        settings.stripe_secret_key = saved
 
 
 def test_storefront_copy_settings():

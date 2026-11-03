@@ -80,8 +80,11 @@ export function PrivacyPolicy() {
         <p>
           We use your information to bake and deliver your orders, to keep your
           account and address book working, to email order receipts and password
-          resets, and to send the newsletter if you asked for it. That is the
-          whole list. We never sell or rent your details to anyone.
+          resets, and to send the newsletter if you asked for it. Online card
+          payments are processed by Stripe as our payment service provider —
+          card details are entered on Stripe's own pages and never reach our
+          servers. That is the whole list. We never sell or rent your details
+          to anyone.
         </p>
       </Section>
 
@@ -134,8 +137,10 @@ export function TermsOfService() {
 
       <Section heading="Payment">
         <p>
-          Payment is taken as cash on delivery. Please have the amount ready
-          for the courier; our team marks the order paid once it is settled.
+          Whatever the checkout offers is what we take: card — paid online
+          through Stripe's secure checkout page, where your card details are
+          entered on Stripe's site and never touch ours — or cash on delivery,
+          settled with the courier at your door.
         </p>
       </Section>
 
@@ -203,9 +208,10 @@ export function RefundPolicy() {
 
       <Section heading="How money comes back to you">
         <p>
-          Orders on this site are paid in cash on delivery, so refunds are
-          returned in cash or by a transfer to an account you nominate —
-          arranged with you directly when the refund is agreed.
+          Card payments are refunded to the same card automatically — usually
+          within a few business days, the exact timing your bank's. Cash
+          payments are refunded in cash or by a transfer to an account you
+          nominate, arranged with you directly when the refund is agreed.
         </p>
       </Section>
     </LegalPage>

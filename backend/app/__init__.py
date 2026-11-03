@@ -16,7 +16,7 @@ from sqlalchemy import inspect, text
 
 from .config import get_settings
 from .database import Base, engine
-from .routers import admin, auth, content, marketing, orders, products
+from .routers import admin, auth, content, marketing, orders, payments, products
 from .security import DbSession
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -34,6 +34,8 @@ _ADDITIVE_COLUMNS = {
     },
     "orders": {
         "cancel_fee": "ALTER TABLE orders ADD COLUMN cancel_fee NUMERIC(10,2) NOT NULL DEFAULT 0",
+        "stripe_session_id": "ALTER TABLE orders ADD COLUMN stripe_session_id VARCHAR(255)",
+        "stripe_payment_intent_id": "ALTER TABLE orders ADD COLUMN stripe_payment_intent_id VARCHAR(255)",
     },
     "store_settings": {
         "announcement": "ALTER TABLE store_settings ADD COLUMN announcement VARCHAR(255)",
@@ -171,8 +173,8 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=f"{settings.bakery_name} API",
-        version="3.7.0",
-        description="Bakery e-commerce API — customers, catalog, orders, coupons, bulk enquiries, saved bakes, newsletter and admin.",
+        version="3.8.0",
+        description="Bakery e-commerce API — customers, catalog, orders, coupons, online payments (Stripe), bulk enquiries, saved bakes, newsletter and admin.",
         lifespan=lifespan,
         docs_url="/api/docs" if settings.enable_docs else None,
         redoc_url="/api/redoc" if settings.enable_docs else None,
@@ -248,6 +250,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(products.router)
     app.include_router(orders.router)
+    app.include_router(payments.router)
     app.include_router(admin.router)
     app.include_router(marketing.router)
     app.include_router(content.router)

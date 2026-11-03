@@ -31,6 +31,7 @@ from ..schemas import (
 from ..config import get_settings
 from ..notifications import notify_admin
 from ..security import CurrentAdmin, DbSession, client_key
+from .. import stripe_gateway
 
 router = APIRouter(prefix="/api", tags=["storefront"])
 
@@ -59,6 +60,7 @@ def storefront(db: DbSession):
         hero_image=settings.hero_image or DEFAULT_HERO_IMAGE,
         marquee=_marquee_lines(settings.marquee_items),
         demo_accounts=get_settings().demo_data_enabled,
+        card_payments=stripe_gateway.configured(),
         contact_address=settings.contact_address,
         contact_phone=settings.contact_phone,
         contact_email=settings.contact_email,

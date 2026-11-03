@@ -344,6 +344,12 @@ class Order(Base):
     postal_code: Mapped[str] = mapped_column(String(20))
     country: Mapped[str] = mapped_column(String(100))
 
+    # The Stripe trail on card orders: the checkout session that collected
+    # the money (the webhook's key back to this row) and the payment intent
+    # to refund against later. Both stay null on cash-on-delivery orders.
+    stripe_session_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    stripe_payment_intent_id: Mapped[str | None] = mapped_column(String(255))
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

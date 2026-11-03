@@ -137,10 +137,20 @@ each code can carry a minimum basket) take a percent off the subtotal once that
 minimum is met; tax is recalculated on the discounted amount. The seeder
 restores these codes on startup if they're ever deleted from the console,
 because the storefront copy promises them.
-Payment is cash on delivery, settled by staff when the order is marked delivered. (A
-simulated instant-"paid" card branch exists for dev and demos — production refuses
-it unless `CARD_PAYMENTS_ENABLED=true` is set; replace it with a real gateway such
-as Stripe before ever turning that on.) Free delivery over $50, tax and shipping
+Payment is cash on delivery (settled by staff when the order is marked delivered)
+plus — once Stripe is configured — **online card payments through Stripe's hosted
+Checkout**: the order is placed unpaid, the customer pays on Stripe's page (card
+details never touch this server, and 3-D Secure/SCA is handled there), and the
+`checkout.session.completed` webhook marks the order paid and emails the receipt.
+A synchronous confirm check runs when the customer returns so the page is correct
+even if the webhook is still in flight. Unpaid card orders can be paid again with
+a fresh link (`POST /api/payments/{id}/session`) and cancel themselves — stock
+restored — when their pay window expires. Cancelling a paid card order refunds
+the card through Stripe (the total less any late-cancellation fee); if the refund
+call fails, the timeline says so instead of pretending it happened. Set
+`STRIPE_SECRET_KEY` to turn the card option on (checkout offers cash only without
+it); `STRIPE_WEBHOOK_SECRET` verifies the webhook, `STRIPE_CURRENCY` (default
+`usd`) sets the charge currency. Free delivery over $50, tax and shipping
 calculated server-side.
 
 **Photo uploads** — admins add or replace a product's photo straight from the
@@ -155,7 +165,7 @@ profile page and in the admin user list, and can be removed with one click.
 frontend), profile & password management, an address book with default addresses.
 Orders keep a snapshot of the delivery address, so editing addresses later never
 changes past orders. Customers can cancel while an order is pending/confirmed/
-baking — stock is restored, pre-paid orders auto-refund, and cancelling after the
+baking — stock is restored, paid card orders auto-refund through Stripe, and cancelling after the
 ovens start keeps a late-cancellation fee the admin tunes under Settings
 (refunds pay back the total minus the fee; 0% turns it off). Customers can
 reorder a past box with one click.
@@ -322,12 +332,39 @@ hand-off). Keep it that way on GitHub/GitLab — the PaaS deploys track the
 `main` branch, and `backend/.env`, databases, `node_modules`, `dist/` and
 uploaded photos stay out of history via `.gitignore`.
 
+**Turning on online payments (Stripe)**
+
+The integration is live in code; it just needs keys. Rehearse in test mode
+first, then swap in live keys — the shop runs on cash on delivery until the
+secret key exists, so nothing breaks in the meantime.
+
+1. Create a Stripe account (standard, not Connect) and confirm the
+   business profile — payouts need it.
+2. In Render (or your `.env`), set `STRIPE_SECRET_KEY` to the **test**
+   secret key (`sk_test_…`, Developers → API keys). Card checkout appears
+   the moment it's set.
+3. In the Stripe dashboard (Developers → Webhooks → Add endpoint), point an
+   endpoint at `https://<your-domain>/api/payments/webhook` with the events
+   `checkout.session.completed`, `checkout.session.expired`,
+   `checkout.session.async_payment_succeeded`,
+   `checkout.session.async_payment_expired`. Copy its signing secret
+   (`whsec_…`) into `STRIPE_WEBHOOK_SECRET`.
+4. Buy something with a Stripe test card (`4242 4242 4242 4242`, any future
+   expiry, any CVC): the order should flip to paid and email the receipt;
+   abandoning the page instead should leave it payable from the order page
+   and auto-cancel it after 30 minutes.
+5. Happy? Switch both Render env vars to the **live** keys (`sk_live_…` and
+   the live webhook endpoint's secret) — and keep cash on delivery on too;
+   most German customers still like it.
+
+Notes: charges go out in `STRIPE_CURRENCY` (default `usd` — set `eur` when
+the catalog moves to euro prices); refunds on cancellation are issued
+through the gateway automatically; every gateway call lives behind
+`backend/app/stripe_gateway.py` so the rest of the app never imports the
+Stripe SDK.
+
 **Still to wire up for the real market**
 
-- Real payments: checkout runs on cash on delivery; a Stripe intent call
-  replaces the (dev-only, env-gated) simulated card branch when cards return.
-- Transactional email: set `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASSWORD`
-  (plus `SMTP_FROM`) and receipts and password resets go out — the sending
-  code is ready in `backend/app/email.py`.
+- Stripe live keys — rehearse with the test-mode walkthrough above first.
 - To refresh photography: drop new shots into `images/` and re-run
   `python scripts/prepare_images.py` (requires Pillow).

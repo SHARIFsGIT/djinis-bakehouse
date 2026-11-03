@@ -3,9 +3,11 @@
 # How to use:
 #   1. Push this repo to GitHub/GitLab.
 #   2. Render dashboard -> New -> Blueprint -> pick the repo.
-#   3. Render asks for the two "sync: false" values (ADMIN_EMAIL and
-#      ADMIN_PASSWORD) — that's the shop's first login. Everything else
-#      (SECRET_KEY, the Postgres URL) is created for you.
+#   3. Render asks for the "sync: false" values — ADMIN_EMAIL and
+#      ADMIN_PASSWORD are the shop's first login; the STRIPE_* keys come
+#      from the Stripe dashboard (optional: without them the shop runs on
+#      cash on delivery alone). Everything else (SECRET_KEY, the Postgres
+#      URL) is created for you.
 #   4. Deploy. Attach your domain in the service settings; TLS is automatic.
 #
 # Docs: https://render.com/docs/blueprint-spec
@@ -34,8 +36,10 @@ services:
           property: connectionString
       - key: SEED_DEMO_DATA
         value: "false" # catalog only — no demo customers, orders or reviews
-      - key: CARD_PAYMENTS_ENABLED
-        value: "false" # cash on delivery only — the card branch is simulated until a real gateway is wired
+      - key: STRIPE_SECRET_KEY
+        sync: false # from the Stripe dashboard — set it and card checkout goes live (leave empty for cash-only)
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false # signing secret of the webhook endpoint you create in the Stripe dashboard
       - key: ADMIN_EMAIL
         sync: false # you set this when the blueprint is applied
       - key: ADMIN_PASSWORD

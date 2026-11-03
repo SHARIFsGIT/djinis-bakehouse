@@ -1,4 +1,4 @@
-import { Banknote, Lock } from "lucide-react";
+import { Banknote, CreditCard, Lock } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import client, { apiError } from "../api/client";
@@ -51,6 +51,10 @@ export default function Checkout() {
   const [deliveryDate, setDeliveryDate] = useState("");
   const [note, setNote] = useState("");
   const [placing, setPlacing] = useState(false);
+  // Card appears only when the shop has Stripe configured (/api/store says
+  // so) — until then cash on delivery is the one honest option.
+  const [cardAvailable, setCardAvailable] = useState(false);
+  const [method, setMethod] = useState("cash_on_delivery");
 
   const [couponInput, setCouponInput] = useState("");
   const [coupon, setCoupon] = useState(null); // { code, percent_off, description, min_subtotal }
@@ -110,6 +114,17 @@ export default function Checkout() {
       .catch(() => setVouchers([]));
   }, []);
 
+  // Does this shop take cards? (Stripe configured = yes)
+  useEffect(() => {
+    client
+      .get("/store")
+      .then(({ data }) => {
+        setCardAvailable(Boolean(data.card_payments));
+        if (data.card_payments) setMethod("card");
+      })
+      .catch(() => setCardAvailable(false));
+  }, []);
+
   if (addresses === null) return <Loading label="Fetching your address book…" />;
 
   if (items.length === 0) {
@@ -146,7 +161,7 @@ export default function Checkout() {
     try {
       const payload = {
         items: items.map((i) => ({ product_id: i.product_id, quantity: i.quantity })),
-        payment_method: "cash_on_delivery",
+        payment_method: method,
       };
       if (mode === "saved" && addressId) payload.address_id = addressId;
       else payload.new_address = newAddress;
@@ -157,6 +172,12 @@ export default function Checkout() {
       const { data: order } = await client.post("/orders", payload);
       clear();
       storeCoupon(""); // the code was spent with the order
+      if (order.payment_url) {
+        // Card orders finish on Stripe's hosted page — card details never
+        // touch this site. Back here afterwards, the order page confirms.
+        window.location.assign(order.payment_url);
+        return;
+      }
       toast.success(`Order ${order.order_number} confirmed`);
       navigate(`/account/orders/${order.id}?placed=1`, { replace: true });
     } catch (err) {
@@ -280,14 +301,49 @@ export default function Checkout() {
               </div>
               <div>
                 <label className="label text-xs">Payment</label>
-                {/* Cash on delivery is the shop's one real payment rail — the
-                    card option returns when a genuine gateway is behind it. */}
-                <div className="flex items-center gap-3 rounded-xl border-2 border-secondary bg-secondary/10 p-3">
-                  <Banknote size={20} className="text-secondary" />
-                  <div>
-                    <p className="text-sm font-semibold">Cash on delivery</p>
-                    <p className="text-xs opacity-60">Pay the courier at your door</p>
-                  </div>
+                <div className="space-y-2">
+                  {cardAvailable && (
+                    <label
+                      className={`flex cursor-pointer items-center gap-3 rounded-xl border-2 p-3 transition ${
+                        method === "card"
+                          ? "border-secondary bg-secondary/10"
+                          : "border-base-300 hover:border-base-content/30"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="payment"
+                        className="radio radio-secondary radio-sm"
+                        checked={method === "card"}
+                        onChange={() => setMethod("card")}
+                      />
+                      <CreditCard size={20} className="shrink-0 text-secondary" />
+                      <div>
+                        <p className="text-sm font-semibold">Card — secure online payment</p>
+                        <p className="text-xs opacity-60">Pay now on Stripe's encrypted page</p>
+                      </div>
+                    </label>
+                  )}
+                  <label
+                    className={`flex cursor-pointer items-center gap-3 rounded-xl border-2 p-3 transition ${
+                      method === "cash_on_delivery"
+                        ? "border-secondary bg-secondary/10"
+                        : "border-base-300 hover:border-base-content/30"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="payment"
+                      className="radio radio-secondary radio-sm"
+                      checked={method === "cash_on_delivery"}
+                      onChange={() => setMethod("cash_on_delivery")}
+                    />
+                    <Banknote size={20} className="shrink-0 text-secondary" />
+                    <div>
+                      <p className="text-sm font-semibold">Cash on delivery</p>
+                      <p className="text-xs opacity-60">Pay the courier at your door</p>
+                    </div>
+                  </label>
                 </div>
               </div>
             </div>
@@ -397,11 +453,19 @@ export default function Checkout() {
             </div>
           </div>
           <button type="submit" className="btn btn-secondary btn-lg mt-6 w-full text-secondary-content" disabled={placing}>
-            {placing ? <span className="loading loading-spinner loading-sm" /> : "Place order"}
+            {placing ? (
+              <span className="loading loading-spinner loading-sm" />
+            ) : method === "card" ? (
+              `Pay ${money(total)}`
+            ) : (
+              "Place order"
+            )}
           </button>
           <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-xs opacity-60">
             <Lock size={16} className="shrink-0" />
-            Prices &amp; stock re-checked before baking
+            {method === "card"
+              ? "Card details are entered on Stripe's page, never here"
+              : "Prices & stock re-checked before baking"}
           </p>
         </aside>
       </form>
