@@ -31,8 +31,13 @@ _ADDITIVE_COLUMNS = {
         "avatar_url": "ALTER TABLE users ADD COLUMN avatar_url VARCHAR(255)",
         "reset_token_hash": "ALTER TABLE users ADD COLUMN reset_token_hash VARCHAR(64)",
         "reset_token_expires": "ALTER TABLE users ADD COLUMN reset_token_expires TIMESTAMP",
-        "login_token_hash": "ALTER TABLE users ADD COLUMN login_token_hash VARCHAR(64)",
-        "login_token_expires": "ALTER TABLE users ADD COLUMN login_token_expires TIMESTAMP",
+        "phone_otp_hash": "ALTER TABLE users ADD COLUMN phone_otp_hash VARCHAR(64)",
+        "phone_otp_expires": "ALTER TABLE users ADD COLUMN phone_otp_expires TIMESTAMP",
+        "phone_otp_created_at": "ALTER TABLE users ADD COLUMN phone_otp_created_at TIMESTAMP",
+        "phone_otp_attempts": "ALTER TABLE users ADD COLUMN phone_otp_attempts INTEGER NOT NULL DEFAULT 0",
+        "facebook_id": "ALTER TABLE users ADD COLUMN facebook_id VARCHAR(64)",
+        "login_code_hash": "ALTER TABLE users ADD COLUMN login_code_hash VARCHAR(64)",
+        "login_code_expires": "ALTER TABLE users ADD COLUMN login_code_expires TIMESTAMP",
     },
     "orders": {
         "cancel_fee": "ALTER TABLE orders ADD COLUMN cancel_fee NUMERIC(10,2) NOT NULL DEFAULT 0",
@@ -100,6 +105,8 @@ def create_limiters(settings) -> dict[str, SlidingWindowLimiter]:
         # Password reset — asking and redeeming share the same budget.
         "forgot": SlidingWindowLimiter(settings.forgot_rate_limit),
         "reset": SlidingWindowLimiter(settings.forgot_rate_limit),
+        # Phone sign-in codes — texts cost money, so the brake is tight.
+        "otp": SlidingWindowLimiter(settings.otp_rate_limit),
         # Public write endpoints — tighter than auth because one blast of
         # signups or catering leads is plenty for anyone.
         "newsletter": SlidingWindowLimiter(5),
@@ -175,8 +182,8 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=f"{settings.bakery_name} API",
-        version="3.9.0",
-        description="Bakery e-commerce API — customers, catalog, orders, coupons, online payments (Stripe), quick sign-in links, bulk enquiries with emailed replies, saved bakes, newsletter and admin.",
+        version="3.10.0",
+        description="Bakery e-commerce API — customers, catalog, orders, coupons, online payments (Stripe), email / phone-code / Facebook sign-in, bulk enquiries with emailed replies, saved bakes, newsletter and admin.",
         lifespan=lifespan,
         docs_url="/api/docs" if settings.enable_docs else None,
         redoc_url="/api/redoc" if settings.enable_docs else None,

@@ -1091,14 +1091,16 @@ def all_users(
         roll = [c for c in roll if c.loyalty == tier]
     if search:
         # Matched against name, email or phone — the things the baker
-        # actually knows about a regular.
+        # actually knows about a regular. Numbers compare digit-for-digit,
+        # so "555-0142" finds however the number was typed or stored.
         needle = search.strip().lower()
+        needle_digits = "".join(ch for ch in needle if ch.isdigit())
         roll = [
             c
             for c in roll
             if needle in c.email.lower()
             or needle in f"{c.first_name} {c.last_name}".lower()
-            or needle in (c.phone or "").lower()
+            or (needle_digits and needle_digits in (c.phone or ""))
         ]
     roll.sort(key=_USER_SORTS.get(sort, _USER_SORTS["spend"]), reverse=True)
     total = len(roll)

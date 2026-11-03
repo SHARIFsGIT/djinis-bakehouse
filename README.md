@@ -167,9 +167,13 @@ profile page and in the admin user list, and can be removed with one click.
 
 **Accounts** — email login with JWT access/refresh tokens (silent refresh in the
 frontend), profile & password management, an address book with default addresses.
-Forgetting the password is optional now, too: "Email me a one-tap sign-in
-link" sends a 15-minute, single-use link that signs straight in — the
-password stays untouched.
+Two more ways in, each appearing only when it's configured (never a dead button):
+**"Continue with Facebook"** (Facebook Login for the web — set `FACEBOOK_APP_ID` /
+`FACEBOOK_APP_SECRET`), and **phone sign-in** — a six-digit code texted to the
+number on the account (`TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` /
+`TWILIO_FROM_NUMBER`). Phone codes are single-use, valid 10 minutes, capped at
+five wrong tries, and rate-limited; Facebook handshakes never put tokens in a
+URL — the callback issues a one-time code the page exchanges server-side.
 Orders keep a snapshot of the delivery address, so editing addresses later never
 changes past orders. Customers can cancel while an order is pending/confirmed/
 baking — stock is restored, paid card orders auto-refund through Stripe, and cancelling after the
@@ -228,7 +232,7 @@ backend/
                      coming-soon)
   static/            product & site photos (generated, see scripts/);
                      uploads/ holds admin- and customer-added photos
-  tests/test_api.py  57 end-to-end API tests
+  tests/test_api.py  58 end-to-end API tests
 frontend/
   src/
     api/client.js    axios + token attach + silent refresh on 401
@@ -256,6 +260,8 @@ images/              original photography (source of truth for the pipeline)
 | `SERVE_FRONTEND_DIST`    | `true`                           | serve `frontend/dist` from FastAPI |
 | `ENABLE_DOCS`            | `true`                           | Swagger UI at `/api/docs`   |
 | `LOGIN_RATE_LIMIT` / `REGISTER_RATE_LIMIT` | 10 / 5 per minute per IP | brute-force brakes |
+| `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` | empty | "Continue with Facebook" — the button appears once both are set |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | empty | phone sign-in codes over SMS; all three together switch it on |
 | `SEED_DEMO_DATA`         | unset (dev yes, production no)   | demo customers/orders/reviews; production refuses `true` |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | empty                     | first admin on a fresh no-demo database (required then) |
 | `UPLOADS_DIR`            | empty (`static/uploads`)         | absolute path to a persistent disk on ephemeral platforms |
@@ -370,8 +376,31 @@ through the gateway automatically; every gateway call lives behind
 `backend/app/stripe_gateway.py` so the rest of the app never imports the
 Stripe SDK.
 
+**Turning on Facebook and phone sign-in**
+
+Both rails are live in code and appear the moment their keys exist — never
+before, so no customer ever sees a button that can't work.
+
+- *Facebook*: create an app at developers.facebook.com, add the Facebook
+  Login product, and under its settings put
+  `https://<your-domain>/api/auth/facebook/callback` in **Valid OAuth
+  Redirect URIs** (add `http://localhost:8000/api/auth/facebook/callback`
+  for local testing). Copy the App ID and App secret into
+  `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET`. Accounts are matched by
+  Facebook id, then by email — an existing customer who clicks it keeps
+  their whole order history, and the Facebook button never puts tokens in
+  a URL (the callback issues a one-time code the page exchanges).
+- *Phone*: sign up at twilio.com, buy or verify a sender number, and set
+  `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM_NUMBER`.
+  Customers then sign in with a six-digit code texted to the number on
+  their account (set at registration or in the profile). Codes are
+  single-use, good for ten minutes, capped at five wrong tries, and one
+  text per number per minute. In dev, with no Twilio keys, the code comes
+  back with the API response so the whole flow stays testable.
+
 **Still to wire up for the real market**
 
 - Stripe live keys — rehearse with the test-mode walkthrough above first.
+- Facebook app + Twilio number, if you want those sign-in rails live.
 - To refresh photography: drop new shots into `images/` and re-run
   `python scripts/prepare_images.py` (requires Pillow).

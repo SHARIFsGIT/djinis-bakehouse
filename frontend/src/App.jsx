@@ -12,6 +12,7 @@ import Checkout from "./pages/Checkout";
 import BulkOrder from "./pages/BulkOrder";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import SocialCallback from "./pages/SocialCallback";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import NotFound from "./pages/NotFound";
@@ -66,6 +67,7 @@ export default function App() {
           <Route path="bulk" element={<BulkOrder />} />
           <Route path="login" element={<Login />} />
           <Route path="register" element={<Register />} />
+          <Route path="auth/callback" element={<SocialCallback />} />
           <Route path="forgot-password" element={<ForgotPassword />} />
           <Route path="reset-password" element={<ResetPassword />} />
           <Route path="privacy" element={<PrivacyPolicy />} />

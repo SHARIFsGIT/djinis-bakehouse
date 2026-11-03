@@ -32,7 +32,7 @@ from ..config import get_settings
 from ..email import bulk_enquiry_ack_email, send_email
 from ..notifications import notify_admin
 from ..security import CurrentAdmin, DbSession, client_key
-from .. import stripe_gateway
+from .. import facebook_gateway, sms_gateway, stripe_gateway
 
 router = APIRouter(prefix="/api", tags=["storefront"])
 
@@ -62,6 +62,10 @@ def storefront(db: DbSession):
         marquee=_marquee_lines(settings.marquee_items),
         demo_accounts=get_settings().demo_data_enabled,
         card_payments=stripe_gateway.configured(),
+        facebook_login=facebook_gateway.configured(),
+        # Phone codes only need Twilio in production — in dev the code comes
+        # back with the response (dev_code), so the rail genuinely works.
+        phone_login=sms_gateway.configured() or not get_settings().is_production,
         contact_address=settings.contact_address,
         contact_phone=settings.contact_phone,
         contact_email=settings.contact_email,

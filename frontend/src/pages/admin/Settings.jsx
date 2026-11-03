@@ -16,7 +16,6 @@ import client, { apiError } from "../../api/client";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import { Loading } from "../../components/Loading";
 import { useToast } from "../../context/ToastContext";
-import { money } from "../../lib/format";
 import { shrinkImage } from "../../lib/imageResize";
 
 /** One card's heading — an icon in the shop's accent so each section of the
@@ -588,7 +587,6 @@ export default function Settings() {
     form.contact_phone !== (saved.contact_phone ?? "") ||
     form.contact_email !== (saved.contact_email ?? "") ||
     form.hours !== (saved.opening_hours ?? "");
-  const example = (40 * parsed) / 100; // a $40 box, for scale
 
   const save = async (part) => {
     setSaving(part);
@@ -780,6 +778,53 @@ export default function Settings() {
         </div>
       </section>
 
+      <ComingSoonManager />
+      <TestimonialsManager />
+
+      <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
+        <CardHead icon={Percent} title="Cancellation policy" />
+        <p className="mt-1 text-sm opacity-70">
+          Cancelling is free until an order goes into the oven.
+        </p>
+
+        <div className="mt-5 flex flex-wrap items-end gap-3">
+          <div className="min-w-48 flex-1">
+            <label
+              className="label mb-1.5 text-xs font-semibold"
+              htmlFor="cancel-fee"
+            >
+              Late-cancellation fee (% of order)
+            </label>
+            <input
+              id="cancel-fee"
+              type="number"
+              min="0"
+              max="100"
+              step="0.5"
+              required
+              className={
+                feeValid
+                  ? "input input-bordered w-full"
+                  : "input input-bordered input-error w-full"
+              }
+              value={form.fee}
+              onChange={(e) => setForm({ ...form, fee: e.target.value })}
+            />
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => save("fee")}
+            disabled={!feeDirty || saving !== ""}
+          >
+            {saving === "fee" ? "Saving…" : "Save policy"}
+          </button>
+          {feeDirty && (
+            <span className="pb-2 text-xs opacity-60">Unsaved change</span>
+          )}
+        </div>
+      </section>
+
       <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
         <CardHead icon={Clock} title="Contact & hours" />
 
@@ -853,59 +898,6 @@ export default function Settings() {
             {saving === "contact" ? "Saving…" : "Save contact"}
           </button>
           {contactDirty && <span className="text-xs opacity-60">Unsaved change</span>}
-        </div>
-      </section>
-
-      <ComingSoonManager />
-      <TestimonialsManager />
-
-      <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
-        <CardHead icon={Percent} title="Cancellation policy" />
-        <p className="mt-1 text-sm opacity-70">
-          Cancelling is free until an order goes into the oven.
-        </p>
-
-        <div className="mt-5 max-w-xs">
-          <label
-            className="label mb-1.5 text-xs font-semibold"
-            htmlFor="cancel-fee"
-          >
-            Late-cancellation fee (% of order)
-          </label>
-          <input
-            id="cancel-fee"
-            type="number"
-            min="0"
-            max="100"
-            step="0.5"
-            required
-            className={
-              feeValid
-                ? "input input-bordered w-full"
-                : "input input-bordered input-error w-full"
-            }
-            value={form.fee}
-            onChange={(e) => setForm({ ...form, fee: e.target.value })}
-          />
-          <p className="mt-1.5 text-xs opacity-60">
-            {feeValid && parsed > 0
-              ? `A cancelled $40 box keeps ${money(example)} · set 0 to turn it off`
-              : "Every cancellation is free, whenever it happens"}
-          </p>
-        </div>
-
-        <div className="mt-5 flex items-center gap-3">
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={() => save("fee")}
-            disabled={!feeDirty || saving !== ""}
-          >
-            {saving === "fee" ? "Saving…" : "Save policy"}
-          </button>
-          {feeDirty && (
-            <span className="text-xs opacity-60">Unsaved change</span>
-          )}
         </div>
       </section>
     </div>

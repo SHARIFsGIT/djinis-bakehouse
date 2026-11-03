@@ -1,5 +1,6 @@
 """Password hashing, JWT tokens and auth dependencies."""
 
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
@@ -65,6 +66,23 @@ def decode_token(token: str, expected_type: str = "access") -> dict | None:
     if payload.get("type") != expected_type:
         return None
     return payload
+
+
+def create_login_state() -> str:
+    """A signed, 10-minute nonce for the OAuth "state" parameter, so a
+    callback the shop didn't start (or one replayed after too long) is
+    rejected without keeping any server-side state."""
+    payload = {
+        "type": "social_state",
+        "jti": secrets.token_hex(8),
+        "iat": datetime.now(timezone.utc),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=10),
+    }
+    return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
+
+
+def verify_login_state(state: str) -> bool:
+    return decode_token(state, expected_type="social_state") is not None
 
 
 # --------------------------------------------------------------------------

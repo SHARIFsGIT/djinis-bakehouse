@@ -12,6 +12,7 @@ os.environ["SEED_DEMO_DATA"] = "true"
 os.environ["LOGIN_RATE_LIMIT"] = "1000"
 os.environ["REGISTER_RATE_LIMIT"] = "1000"
 os.environ["FORGOT_RATE_LIMIT"] = "1000"
+os.environ["OTP_RATE_LIMIT"] = "1000"
 # Card checkout runs through Stripe — the suite swaps the whole gateway for
 # a fake (below), but the key must exist so checkout considers it configured.
 os.environ["STRIPE_SECRET_KEY"] = "sk_test_fake_gateway"
@@ -350,36 +351,187 @@ def test_password_reset_flow():
     assert again.status_code == 400
 
 
-def test_quick_login_flow():
-    """One-tap sign-in links: ask by email, redeem once, password untouched."""
-    email, password = "quickly@example.com", "Quickly123!"
-    client.post(
-        "/api/auth/register",
-        json={"email": email, "password": password, "first_name": "Quinn", "last_name": "Lee"},
-    )
+def test_phone_login_flow(monkeypatch, caplog):
+    """Phone sign-in: texted one-shot codes, attempt counting, and numbers
+    that always store the one way they're compared."""
+    import logging
 
-    # Unknown and known emails get the same answer — no account probing.
-    unknown = client.post("/api/auth/quick-login", json={"email": "nobody@example.com"})
-    known = client.post("/api/auth/quick-login", json={"email": email})
+    from app.routers import auth as auth_router
+
+    email, password = "texter@example.com", "Texter123!"
+    registered = client.post(
+        "/api/auth/register",
+        json={
+            "email": email,
+            "password": password,
+            "first_name": "Tess",
+            "last_name": "Ting",
+            "phone": "+49 176 555 0144",
+        },
+    )
+    assert registered.status_code == 201
+    assert registered.json()["user"]["phone"] == "+491765550144"  # normalized on the way in
+
+    # A second account can't claim the same number, however it's spelled.
+    clash = client.post(
+        "/api/auth/register",
+        json={
+            "email": "copycat@example.com",
+            "password": "Copycat123!",
+            "first_name": "Copy",
+            "phone": "+491765550144",
+        },
+    )
+    assert clash.status_code == 409
+
+    # The dev store shows the phone rail (codes come back with the response).
+    assert client.get("/api/store").json()["phone_login"] is True
+
+    # Unknown and known numbers get the same answer — no account probing.
+    with caplog.at_level(logging.INFO, logger="bakery.sms"):
+        unknown = client.post("/api/auth/phone/request", json={"phone": "+49 176 555 0999"})
+        known = client.post("/api/auth/phone/request", json={"phone": "+491765550144"})
     assert unknown.status_code == known.status_code == 200
     assert unknown.json()["message"] == known.json()["message"]
-    assert "login_link" not in unknown.json()
+    assert "dev_code" not in unknown.json()
+    code = known.json().get("dev_code")
+    assert code and "sms to +491765550144" in " ".join(caplog.messages)
 
-    link = known.json().get("login_link", "")
-    assert link and "/login?token=" in link
-    token = link.split("token=")[1]
+    # An immediate repeat is quietly throttled — one text a minute per number.
+    assert "dev_code" not in client.post(
+        "/api/auth/phone/request", json={"phone": "+491765550144"}
+    ).json()
 
-    # A made-up token is refused; the real one signs straight in.
-    assert client.post("/api/auth/quick-login/redeem", json={"token": "x" * 43}).status_code == 400
-    redeemed = client.post("/api/auth/quick-login/redeem", json={"token": token})
-    assert redeemed.status_code == 200
-    assert client.get("/api/auth/me", headers=auth_header(redeemed.json()["access_token"])).status_code == 200
+    # A differently-spelled number with the + still finds the account;
+    # without the + it is simply not the same number.
+    monkeypatch.setattr(auth_router, "PHONE_RESEND_SECONDS", 0)  # past the throttle
+    code = client.post(
+        "/api/auth/phone/request", json={"phone": "+49 (176) 555-0144"}
+    ).json()["dev_code"]
+    assert code
+    assert "dev_code" not in client.post(
+        "/api/auth/phone/request", json={"phone": "01765550144"}
+    ).json()
 
-    # The password still works — a sign-in link is not a password change.
+    # Wrong codes are refused — the right one signs in, once.
+    assert client.post(
+        "/api/auth/phone/verify", json={"phone": "+491765550144", "code": "000000"}
+    ).status_code == 400
+    verified = client.post("/api/auth/phone/verify", json={"phone": "+491765550144", "code": code})
+    assert verified.status_code == 200
+    assert client.get("/api/auth/me", headers=auth_header(verified.json()["access_token"])).status_code == 200
+    assert client.post(
+        "/api/auth/phone/verify", json={"phone": "+491765550144", "code": code}
+    ).status_code == 400  # the code spent itself
+
+    # The password still works — a texted code is not a password change.
     assert client.post("/api/auth/login", json={"email": email, "password": password}).status_code == 200
 
-    # And the link is spent: a second redeem is refused.
-    assert client.post("/api/auth/quick-login/redeem", json={"token": token}).status_code == 400
+    # Five wrong tries burn a code; a fresh one signs straight back in.
+    second = client.post("/api/auth/phone/request", json={"phone": "+491765550144"}).json()
+    for guess in ("111111", "222222", "333333", "444444", "555555"):
+        refused = client.post(
+            "/api/auth/phone/verify", json={"phone": "+491765550144", "code": guess}
+        )
+        assert refused.status_code == 400
+    assert client.post(
+        "/api/auth/phone/verify", json={"phone": "+491765550144", "code": second["dev_code"]}
+    ).status_code == 400  # burned — even the right code no longer works
+    third = client.post("/api/auth/phone/request", json={"phone": "+491765550144"}).json()
+    assert client.post(
+        "/api/auth/phone/verify", json={"phone": "+491765550144", "code": third["dev_code"]}
+    ).status_code == 200
+
+    # Taking a number that belongs to another account is refused in the profile.
+    other_token = register_and_login("other@example.com", "Other123!")
+    claimed = client.put(
+        "/api/auth/me",
+        headers=auth_header(other_token),
+        json={"phone": "+49 176 555 0144"},
+    )
+    assert claimed.status_code == 400
+
+
+def test_facebook_login_flow(monkeypatch):
+    """Facebook sign-in: dialog start, callback handshake, one-time exchange."""
+    import urllib.parse
+
+    from app import facebook_gateway
+
+    # One fake handshake covers all the profiles the flow needs.
+    facebook_profiles = {
+        "code-falk": {"id": "fb-777", "name": "Falk Book", "email": "falk@example.com"},
+        "code-nomail": {"id": "fb-888", "name": "No Mail"},
+        "code-link": {"id": "fb-999", "name": "Link Ed", "email": "linked@example.com"},
+    }
+
+    def fake_exchange_code(code, redirect_uri):
+        assert code in facebook_profiles
+        assert redirect_uri.endswith("/api/auth/facebook/callback")
+        return f"token-{code}"
+
+    def fake_profile(access_token):
+        return dict(facebook_profiles[access_token[len("token-"):]])
+
+    monkeypatch.setattr(facebook_gateway, "exchange_code", fake_exchange_code)
+    monkeypatch.setattr(facebook_gateway, "fetch_profile", fake_profile)
+
+    # The rail is hidden until the app is configured — never a dead button.
+    monkeypatch.setattr(facebook_gateway, "configured", lambda: False)
+    assert client.get("/api/store").json()["facebook_login"] is False
+    monkeypatch.setattr(facebook_gateway, "configured", lambda: True)
+
+    def start_state() -> str:
+        url = client.get("/api/auth/facebook/start").json()["url"]
+        assert "facebook.com" in url and "dialog/oauth" in url
+        return urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["state"][0]
+
+    def callback(code, state):
+        return client.get(
+            "/api/auth/facebook/callback",
+            params={"code": code, "state": state},
+            follow_redirects=False,
+        )
+
+    # A declined dialog and a forged state are turned away at the door.
+    declined = client.get(
+        "/api/auth/facebook/callback", params={"error": "access_denied"}, follow_redirects=False
+    )
+    assert declined.status_code == 307 and "error=facebook_declined" in declined.headers["location"]
+    forged = callback("code-falk", "x" * 40)
+    assert forged.status_code == 307 and "error=facebook_state" in forged.headers["location"]
+    nomail = callback("code-nomail", start_state())
+    assert nomail.status_code == 307 and "error=facebook_no_email" in nomail.headers["location"]
+
+    def exchange_code_from(response) -> str:
+        assert response.status_code == 307
+        return urllib.parse.parse_qs(urllib.parse.urlparse(response.headers["location"]).query)[
+            "code"
+        ][0]
+
+    # The first handshake creates the account; the code buys one session.
+    one_time = exchange_code_from(callback("code-falk", start_state()))
+    session = client.post("/api/auth/exchange", json={"code": one_time})
+    assert session.status_code == 200
+    me = client.get("/api/auth/me", headers=auth_header(session.json()["access_token"])).json()
+    assert me["email"] == "falk@example.com" and me["first_name"] == "Falk"
+    assert client.post("/api/auth/exchange", json={"code": one_time}).status_code == 400  # single use
+
+    # Signing in again lands on the same account, with a fresh one-time code.
+    again = client.post("/api/auth/exchange", json={"code": exchange_code_from(callback("code-falk", start_state()))})
+    assert again.status_code == 200
+    assert again.json()["user"]["email"] == "falk@example.com"
+
+    # An existing email is linked, not duplicated — the customer keeps their history.
+    register_and_login("linked@example.com", "Linked123!")
+    linked = client.post("/api/auth/exchange", json={"code": exchange_code_from(callback("code-link", start_state()))})
+    assert linked.status_code == 200
+    assert linked.json()["user"]["email"] == "linked@example.com"
+    # The linked customer's Facebook id is on their one account now, so the
+    # email password still works alongside it.
+    assert client.post(
+        "/api/auth/login", json={"email": "linked@example.com", "password": "Linked123!"}
+    ).status_code == 200
 
 
 def test_addresses():

@@ -12,6 +12,26 @@ class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+def normalize_phone(value: str | None, *, required: bool = False) -> str | None:
+    """Store phone numbers the one way they'll be compared: digits with a
+    kept leading + — so "+49 176 555-0100" and "+491765550100" are the same
+    account at sign-in, but two differently-formatted spellings can never
+    sneak past a uniqueness check. Empty clears the field (None on the wire
+    still means "leave it alone")."""
+    if value is None:
+        return None
+    cleaned = value.strip()
+    plus = cleaned.startswith("+")
+    digits = "".join(ch for ch in cleaned if ch.isdigit())
+    if not digits:
+        if required:
+            raise ValueError("value should have 7 to 15 digits")
+        return ""
+    if not 7 <= len(digits) <= 15:
+        raise ValueError("value should have 7 to 15 digits, plus spaces/dashes if you like")
+    return ("+" if plus else "") + digits
+
+
 # --------------------------------------------------------------------------
 # Auth
 # --------------------------------------------------------------------------
@@ -24,6 +44,11 @@ class RegisterRequest(BaseModel):
     # customers have a single name to give.
     last_name: str = Field(default="", max_length=100)
     phone: str | None = Field(default=None, max_length=30)
+
+    @field_validator("phone")
+    @classmethod
+    def _normalize(cls, value: str | None) -> str | None:
+        return normalize_phone(value)
 
 
 class LoginRequest(BaseModel):
@@ -49,16 +74,33 @@ class ResetPasswordRequest(BaseModel):
     password: str = Field(min_length=8, max_length=72)
 
 
-class QuickLoginRequest(BaseModel):
-    """Ask for a one-tap sign-in link by email — no password involved."""
+class PhoneLoginRequest(BaseModel):
+    """Ask for a texted sign-in code — no password involved."""
 
-    email: EmailStr
+    phone: str = Field(min_length=7, max_length=30)
+
+    @field_validator("phone")
+    @classmethod
+    def _normalize(cls, value: str) -> str:
+        return normalize_phone(value, required=True)
 
 
-class QuickLoginRedeem(BaseModel):
-    """The token from a sign-in link, traded straight for tokens."""
+class PhoneLoginVerify(BaseModel):
+    """The six-digit code from the text, traded straight for tokens."""
 
-    token: str = Field(min_length=10)
+    phone: str = Field(min_length=7, max_length=30)
+    code: str = Field(pattern=r"^\d{6}$")
+
+    @field_validator("phone")
+    @classmethod
+    def _normalize(cls, value: str) -> str:
+        return normalize_phone(value, required=True)
+
+
+class LoginCodeExchange(BaseModel):
+    """The one-time code a social callback handed the browser."""
+
+    code: str = Field(min_length=10)
 
 
 class UserOut(ORMModel):
@@ -77,6 +119,11 @@ class UserUpdateRequest(BaseModel):
     first_name: str | None = Field(default=None, min_length=1, max_length=100)
     last_name: str | None = Field(default=None, min_length=1, max_length=100)
     phone: str | None = Field(default=None, max_length=30)
+
+    @field_validator("phone")
+    @classmethod
+    def _normalize(cls, value: str | None) -> str | None:
+        return normalize_phone(value)
 
 
 class TokenResponse(BaseModel):
@@ -341,13 +388,17 @@ class StorefrontOut(BaseModel):
     on this deployment (dev yes, a real production database no). The contact
     lines feed the footer; None means the baker hasn't filled them in yet.
     card_payments tells checkout whether the online-card option exists (it
-    appears the moment STRIPE_SECRET_KEY is configured)."""
+    appears the moment STRIPE_SECRET_KEY is configured), and
+    facebook_login / phone_login tell it which extra sign-in rails are live
+    — a rail with no keys behind it never shows a customer a dead button."""
     announcement: str
     today_note: str
     hero_image: str
     marquee: list[str] = []
     demo_accounts: bool = False
     card_payments: bool = False
+    facebook_login: bool = False
+    phone_login: bool = False
     contact_address: str | None = None
     contact_phone: str | None = None
     contact_email: str | None = None

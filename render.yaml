@@ -40,6 +40,16 @@ services:
         sync: false # from the Stripe dashboard — set it and card checkout goes live (leave empty for cash-only)
       - key: STRIPE_WEBHOOK_SECRET
         sync: false # signing secret of the webhook endpoint you create in the Stripe dashboard
+      - key: FACEBOOK_APP_ID
+        sync: false # from developers.facebook.com — set with the secret and "Continue with Facebook" appears on the login page
+      - key: FACEBOOK_APP_SECRET
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false # all three together switch on phone sign-in codes (SMS via Twilio)
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false # the Twilio number the texts come from, e.g. +15005550100
       - key: ADMIN_EMAIL
         sync: false # you set this when the blueprint is applied
       - key: ADMIN_PASSWORD

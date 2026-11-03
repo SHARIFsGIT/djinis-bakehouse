@@ -160,6 +160,9 @@ export default function Profile() {
               value={form.phone}
               onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
             />
+            <p className="mt-1 text-xs opacity-60">
+              Saves with the country code — “+49 176 …” — so it works for phone sign-in.
+            </p>
           </div>
           <button type="submit" className="btn btn-primary btn-sm" disabled={savingProfile}>
             {savingProfile ? "Saving…" : "Save changes"}

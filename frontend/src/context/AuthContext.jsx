@@ -48,9 +48,16 @@ export function AuthProvider({ children }) {
     [applyTokens]
   );
 
-  // Redeem a one-tap sign-in link (the "Email me a sign-in link" flow).
-  const loginWithToken = useCallback(
-    async (token) => applyTokens((await client.post("/auth/quick-login/redeem", { token })).data),
+  // Phone sign-in: the code that was texted to the number.
+  const phoneLogin = useCallback(
+    async (phone, code) =>
+      applyTokens((await client.post("/auth/phone/verify", { phone, code })).data),
+    [applyTokens]
+  );
+
+  // The one-time code a social callback handed back (Facebook sign-in).
+  const exchangeLoginCode = useCallback(
+    async (code) => applyTokens((await client.post("/auth/exchange", { code })).data),
     [applyTokens]
   );
 
@@ -77,7 +84,8 @@ export function AuthProvider({ children }) {
         ready,
         isAdmin: user?.role === "admin",
         login,
-        loginWithToken,
+        phoneLogin,
+        exchangeLoginCode,
         register,
         logout,
         refreshUser,

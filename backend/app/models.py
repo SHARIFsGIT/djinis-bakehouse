@@ -68,10 +68,19 @@ class User(Base):
     # so a stolen database can't reset anyone's password.
     reset_token_hash: Mapped[str | None] = mapped_column(String(64))
     reset_token_expires: Mapped[datetime | None] = mapped_column(DateTime)
-    # Quick sign-in links ("email me a one-tap login") — same one-shot shape
-    # as the reset pair, separate columns so the two flows never collide.
-    login_token_hash: Mapped[str | None] = mapped_column(String(64))
-    login_token_expires: Mapped[datetime | None] = mapped_column(DateTime)
+    # Phone sign-in: a one-shot texted code (digest only, so a stolen
+    # database can't sign anyone in) plus its attempt ledger.
+    phone_otp_hash: Mapped[str | None] = mapped_column(String(64))
+    phone_otp_expires: Mapped[datetime | None] = mapped_column(DateTime)
+    phone_otp_created_at: Mapped[datetime | None] = mapped_column(DateTime)
+    phone_otp_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # "Continue with Facebook": Facebook's user id for an account linked
+    # through the Login dialog. None = the customer signs in another way.
+    facebook_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    # One-time code handed to the SPA after a social callback (60 s, single
+    # use, digest only) — real tokens never ride in a URL.
+    login_code_hash: Mapped[str | None] = mapped_column(String(64))
+    login_code_expires: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     addresses: Mapped[list["Address"]] = relationship(

@@ -68,10 +68,24 @@ class Settings(BaseSettings):
     stripe_webhook_secret: str = ""
     stripe_currency: str = "usd"
 
+    # "Continue with Facebook" — Facebook Login for the web. Set the App ID
+    # and secret from the app's dashboard and the button appears on the login
+    # page; leave them empty and email/phone login carry the shop alone.
+    facebook_app_id: str = ""
+    facebook_app_secret: str = ""
+    facebook_api_version: str = "v23.0"  # Graph pin — bump when Facebook retires it
+
+    # Phone sign-in codes over SMS, sent through Twilio. All three together
+    # switch it on; empty means log-only (dev never fails to send).
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_from_number: str = ""
+
     # Auth rate limiting (per IP, sliding window)
     login_rate_limit: int = 10  # attempts per minute
     register_rate_limit: int = 5  # accounts per minute
     forgot_rate_limit: int = 5  # reset asks + redemptions per minute
+    otp_rate_limit: int = 5  # sign-in-code asks per minute
 
     # Outgoing email (password resets today; newsletters and marketing later).
     # Empty SMTP_HOST = the log-only fallback: messages are logged with their
