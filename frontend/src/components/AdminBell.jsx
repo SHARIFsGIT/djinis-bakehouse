@@ -22,6 +22,22 @@ export default function AdminBell() {
   const navigate = useNavigate();
   const [board, setBoard] = useState({ items: [], unread_count: 0 });
   const timer = useRef(null);
+  const bellRef = useRef(null);
+  // Where a phone-sized panel hangs from: just under the bell, measured when
+  // it opens. The announcement bar above the navbar can appear or clear, so
+  // the offset can't be a constant. Desktop never reads this variable.
+  const [sheetTop, setSheetTop] = useState(undefined);
+
+  const measure = useCallback(() => {
+    const rect = bellRef.current?.getBoundingClientRect();
+    if (rect) setSheetTop(`${Math.round(rect.bottom + 8)}px`);
+  }, []);
+
+  useEffect(() => {
+    // A rotated phone or a resized window moves the bell — keep the sheet true.
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [measure]);
 
   const refresh = useCallback(() => {
     client
@@ -60,6 +76,8 @@ export default function AdminBell() {
       <button
         type="button"
         tabIndex={0}
+        ref={bellRef}
+        onFocus={measure}
         className="btn btn-ghost btn-square relative"
         aria-label={`Notifications, ${board.unread_count} unread`}
       >
@@ -71,9 +89,13 @@ export default function AdminBell() {
         )}
       </button>
 
+      {/* On phones the 22rem panel is wider than the viewport, so it detaches
+          from the anchor and hangs as a fixed sheet from just under the bell —
+          measured, because the announcement bar above can come and go. */}
       <div
         tabIndex={0}
-        className="dropdown-content z-50 mt-2 w-88 rounded-box bg-base-100 shadow-xl ring-1 ring-base-300/70"
+        style={{ "--bell-top": sheetTop }}
+        className="dropdown-content z-50 mt-2 w-88 rounded-box bg-base-100 shadow-xl ring-1 ring-base-300/70 max-sm:fixed max-sm:inset-x-3 max-sm:top-[var(--bell-top,5.5rem)] max-sm:mt-0 max-sm:w-auto"
       >
         <div className="flex items-center justify-between border-b border-base-300/60 px-4 py-3">
           <p className="font-display font-semibold">The desk bell</p>
@@ -88,7 +110,7 @@ export default function AdminBell() {
           )}
         </div>
 
-        <ul className="max-h-96 overflow-y-auto">
+        <ul className="max-h-96 overflow-y-auto max-sm:max-h-[calc(100dvh-var(--bell-top,5.5rem)-4.5rem)]">
           {board.items.length === 0 && (
             <li className="px-4 py-8 text-center text-sm opacity-55">
               All caught up — the shop is quiet.
