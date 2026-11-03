@@ -230,6 +230,11 @@ def update_shop_settings(payload: StoreSettingsUpdate, admin: CurrentAdmin, db: 
     for field in ("contact_address", "contact_phone", "contact_email", "opening_hours"):
         value = getattr(payload, field)
         if value is not None:
+            if field == "contact_email" and value.strip() and "@" not in value:
+                raise HTTPException(
+                    status_code=400,
+                    detail="That contact email doesn't look right — check the spelling",
+                )
             # Empty clears the line — an unset detail never shows a placeholder
             setattr(settings, field, value.strip() or None)
     db.commit()

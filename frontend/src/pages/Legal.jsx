@@ -1,9 +1,36 @@
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
+import client from "../api/client";
 
 /* The shop's legal pages. Written to match how the site actually behaves —
  * cash on delivery, free cancellation until baking starts, allergens on
  * every product page — so nothing here over-promises. Review before launch
  * and whenever local rules change. */
+
+function useContactEmail() {
+  // The baker's real contact email from Settings, when it's been filled in —
+  // until then these pages point at the footer instead of promising a
+  // mailbox that may not exist yet.
+  const [email, setEmail] = useState(null);
+  useEffect(() => {
+    client
+      .get("/store")
+      .then(({ data }) => setEmail(data.contact_email || null))
+      .catch(() => setEmail(null));
+  }, []);
+  return email;
+}
+
+function ReachUs({ email }) {
+  if (email) {
+    return (
+      <>reach us at{" "}
+        <a href={`mailto:${email}`} className="link link-secondary">{email}</a></>
+    );
+  }
+  return <>reach us through the contact details in the{" "}
+    <Link to="/" className="link link-secondary">site footer</Link></>;
+}
 
 function LegalPage({ eyebrow, title, updated, children }) {
   return (
@@ -32,6 +59,7 @@ function Section({ heading, children }) {
 const UPDATED = "November 2026";
 
 export function PrivacyPolicy() {
+  const contactEmail = useContactEmail();
   return (
     <LegalPage eyebrow="The paperwork" title="Privacy policy" updated={UPDATED}>
       <p>
@@ -78,9 +106,10 @@ export function PrivacyPolicy() {
         <p>
           You can correct or delete your account details from your{" "}
           <Link to="/account/profile" className="link link-secondary">profile page</Link>,
-          unsubscribe from the newsletter using the link in any email, and ask
-          us to close your account at any time — reach us through the contact
-          details in the <Link to="/" className="link link-secondary">site footer</Link>.
+          unsubscribe from the newsletter at any time — a reply to any of our
+          emails or a quick message takes you off the list — and ask us to
+          close your account whenever you like. Questions or requests?{" "}
+          <ReachUs email={contactEmail} />
         </p>
       </Section>
     </LegalPage>
@@ -150,6 +179,7 @@ export function TermsOfService() {
 }
 
 export function RefundPolicy() {
+  const contactEmail = useContactEmail();
   return (
     <LegalPage eyebrow="The paperwork" title="Refunds & cancellations" updated={UPDATED}>
       <Section heading="Cancelling an order">
@@ -164,8 +194,8 @@ export function RefundPolicy() {
 
       <Section heading="Something wrong with the box?">
         <p>
-          If an item is missing, wrong or not right when it arrives, contact us
-          within 24 hours through the details in the site footer. We will
+          If an item is missing, wrong or not right when it arrives,{" "}
+          <ReachUs email={contactEmail} /> within 24 hours. We will
           replace the item or refund it — your choice. Because we are talking
           about fresh food, we may ask for a photo of the problem.
         </p>

@@ -8,7 +8,7 @@ import random
 from datetime import date, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from ..config import get_settings
 from ..email import send_order_receipt
@@ -220,6 +220,20 @@ def checkout(payload: CheckoutRequest, user: CurrentUser, db: DbSession, backgro
 
     for product_id, quantity in merged.items():
         product = by_id[product_id]
+        # Atomic decrement: two shoppers reaching the last box at once must
+        # not both take it — the availability check above is advisory under
+        # concurrency, this is the one that counts.
+        result = db.execute(
+            update(Product)
+            .where(Product.id == product_id, Product.stock >= quantity)
+            .values(stock=Product.stock - quantity)
+        )
+        if result.rowcount == 0:
+            # The uncommitted order and address roll back with this raise
+            raise HTTPException(
+                status_code=400,
+                detail=f"Only {product.stock} left of {product.name}",
+            )
         db.add(
             OrderItem(
                 order_id=order.id,
@@ -231,7 +245,6 @@ def checkout(payload: CheckoutRequest, user: CurrentUser, db: DbSession, backgro
                 subtotal=round(product.current_price * quantity, 2),
             )
         )
-        product.stock -= quantity
 
     db.add(OrderEvent(order_id=order.id, status=OrderStatus.PENDING.value, comment="Order placed"))
     # Same transaction as the order itself — the bell can't announce a sale
