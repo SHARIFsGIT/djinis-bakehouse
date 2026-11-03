@@ -5,7 +5,7 @@ import csv
 import io
 from datetime import date, timedelta
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
@@ -29,6 +29,7 @@ from ..schemas import (
     SubscriberOut,
 )
 from ..config import get_settings
+from ..email import bulk_enquiry_ack_email, send_email
 from ..notifications import notify_admin
 from ..security import CurrentAdmin, DbSession, client_key
 from .. import stripe_gateway
@@ -88,7 +89,9 @@ def subscribe(payload: NewsletterRequest, db: DbSession, request: Request, respo
 
 
 @router.post("/bulk-orders", response_model=BulkEnquiryOut, status_code=status.HTTP_201_CREATED)
-def create_bulk_enquiry(payload: BulkEnquiryCreate, db: DbSession, request: Request):
+def create_bulk_enquiry(
+    payload: BulkEnquiryCreate, db: DbSession, request: Request, background: BackgroundTasks
+):
     """A catering lead from the public "Bulk order" page.
 
     Open to guests — a wedding planner shouldn't need an account to ask about
@@ -110,7 +113,7 @@ def create_bulk_enquiry(payload: BulkEnquiryCreate, db: DbSession, request: Requ
     enquiry = BulkEnquiry(
         name=payload.name.strip(),
         email=payload.email.lower(),
-        phone=payload.phone,
+        phone=payload.phone.strip(),
         event_date=payload.event_date,
         event_type=payload.event_type,
         guests=payload.guests,
@@ -124,12 +127,24 @@ def create_bulk_enquiry(payload: BulkEnquiryCreate, db: DbSession, request: Requ
         db,
         kind="enquiry",
         title=f"Bulk enquiry from {enquiry.name} — {enquiry.event_date:%b %d}",
-        body=f"{enquiry.guests} guests · {enquiry.email}",
+        body=f"{enquiry.guests} guests · {enquiry.email} · {enquiry.phone}",
         # Straight to the enquiry rail — the Orders tab itself shows no leads
         link="/admin/orders?tab=bulk",
     )
     db.commit()
     db.refresh(enquiry)
+    # The asker gets the same news the desk did — their enquiry landed and
+    # an answer is coming. Plain values only: the task runs after the
+    # session that loaded `enquiry` has closed.
+    ack = bulk_enquiry_ack_email(
+        {
+            "name": enquiry.name,
+            "event_type": enquiry.event_type,
+            "event_date": f"{enquiry.event_date:%d %B %Y}",
+            "guests": enquiry.guests,
+        }
+    )
+    background.add_task(send_email, enquiry.email, *ack)
     return enquiry
 
 

@@ -8,7 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFi
 from sqlalchemy import select
 
 from ..config import get_settings
-from ..email import reset_password_email, send_email
+from ..email import quick_login_email, reset_password_email, send_email
 from ..models import Address, User, utcnow
 from ..notifications import notify_admin
 from ..schemas import (
@@ -19,6 +19,8 @@ from ..schemas import (
     ForgotPasswordRequest,
     LoginRequest,
     PasswordChangeRequest,
+    QuickLoginRedeem,
+    QuickLoginRequest,
     RefreshRequest,
     RegisterRequest,
     ResetPasswordRequest,
@@ -44,6 +46,9 @@ settings = get_settings()
 
 # How long an emailed reset link stays usable.
 RESET_TOKEN_MINUTES = 30
+# Sign-in links live shorter than resets — enough to walk to your phone,
+# not long enough to be forwarded around.
+LOGIN_LINK_MINUTES = 15
 
 
 def _check_rate_limit(request: Request, name: str) -> None:
@@ -158,6 +163,64 @@ def reset_password(payload: ResetPasswordRequest, db: DbSession, request: Reques
     user.token_version += 1
     db.commit()
     return {"message": "Password updated — log in with the new one."}
+
+
+@router.post("/quick-login")
+def quick_login(
+    payload: QuickLoginRequest, db: DbSession, request: Request, background: BackgroundTasks
+):
+    """Email the account a one-tap sign-in link.
+
+    Same shape as forgot-password, deliberately: the answer is identical
+    whether or not the email belongs to an account, and it shares the
+    "forgot" rate budget — both are "email a link to this address" asks, so
+    one brake covers both.
+    """
+    _check_rate_limit(request, "forgot")
+    message = {
+        "message": f"If that email is with us, a sign-in link is on its way — "
+        f"it works once, for {LOGIN_LINK_MINUTES} minutes."
+    }
+    user = db.scalar(
+        select(User).where(User.email == payload.email.lower(), User.is_active.is_(True))
+    )
+    if user is None:
+        return message
+
+    token = secrets.token_urlsafe(32)
+    user.login_token_hash = hashlib.sha256(token.encode()).hexdigest()
+    user.login_token_expires = utcnow() + timedelta(minutes=LOGIN_LINK_MINUTES)
+    db.commit()
+
+    link = f"{str(request.base_url).rstrip('/')}/login?token={token}"
+    subject, html, text = quick_login_email(user.first_name, link, LOGIN_LINK_MINUTES)
+    background.add_task(send_email, user.email, subject, html, text)
+    if not settings.is_production:
+        message["login_link"] = link
+    return message
+
+
+@router.post("/quick-login/redeem", response_model=TokenResponse)
+def quick_login_redeem(payload: QuickLoginRedeem, db: DbSession, request: Request):
+    """Turn a sign-in link into a session. Single-use; the password is
+    untouched, so existing logins keep working."""
+    _check_rate_limit(request, "login")
+    digest = hashlib.sha256(payload.token.encode()).hexdigest()
+    user = db.scalar(select(User).where(User.login_token_hash == digest))
+    if (
+        user is None
+        or not user.is_active
+        or user.login_token_expires is None
+        or user.login_token_expires <= utcnow()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="This sign-in link is invalid or has expired — request a fresh one.",
+        )
+    user.login_token_hash = None
+    user.login_token_expires = None
+    db.commit()
+    return _token_response(user)
 
 
 @router.post("/refresh", response_model=AccessTokenResponse)

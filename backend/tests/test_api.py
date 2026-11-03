@@ -350,6 +350,38 @@ def test_password_reset_flow():
     assert again.status_code == 400
 
 
+def test_quick_login_flow():
+    """One-tap sign-in links: ask by email, redeem once, password untouched."""
+    email, password = "quickly@example.com", "Quickly123!"
+    client.post(
+        "/api/auth/register",
+        json={"email": email, "password": password, "first_name": "Quinn", "last_name": "Lee"},
+    )
+
+    # Unknown and known emails get the same answer — no account probing.
+    unknown = client.post("/api/auth/quick-login", json={"email": "nobody@example.com"})
+    known = client.post("/api/auth/quick-login", json={"email": email})
+    assert unknown.status_code == known.status_code == 200
+    assert unknown.json()["message"] == known.json()["message"]
+    assert "login_link" not in unknown.json()
+
+    link = known.json().get("login_link", "")
+    assert link and "/login?token=" in link
+    token = link.split("token=")[1]
+
+    # A made-up token is refused; the real one signs straight in.
+    assert client.post("/api/auth/quick-login/redeem", json={"token": "x" * 43}).status_code == 400
+    redeemed = client.post("/api/auth/quick-login/redeem", json={"token": token})
+    assert redeemed.status_code == 200
+    assert client.get("/api/auth/me", headers=auth_header(redeemed.json()["access_token"])).status_code == 200
+
+    # The password still works — a sign-in link is not a password change.
+    assert client.post("/api/auth/login", json={"email": email, "password": password}).status_code == 200
+
+    # And the link is spent: a second redeem is refused.
+    assert client.post("/api/auth/quick-login/redeem", json={"token": token}).status_code == 400
+
+
 def test_addresses():
     token = register_and_login("addr@example.com", "Address123!")
     headers = auth_header(token)
@@ -547,6 +579,7 @@ def test_bakers_bell_notifications():
         json={
             "name": "Bell Tester",
             "email": "bell@example.com",
+            "phone": "+1 503 555 0199",
             "event_date": (datetime.date.today() + datetime.timedelta(days=14)).isoformat(),
             "event_type": "birthday",
             "guests": 20,
@@ -1671,8 +1704,9 @@ def test_coupon_min_subtotal_enforced():
     assert order["discount_amount"] == round(order["subtotal"] * 0.15, 2)
 
 
-def test_bulk_enquiry_flow():
+def test_bulk_enquiry_flow(caplog):
     import datetime
+    import logging
 
     tomorrow = datetime.date.today() + datetime.timedelta(days=14)
     payload = {
@@ -1686,11 +1720,21 @@ def test_bulk_enquiry_flow():
         "message": "Afternoon tea, needs delivery by 2pm",
     }
 
-    created = client.post("/api/bulk-orders", json=payload)
+    # The phone number is required — quotes move faster by phone.
+    missing_phone = client.post("/api/bulk-orders", json={k: v for k, v in payload.items() if k != "phone"})
+    assert missing_phone.status_code == 422
+
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        created = client.post("/api/bulk-orders", json=payload)
     assert created.status_code == 201
     enquiry = created.json()
     assert enquiry["status"] == "new"
     assert enquiry["event_date"] == tomorrow.isoformat()
+
+    # The asker hears the enquiry landed, not just the baker's desk.
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "email to nadia@example.com" in logged
+    assert "We've got your enquiry" in logged
 
     # yesterday's event is not something the bakery can bake for
     past = client.post(
@@ -1722,6 +1766,64 @@ def test_bulk_enquiry_flow():
 
     assert client.delete(f"/api/admin/bulk-orders/{enquiry['id']}", headers=admin).status_code == 200
     assert client.get("/api/admin/bulk-orders", params={"status": "quoted"}, headers=admin).json() == []
+
+
+def test_bulk_enquiry_reply(caplog):
+    """The baker answers a lead from the drawer: the reply is stored,
+    emailed to the enquirer, and a first answer marks the lead contacted."""
+    import datetime
+    import logging
+
+    tomorrow = (datetime.date.today() + datetime.timedelta(days=10)).isoformat()
+    enquiry = client.post(
+        "/api/bulk-orders",
+        json={
+            "name": "Omar Haddad",
+            "email": "omar@example.com",
+            "phone": "+49 176 555 0177",
+            "event_date": tomorrow,
+            "event_type": "corporate",
+            "guests": 40,
+        },
+    ).json()
+
+    # The reply endpoint is staff-only.
+    assert (
+        client.post(
+            f"/api/admin/bulk-orders/{enquiry['id']}/reply", json={"message": "hi"}
+        ).status_code
+        == 401
+    )
+
+    admin = admin_headers()
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        replied = client.post(
+            f"/api/admin/bulk-orders/{enquiry['id']}/reply",
+            json={"message": "We can do 40 boxes for €6.50 each,\ndelivered by 11am. Shall I hold the date?"},
+            headers=admin,
+        )
+    assert replied.status_code == 201
+    updated = replied.json()
+    assert updated["status"] == "contacted"  # first answer moves it off "new"
+    assert [r["message"] for r in updated["replies"]].pop().startswith("We can do")
+
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "email to omar@example.com" in logged
+    assert "Re: your enquiry for" in logged
+
+    # The conversation reads back on the rail; an empty reply never sends.
+    listing = client.get("/api/admin/bulk-orders", headers=admin).json()
+    mine = next(e for e in listing if e["id"] == enquiry["id"])
+    assert len(mine["replies"]) == 1
+    assert (
+        client.post(
+            f"/api/admin/bulk-orders/{enquiry['id']}/reply", json={"message": " "}, headers=admin
+        ).status_code
+        == 422
+    )
+
+    # Deleting the enquiry takes its conversation with it.
+    assert client.delete(f"/api/admin/bulk-orders/{enquiry['id']}", headers=admin).status_code == 200
 
 
 def test_home_content_testimonials_and_coming_soon():

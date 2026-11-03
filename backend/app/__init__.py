@@ -31,6 +31,8 @@ _ADDITIVE_COLUMNS = {
         "avatar_url": "ALTER TABLE users ADD COLUMN avatar_url VARCHAR(255)",
         "reset_token_hash": "ALTER TABLE users ADD COLUMN reset_token_hash VARCHAR(64)",
         "reset_token_expires": "ALTER TABLE users ADD COLUMN reset_token_expires TIMESTAMP",
+        "login_token_hash": "ALTER TABLE users ADD COLUMN login_token_hash VARCHAR(64)",
+        "login_token_expires": "ALTER TABLE users ADD COLUMN login_token_expires TIMESTAMP",
     },
     "orders": {
         "cancel_fee": "ALTER TABLE orders ADD COLUMN cancel_fee NUMERIC(10,2) NOT NULL DEFAULT 0",
@@ -173,8 +175,8 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=f"{settings.bakery_name} API",
-        version="3.8.0",
-        description="Bakery e-commerce API — customers, catalog, orders, coupons, online payments (Stripe), bulk enquiries, saved bakes, newsletter and admin.",
+        version="3.9.0",
+        description="Bakery e-commerce API — customers, catalog, orders, coupons, online payments (Stripe), quick sign-in links, bulk enquiries with emailed replies, saved bakes, newsletter and admin.",
         lifespan=lifespan,
         docs_url="/api/docs" if settings.enable_docs else None,
         redoc_url="/api/redoc" if settings.enable_docs else None,

@@ -109,11 +109,15 @@ the threshold server-side) and quick-apply chips offer the other live codes
 there too.
 
 **Bulk & event orders** — a public `/bulk` page takes catering enquiries
-(occasion, date from tomorrow onward, headcount up to 2,000, the spread they
-have in mind), rate-limited and pre-filled for signed-in customers. The baker
-works them from a second tab under Orders — new → contacted → quoted →
-confirmed/declined, with her own notes on each lead and a CSV export for the
-ledger.
+(occasion, date from tomorrow onward, headcount up to 2,000, a required
+phone number and the spread they have in mind), rate-limited and pre-filled
+for signed-in customers. Every enquiry is acknowledged to the customer by
+email the moment it lands. The baker works the leads from a second tab
+under Orders — new → contacted → quoted → confirmed/declined — and answers
+each one right in the drawer: the reply is emailed to the enquirer (a first
+reply moves the lead to "contacted") and kept beside it, so the whole
+conversation reads in one place. Her own private notes and a CSV export
+round out the ledger.
 
 **Saved bakes (wishlist)** — signed-in customers heart any bake from the grid or
 product page; hearts sync to the server (`PUT/DELETE /api/products/{id}/favorite`,
@@ -163,6 +167,9 @@ profile page and in the admin user list, and can be removed with one click.
 
 **Accounts** — email login with JWT access/refresh tokens (silent refresh in the
 frontend), profile & password management, an address book with default addresses.
+Forgetting the password is optional now, too: "Email me a one-tap sign-in
+link" sends a 15-minute, single-use link that signs straight in — the
+password stays untouched.
 Orders keep a snapshot of the delivery address, so editing addresses later never
 changes past orders. Customers can cancel while an order is pending/confirmed/
 baking — stock is restored, paid card orders auto-refund through Stripe, and cancelling after the
@@ -221,7 +228,7 @@ backend/
                      coming-soon)
   static/            product & site photos (generated, see scripts/);
                      uploads/ holds admin- and customer-added photos
-  tests/test_api.py  36 end-to-end API tests
+  tests/test_api.py  57 end-to-end API tests
 frontend/
   src/
     api/client.js    axios + token attach + silent refresh on 401

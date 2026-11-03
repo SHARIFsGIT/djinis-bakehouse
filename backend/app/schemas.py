@@ -3,7 +3,7 @@
 import enum
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from .models import BulkEnquiryStatus, OrderStatus, PaymentMethod, UserRole
 
@@ -47,6 +47,18 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str = Field(min_length=10)
     password: str = Field(min_length=8, max_length=72)
+
+
+class QuickLoginRequest(BaseModel):
+    """Ask for a one-tap sign-in link by email — no password involved."""
+
+    email: EmailStr
+
+
+class QuickLoginRedeem(BaseModel):
+    """The token from a sign-in link, traded straight for tokens."""
+
+    token: str = Field(min_length=10)
 
 
 class UserOut(ORMModel):
@@ -562,7 +574,8 @@ class BulkEnquiryCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=150)
     email: EmailStr
-    phone: str | None = Field(default=None, max_length=30)
+    # Quotes move faster by phone, so the number is required.
+    phone: str = Field(min_length=3, max_length=30)
     event_date: date
     event_type: str = Field(pattern="^(birthday|wedding|corporate|holiday|other)$")
     guests: int = Field(ge=1, le=2000)
@@ -577,10 +590,33 @@ class BulkEnquiryUpdate(BaseModel):
     admin_note: str | None = Field(default=None, max_length=2000)
 
 
+class BulkReplyCreate(BaseModel):
+    """An answer emailed to the enquirer from the enquiry drawer."""
+
+    message: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("message")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("the reply needs something to say")
+        return value
+
+
+class BulkReplyOut(ORMModel):
+    id: int
+    enquiry_id: int
+    message: str
+    created_at: datetime
+
+
 class BulkEnquiryOut(ORMModel):
     id: int
     name: str
     email: EmailStr
+    # Nullable on the wire for the sake of rows created before the number
+    # became required — new enquiries always carry one.
     phone: str | None
     event_date: date
     event_type: str
@@ -589,6 +625,7 @@ class BulkEnquiryOut(ORMModel):
     message: str | None
     status: BulkEnquiryStatus
     admin_note: str | None
+    replies: list[BulkReplyOut] = []
     created_at: datetime
 
 

@@ -65,7 +65,10 @@ export default function OrderReceipt() {
         </button>
       </div>
 
-      <article className="rounded-box bg-base-100 p-8 shadow-sm ring-1 ring-base-300/60 print:p-0 print:shadow-none print:ring-0">
+      <article className="receipt-sheet rounded-box bg-base-100 p-8 shadow-sm ring-1 ring-base-300/60">
+        {/* On paper the frame div becomes the receipt's inner rule; on
+            screen it is invisible and changes nothing. */}
+        <div className="receipt-frame">
         {/* Shop identity */}
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -194,6 +197,7 @@ export default function OrderReceipt() {
             : "An order confirmation was emailed to you."}{" "}
           Thank you for baking with us.
         </p>
+        </div>
       </article>
     </div>
   );

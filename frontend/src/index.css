@@ -274,4 +274,22 @@
   body {
     background: #fff !important;
   }
+  @page {
+    margin: 14mm;
+  }
+
+  /* The receipt's frame: a deep-burgundy outer rule with a fine inner one
+     inset from it — the letterpress look of a proper certificate, so what
+     prints (or saves as PDF) reads as a keepsake, not a screen dump. */
+  .receipt-sheet {
+    border: 2.5px solid #7f2230 !important;
+    border-radius: 10px;
+    padding: 6mm !important;
+    box-shadow: none !important;
+  }
+  .receipt-frame {
+    border: 1px solid #7f2230 !important;
+    border-radius: 6px;
+    padding: 7mm !important;
+  }
 }

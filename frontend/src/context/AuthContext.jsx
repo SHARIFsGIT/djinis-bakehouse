@@ -48,6 +48,12 @@ export function AuthProvider({ children }) {
     [applyTokens]
   );
 
+  // Redeem a one-tap sign-in link (the "Email me a sign-in link" flow).
+  const loginWithToken = useCallback(
+    async (token) => applyTokens((await client.post("/auth/quick-login/redeem", { token })).data),
+    [applyTokens]
+  );
+
   const register = useCallback(
     async (payload) => applyTokens((await client.post("/auth/register", payload)).data),
     [applyTokens]
@@ -71,6 +77,7 @@ export function AuthProvider({ children }) {
         ready,
         isAdmin: user?.role === "admin",
         login,
+        loginWithToken,
         register,
         logout,
         refreshUser,

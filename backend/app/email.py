@@ -9,6 +9,7 @@ next — password resets today, newsletters and marketing later.
 import logging
 import smtplib
 from email.message import EmailMessage
+from html import escape
 
 from .config import get_settings
 
@@ -81,6 +82,117 @@ def reset_password_email(first_name: str, link: str, minutes: int) -> tuple[str,
     </p>
     <p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:#8a837a;">
       Didn't ask? Ignore this email — your password stays as it is.
+    </p>
+  </div>
+</div>
+"""
+    return subject, html, text
+
+
+def quick_login_email(first_name: str, link: str, minutes: int) -> tuple[str, str, str]:
+    """The (subject, html, text) triple for a one-tap sign-in link."""
+    shop = get_settings().bakery_name
+    subject = f"Your sign-in link — {shop}"
+    text = (
+        f"Hi {first_name},\n\n"
+        f"Here's your one-tap sign-in link for {shop}. It works once, within "
+        f"{minutes} minutes:\n\n{link}\n\n"
+        f"You asked for this from the login page. If it wasn't you, ignore this "
+        f"email — the link expires on its own and your password is unchanged.\n"
+    )
+    html = f"""\
+<div style="margin:0;padding:24px;background:#f6f1ee;font-family:Georgia,'Times New Roman',serif;color:#33322e;">
+  <div style="max-width:480px;margin:0 auto;background:#fffdf9;border-radius:14px;padding:32px;
+              border:1px solid #e7ddd6;">
+    <p style="margin:0 0 4px;font-size:15px;color:{_BRAND};font-weight:bold;">{shop}</p>
+    <h1 style="margin:0 0 12px;font-size:22px;color:#33322e;">Sign in with one tap</h1>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;">
+      Hi {first_name}, the button below signs you straight in — no password
+      needed. It works once, within the next {minutes} minutes.
+    </p>
+    <p style="margin:0 0 16px;">
+      <a href="{link}"
+         style="display:inline-block;background:{_BRAND};color:#fffdf9;text-decoration:none;
+                padding:12px 28px;border-radius:999px;font-size:15px;font-weight:bold;">
+        Sign me in
+      </a>
+    </p>
+    <p style="margin:0 0 4px;font-size:13px;line-height:1.6;color:#8a837a;">
+      If the button doesn't work, paste this into your browser:<br>
+      <a href="{link}" style="color:{_BRAND};word-break:break-all;">{link}</a>
+    </p>
+    <p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:#8a837a;">
+      Didn't ask? Ignore this email — the link expires on its own and your
+      password is unchanged.
+    </p>
+  </div>
+</div>
+"""
+    return subject, html, text
+
+
+def bulk_enquiry_ack_email(enquiry: dict) -> tuple[str, str, str]:
+    """Confirmation to a catering lead that the enquiry landed."""
+    shop = get_settings().bakery_name
+    subject = f"We've got your enquiry — {shop}"
+    event_date = enquiry["event_date"]
+    text = (
+        f"Hi {enquiry['name']},\n\n"
+        f"Thank you for your enquiry about {enquiry['guests']} guests on "
+        f"{event_date}. Djini will write or call back within one working day "
+        f"with a quote, portions and delivery timing. Nothing is charged "
+        f"until you say yes.\n\n"
+        f"If anything changes in the meantime, just reply to this email.\n"
+    )
+    html = f"""\
+<div style="margin:0;padding:24px;background:#f6f1ee;font-family:Georgia,'Times New Roman',serif;color:#33322e;">
+  <div style="max-width:480px;margin:0 auto;background:#fffdf9;border-radius:14px;padding:32px;
+              border:1px solid #e7ddd6;">
+    <p style="margin:0 0 4px;font-size:15px;color:{_BRAND};font-weight:bold;">{shop}</p>
+    <h1 style="margin:0 0 12px;font-size:22px;color:#33322e;">We've got your enquiry</h1>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;">
+      Hi {escape(enquiry['name'])}, thank you for thinking of us for your{' '}
+      {enquiry['event_type']} — {enquiry['guests']} guests on {event_date}.
+      Djini will write or call back within one working day with a quote,
+      portions and delivery timing. Nothing is charged until you say yes.
+    </p>
+    <p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:#8a837a;">
+      If anything changes in the meantime, just reply to this email.
+    </p>
+  </div>
+</div>
+"""
+    return subject, html, text
+
+
+def bulk_reply_email(reply: dict) -> tuple[str, str, str]:
+    """The baker's answer to a catering lead, emailed to the enquirer."""
+    shop = get_settings().bakery_name
+    subject = f"Re: your enquiry for {reply['event_date']} — {shop}"
+    # The baker's message is free text — escape it and keep its line breaks.
+    message_html = escape(reply["message"]).replace("\n", "<br>")
+    text = (
+        f"Hi {reply['name']},\n\n"
+        f"Djini replied to your enquiry ({reply['guests']} guests on "
+        f"{reply['event_date']}):\n\n"
+        f"\"{reply['message']}\"\n\n"
+        f"Reply to this email to reach her directly.\n"
+    )
+    html = f"""\
+<div style="margin:0;padding:24px;background:#f6f1ee;font-family:Georgia,'Times New Roman',serif;color:#33322e;">
+  <div style="max-width:480px;margin:0 auto;background:#fffdf9;border-radius:14px;padding:32px;
+              border:1px solid #e7ddd6;">
+    <p style="margin:0 0 4px;font-size:15px;color:{_BRAND};font-weight:bold;">{shop}</p>
+    <h1 style="margin:0 0 12px;font-size:22px;color:#33322e;">Djini wrote back</h1>
+    <p style="margin:0 0 16px;font-size:13px;color:#8a837a;">
+      About your enquiry — {reply['guests']} guests on {reply['event_date']}
+    </p>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;">
+      Hi {escape(reply['name'])},<br><br>
+      {message_html}
+    </p>
+    <p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:#8a837a;">
+      Reply to this email to reach Djini directly.
     </p>
   </div>
 </div>

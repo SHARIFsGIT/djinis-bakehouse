@@ -68,6 +68,10 @@ class User(Base):
     # so a stolen database can't reset anyone's password.
     reset_token_hash: Mapped[str | None] = mapped_column(String(64))
     reset_token_expires: Mapped[datetime | None] = mapped_column(DateTime)
+    # Quick sign-in links ("email me a one-tap login") — same one-shot shape
+    # as the reset pair, separate columns so the two flows never collide.
+    login_token_hash: Mapped[str | None] = mapped_column(String(64))
+    login_token_expires: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     addresses: Mapped[list["Address"]] = relationship(
@@ -266,6 +270,9 @@ class BulkEnquiry(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(150))
     email: Mapped[str] = mapped_column(String(255), index=True)
+    # Required from the form since Nov 2026 (quotes move faster by phone);
+    # the column itself stays nullable because ALTER COLUMN isn't portable
+    # across SQLite and PostgreSQL — the API layer enforces it instead.
     phone: Mapped[str | None] = mapped_column(String(30))
     event_date: Mapped[date] = mapped_column(Date, index=True)
     event_type: Mapped[str] = mapped_column(String(50))  # birthday, wedding, …
@@ -276,6 +283,27 @@ class BulkEnquiry(Base):
     status: Mapped[str] = mapped_column(String(20), default=BulkEnquiryStatus.NEW.value)
     admin_note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    # What the baker wrote back — every reply is emailed to the enquirer
+    # and kept here so the whole conversation reads in one place.
+    replies: Mapped[list["BulkReply"]] = relationship(
+        back_populates="enquiry", cascade="all, delete-orphan", order_by="BulkReply.created_at"
+    )
+
+
+class BulkReply(Base):
+    """One emailed answer from the baker to a catering lead."""
+
+    __tablename__ = "bulk_replies"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    enquiry_id: Mapped[int] = mapped_column(
+        ForeignKey("bulk_enquiries.id", ondelete="CASCADE"), index=True
+    )
+    message: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    enquiry: Mapped[BulkEnquiry] = relationship(back_populates="replies")
 
 
 class Testimonial(Base):

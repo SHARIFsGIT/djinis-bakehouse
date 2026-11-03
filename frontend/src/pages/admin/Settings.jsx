@@ -1,11 +1,36 @@
+import {
+  ArrowDown,
+  ArrowUp,
+  CalendarClock,
+  Camera,
+  Clock,
+  ImagePlus,
+  Megaphone,
+  Percent,
+  Plus,
+  Quote,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, ImagePlus, Plus, Trash2 } from "lucide-react";
 import client, { apiError } from "../../api/client";
-import { money } from "../../lib/format";
-import { shrinkImage } from "../../lib/imageResize";
-import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import { Loading } from "../../components/Loading";
+import { useToast } from "../../context/ToastContext";
+import { money } from "../../lib/format";
+import { shrinkImage } from "../../lib/imageResize";
+
+/** One card's heading — an icon in the shop's accent so each section of the
+ *  rulebook is recognizable at a glance, no extra words needed. */
+function CardHead({ icon: Icon, title }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary/10 text-secondary">
+        <Icon size={18} />
+      </span>
+      <h2 className="font-display text-xl font-semibold">{title}</h2>
+    </div>
+  );
+}
 
 /** Shared plumbing for the two home-page managers below: patch one row,
  *  and swap a row with its neighbour by sort_order. */
@@ -108,13 +133,7 @@ function ComingSoonManager() {
   return (
     <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="font-display text-xl font-semibold">Coming soon</h2>
-          <p className="mt-1 text-sm opacity-70">
-            The home page&rsquo;s look-ahead band. Empty hides the section; shelved
-            items keep their place here.
-          </p>
-        </div>
+        <CardHead icon={CalendarClock} title="Coming soon" />
         {!form && (
           <button
             type="button"
@@ -352,13 +371,7 @@ function TestimonialsManager() {
   return (
     <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="font-display text-xl font-semibold">Testimonials</h2>
-          <p className="mt-1 text-sm opacity-70">
-            The words on the home page. Copy a line from a product review, or
-            add something a customer said at the counter.
-          </p>
-        </div>
+        <CardHead icon={Quote} title="Testimonials" />
         {!form && (
           <button
             type="button"
@@ -657,17 +670,13 @@ export default function Settings() {
   return (
     <div className="space-y-6">
       <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
-        <h2 className="font-display text-xl font-semibold">Home page photo</h2>
-        <p className="mt-1 text-sm opacity-70">
-          The picture above the “Today” note — swap it with the season or a
-          fresh counter shot.
-        </p>
+        <CardHead icon={Camera} title="Home page photo" />
 
         <div className="mt-5 flex flex-wrap items-center gap-5">
           <img
             src={saved.hero_image}
             alt="Current home page photo"
-            className="aspect-[6/5] w-40 rounded-box object-cover ring-1 ring-base-300"
+            className="aspect-6/5 w-40 rounded-box object-cover ring-1 ring-base-300"
           />
           <div className="space-y-1.5">
             <label className="btn btn-outline btn-sm">
@@ -691,18 +700,14 @@ export default function Settings() {
               Use the original photo
             </button>
             <p className="text-xs opacity-60">
-              JPEG, PNG or WebP. “The original” puts the shipped counter photo
-              back.
+              JPEG, PNG or WebP — “the original” restores the shipped photo.
             </p>
           </div>
         </div>
       </section>
 
       <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
-        <h2 className="font-display text-xl font-semibold">Storefront copy</h2>
-        <p className="mt-1 text-sm opacity-70">
-          The lines shoppers see first. Clear a box to hide it from the shop.
-        </p>
+        <CardHead icon={Megaphone} title="Storefront copy" />
 
         <div className="mt-5 grid gap-5 sm:grid-cols-2">
           <div>
@@ -755,8 +760,7 @@ export default function Settings() {
               onChange={(e) => setForm({ ...form, marquee: e.target.value })}
             />
             <p className="mt-1.5 text-xs opacity-60">
-              The band that drifts across the home page. Empty lines are
-              skipped; clear the box to hide the strip.
+              Empty lines are skipped; clear the box to hide the strip.
             </p>
           </div>
         </div>
@@ -777,11 +781,7 @@ export default function Settings() {
       </section>
 
       <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
-        <h2 className="font-display text-xl font-semibold">Contact &amp; hours</h2>
-        <p className="mt-1 text-sm opacity-70">
-          The real lines for the footer — customers see exactly what you type
-          here, and anything left empty simply doesn&rsquo;t show.
-        </p>
+        <CardHead icon={Clock} title="Contact & hours" />
 
         <div className="mt-5 grid gap-5 sm:grid-cols-2">
           <div className="sm:col-span-2">
@@ -838,8 +838,7 @@ export default function Settings() {
               onChange={(e) => setForm({ ...form, hours: e.target.value })}
             />
             <p className="mt-1.5 text-xs opacity-60">
-              Each line shows in the footer as you write it. Clear the box to
-              hide the hours column.
+              Each line shows in the footer — clear the box to hide the column.
             </p>
           </div>
         </div>
@@ -861,12 +860,9 @@ export default function Settings() {
       <TestimonialsManager />
 
       <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
-        <h2 className="font-display text-xl font-semibold">
-          Cancellation policy
-        </h2>
+        <CardHead icon={Percent} title="Cancellation policy" />
         <p className="mt-1 text-sm opacity-70">
-          Cancelling is free until an order goes into the oven — this is the
-          slice the shop keeps after that.
+          Cancelling is free until an order goes into the oven.
         </p>
 
         <div className="mt-5 max-w-xs">

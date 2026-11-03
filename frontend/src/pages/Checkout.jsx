@@ -9,11 +9,24 @@ import { useToast } from "../context/ToastContext";
 import { getStoredCoupon, storeCoupon } from "../lib/coupon";
 import {
   computeTotals,
+  formatDate,
   isoDate,
   money,
   taxLabel,
   todayISO,
 } from "../lib/format";
+
+/** A numbered step heading — the two things left to do, in order. */
+function StepHead({ n, title }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="brand-gradient flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold text-secondary-content">
+        {n}
+      </span>
+      <h2 className="font-display text-xl font-semibold">{title}</h2>
+    </div>
+  );
+}
 
 const EMPTY_ADDRESS = {
   label: "Home",
@@ -197,7 +210,7 @@ export default function Checkout() {
         <div className="space-y-8">
           {/* Delivery address */}
           <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
-            <h2 className="font-display text-xl font-semibold">Where should the box land?</h2>
+            <StepHead n={1} title="Delivery details" />
 
             {addresses.length > 0 && (
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -284,49 +297,31 @@ export default function Checkout() {
 
           {/* Delivery + payment */}
           <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
-            <h2 className="font-display text-xl font-semibold">When &amp; how to pay</h2>
+            <StepHead n={2} title="Delivery day & payment" />
 
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <div>
-                <label className="label text-xs">Delivery date (optional)</label>
-                <input
-                  type="date"
-                  className="input input-bordered w-full"
-                  min={todayISO()}
-                  max={maxDate}
-                  value={deliveryDate}
-                  onChange={(e) => setDeliveryDate(e.target.value)}
-                />
-                <p className="mt-1 text-xs opacity-60">Leave blank for the next delivery run.</p>
-              </div>
-              <div>
-                <label className="label text-xs">Payment</label>
-                <div className="space-y-2">
-                  {cardAvailable && (
-                    <label
-                      className={`flex cursor-pointer items-center gap-3 rounded-xl border-2 p-3 transition ${
-                        method === "card"
-                          ? "border-secondary bg-secondary/10"
-                          : "border-base-300 hover:border-base-content/30"
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="payment"
-                        className="radio radio-secondary radio-sm"
-                        checked={method === "card"}
-                        onChange={() => setMethod("card")}
-                      />
-                      <CreditCard size={20} className="shrink-0 text-secondary" />
-                      <div>
-                        <p className="text-sm font-semibold">Card — secure online payment</p>
-                        <p className="text-xs opacity-60">Pay now on Stripe's encrypted page</p>
-                      </div>
-                    </label>
-                  )}
+            <div className="mt-5 max-w-xs">
+              <label className="label mb-1.5 text-xs font-semibold" htmlFor="delivery-date">
+                Delivery date (optional)
+              </label>
+              <input
+                id="delivery-date"
+                type="date"
+                className="input input-bordered w-full"
+                min={todayISO()}
+                max={maxDate}
+                value={deliveryDate}
+                onChange={(e) => setDeliveryDate(e.target.value)}
+              />
+              <p className="mt-1.5 text-xs opacity-60">Leave blank for the next delivery run.</p>
+            </div>
+
+            <div className="mt-5">
+              <p className="label mb-1.5 text-xs font-semibold">Payment</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {cardAvailable && (
                   <label
-                    className={`flex cursor-pointer items-center gap-3 rounded-xl border-2 p-3 transition ${
-                      method === "cash_on_delivery"
+                    className={`flex cursor-pointer items-center gap-3 rounded-xl border-2 p-3.5 transition ${
+                      method === "card"
                         ? "border-secondary bg-secondary/10"
                         : "border-base-300 hover:border-base-content/30"
                     }`}
@@ -335,22 +330,45 @@ export default function Checkout() {
                       type="radio"
                       name="payment"
                       className="radio radio-secondary radio-sm"
-                      checked={method === "cash_on_delivery"}
-                      onChange={() => setMethod("cash_on_delivery")}
+                      checked={method === "card"}
+                      onChange={() => setMethod("card")}
                     />
-                    <Banknote size={20} className="shrink-0 text-secondary" />
-                    <div>
-                      <p className="text-sm font-semibold">Cash on delivery</p>
-                      <p className="text-xs opacity-60">Pay the courier at your door</p>
+                    <CreditCard size={20} className="shrink-0 text-secondary" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold">Card</p>
+                      <p className="text-xs opacity-60">Secure payment on Stripe's page</p>
                     </div>
                   </label>
-                </div>
+                )}
+                <label
+                  className={`flex cursor-pointer items-center gap-3 rounded-xl border-2 p-3.5 transition ${
+                    method === "cash_on_delivery"
+                      ? "border-secondary bg-secondary/10"
+                      : "border-base-300 hover:border-base-content/30"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="payment"
+                    className="radio radio-secondary radio-sm"
+                    checked={method === "cash_on_delivery"}
+                    onChange={() => setMethod("cash_on_delivery")}
+                  />
+                  <Banknote size={20} className="shrink-0 text-secondary" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold">Cash on delivery</p>
+                    <p className="text-xs opacity-60">Pay the courier at your door</p>
+                  </div>
+                </label>
               </div>
             </div>
 
-            <div className="mt-4">
-              <label className="label text-xs">Note for the bakery (optional)</label>
+            <div className="mt-5">
+              <label className="label mb-1.5 text-xs font-semibold" htmlFor="order-note">
+                Note for the bakery (optional)
+              </label>
               <textarea
+                id="order-note"
                 className="textarea textarea-bordered w-full"
                 rows={2}
                 maxLength={1000}
@@ -450,6 +468,14 @@ export default function Checkout() {
             </div>
             <div className="dash-divider flex justify-between pt-3 text-lg font-bold">
               <span>Total</span><span>{money(total)}</span>
+            </div>
+            <div className="mt-3 space-y-1 text-xs opacity-70">
+              {deliveryDate && <p>Delivery on {formatDate(deliveryDate)}</p>}
+              <p>
+                {method === "card"
+                  ? "Paid by card on Stripe's secure page"
+                  : "Cash on delivery — pay at the door"}
+              </p>
             </div>
           </div>
           <button type="submit" className="btn btn-secondary btn-lg mt-6 w-full text-secondary-content" disabled={placing}>

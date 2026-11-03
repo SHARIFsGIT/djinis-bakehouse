@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { CalendarHeart, Trash2, Users } from "lucide-react";
+import { CalendarHeart, Send, Trash2, Users } from "lucide-react";
 import client, { apiError } from "../../api/client";
 import {
   BULK_STATUSES,
@@ -202,15 +202,19 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
   );
 }
 
-/** Drawer for one catering lead: the event, the ask, and the baker's notes. */
+/** Drawer for one catering lead: the event, the ask, the email conversation
+    and the baker's notes. */
 function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
   const toast = useToast();
   const [status, setStatus] = useState(enquiry.status);
   const [note, setNote] = useState(enquiry.admin_note ?? "");
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
 
   const occasion = EVENT_TYPES.find((t) => t.value === enquiry.event_type)?.label ?? enquiry.event_type;
+  const replies = enquiry.replies ?? [];
 
   const save = async (e) => {
     e.preventDefault();
@@ -226,6 +230,25 @@ function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
       toast.error(apiError(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const sendReply = async (e) => {
+    e.preventDefault();
+    if (!reply.trim()) return;
+    setSending(true);
+    try {
+      const { data } = await client.post(`/admin/bulk-orders/${enquiry.id}/reply`, {
+        message: reply,
+      });
+      setReply("");
+      onChanged(data);
+      setStatus(data.status); // a first reply bumps a new lead to "contacted"
+      toast.success(`Reply emailed to ${enquiry.email}`);
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setSending(false);
     }
   };
 
@@ -281,6 +304,25 @@ function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
           )}
         </section>
 
+        {replies.length > 0 && (
+          <section>
+            <p className="font-display mb-2 font-semibold">Sent to their inbox</p>
+            <ul className="space-y-2">
+              {replies.map((r) => (
+                <li
+                  key={r.id}
+                  className="rounded-box border border-secondary/30 bg-secondary/5 p-3 text-sm"
+                >
+                  <p className="whitespace-pre-line">{r.message}</p>
+                  <p className="mt-1.5 text-xs opacity-50">
+                    emailed {formatDateTime(r.created_at)}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         {enquiry.admin_note && (
           <section className="rounded-box border border-dashed border-base-300 p-4 text-sm">
             <p className="font-display font-semibold">Your notes</p>
@@ -290,7 +332,39 @@ function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
       </div>
 
       {/* Controls */}
-      <div className="space-y-3 border-t border-base-300 bg-base-200/60 p-5">
+      <div className="space-y-4 border-t border-base-300 bg-base-200/60 p-5">
+        <form onSubmit={sendReply} className="space-y-2">
+          <label className="label text-xs font-semibold" htmlFor="bulk-reply">
+            Reply by email
+          </label>
+          <textarea
+            id="bulk-reply"
+            className="textarea textarea-bordered w-full"
+            rows={3}
+            maxLength={4000}
+            placeholder="Here's what we'd suggest for 40 guests…"
+            value={reply}
+            onChange={(e) => setReply(e.target.value)}
+          />
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs opacity-50">
+              Goes to their inbox · a first reply marks the lead “contacted”
+            </p>
+            <button
+              type="submit"
+              className="btn btn-secondary btn-sm shrink-0 text-secondary-content"
+              disabled={sending || !reply.trim()}
+            >
+              {sending ? (
+                <span className="loading loading-spinner loading-xs" />
+              ) : (
+                <Send size={14} />
+              )}
+              Send reply
+            </button>
+          </div>
+        </form>
+
         <form onSubmit={save} className="space-y-2">
           <div className="flex items-center gap-2">
             <select
@@ -315,10 +389,10 @@ function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
             className="textarea textarea-bordered w-full"
             rows={2}
             maxLength={2000}
-            placeholder="Quote given, portions agreed, call-back Thursday…"
+            placeholder="Private note — quote given, portions agreed, call-back Thursday…"
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            aria-label="Admin note"
+            aria-label="Private admin note"
           />
         </form>
         <button

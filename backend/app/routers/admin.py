@@ -6,11 +6,12 @@ import re
 import uuid
 from collections import Counter
 
-from fastapi import APIRouter, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, func, or_, select, update
 
 from ..database import utcnow
+from ..email import bulk_reply_email, send_email
 from ..models import (
     DEFAULT_ANNOUNCEMENT,
     DEFAULT_HERO_IMAGE,
@@ -19,6 +20,7 @@ from ..models import (
     AdminNotification,
     BulkEnquiry,
     BulkEnquiryStatus,
+    BulkReply,
     Category,
     ComingSoonItem,
     Coupon,
@@ -46,6 +48,7 @@ from ..schemas import (
     AdminUserPage,
     BulkEnquiryOut,
     BulkEnquiryUpdate,
+    BulkReplyCreate,
     CategoryCreateRequest,
     CategoryOut,
     ComingSoonCreate,
@@ -796,6 +799,44 @@ def delete_bulk_enquiry(enquiry_id: int, admin: CurrentAdmin, db: DbSession):
     db.delete(enquiry)
     db.commit()
     return {"message": "Enquiry deleted"}
+
+
+@router.post("/bulk-orders/{enquiry_id}/reply", response_model=BulkEnquiryOut, status_code=status.HTTP_201_CREATED)
+def reply_to_bulk_enquiry(
+    enquiry_id: int,
+    payload: BulkReplyCreate,
+    admin: CurrentAdmin,
+    db: DbSession,
+    background: BackgroundTasks,
+):
+    """Answer a lead by email straight from the drawer.
+
+    The message is stored on the enquiry (the whole conversation reads in
+    one place) and emailed to the enquirer. A first reply to a brand-new
+    lead moves it to "contacted" — she did contact them.
+    """
+    enquiry = db.get(BulkEnquiry, enquiry_id)
+    if enquiry is None:
+        raise HTTPException(status_code=404, detail="Enquiry not found")
+
+    reply = BulkReply(enquiry_id=enquiry.id, message=payload.message)
+    db.add(reply)
+    if enquiry.status == BulkEnquiryStatus.NEW.value:
+        enquiry.status = BulkEnquiryStatus.CONTACTED.value
+    db.commit()
+    db.refresh(enquiry)
+
+    # Plain values only — the task runs after this session has closed.
+    subject, html, text = bulk_reply_email(
+        {
+            "name": enquiry.name,
+            "message": reply.message,
+            "event_date": f"{enquiry.event_date:%d %B %Y}",
+            "guests": enquiry.guests,
+        }
+    )
+    background.add_task(send_email, enquiry.email, subject, html, text)
+    return enquiry
 
 
 @router.get("/bulk-orders/export")

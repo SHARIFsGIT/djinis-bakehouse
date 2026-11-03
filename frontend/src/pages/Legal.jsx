@@ -71,6 +71,7 @@ export function PrivacyPolicy() {
         <ul className="list-disc space-y-1.5 pl-5">
           <li><strong>Account details</strong> — your name, email address and a hashed password when you register.</li>
           <li><strong>Order details</strong> — the delivery address, recipient name and phone number attached to your orders, and what you bought.</li>
+          <li><strong>Bulk enquiries</strong> — the name, email and phone number on a catering enquiry, and what you tell us about the event.</li>
           <li><strong>Reviews and messages</strong> — anything you write on a review or the note field of an order.</li>
           <li><strong>Newsletter email</strong> — your email address alone, if you sign up for the Friday list.</li>
         </ul>
@@ -79,8 +80,9 @@ export function PrivacyPolicy() {
       <Section heading="What we do with it">
         <p>
           We use your information to bake and deliver your orders, to keep your
-          account and address book working, to email order receipts and password
-          resets, and to send the newsletter if you asked for it. Online card
+          account and address book working, to email order receipts, password
+          resets and one-tap sign-in links, to answer bulk enquiries, and to
+          send the newsletter if you asked for it. Online card
           payments are processed by Stripe as our payment service provider —
           card details are entered on Stripe's own pages and never reach our
           servers. That is the whole list. We never sell or rent your details

@@ -56,7 +56,7 @@ export default function BulkOrder() {
       <div className="mx-auto max-w-2xl px-4 py-12">
         <EmptyState
           title="Enquiry received"
-          hint="Djini will call or write back within one working day with a quote, portions and delivery timing. Nothing is charged until you say yes."
+          hint="A confirmation is on its way to your inbox. Djini will call or write back within one working day with a quote, portions and delivery timing — nothing is charged until you say yes."
         >
           <button type="button" className="btn btn-primary" onClick={() => setSent(false)}>
             Send another enquiry
@@ -158,13 +158,16 @@ export default function BulkOrder() {
           </div>
           <div>
             <label className="label text-xs" htmlFor="bulk-phone">
-              Phone (optional)
+              Phone
             </label>
             <input
               id="bulk-phone"
               type="tel"
               className="input input-bordered w-full"
+              required
+              minLength={3}
               maxLength={30}
+              placeholder="+49 176 555 0100"
               value={form.phone}
               onChange={(e) => setField("phone", e.target.value)}
             />
