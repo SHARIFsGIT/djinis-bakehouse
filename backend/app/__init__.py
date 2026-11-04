@@ -46,6 +46,32 @@ _ADDITIVE_COLUMNS = {
         "cancel_fee": "ALTER TABLE orders ADD COLUMN cancel_fee NUMERIC(10,2) NOT NULL DEFAULT 0",
         "stripe_session_id": "ALTER TABLE orders ADD COLUMN stripe_session_id VARCHAR(255)",
         "stripe_payment_intent_id": "ALTER TABLE orders ADD COLUMN stripe_payment_intent_id VARCHAR(255)",
+        # A string default is safe on both engines (the boolean DEFAULT 1
+        # lesson); every order placed before this column lands reads as "usd".
+        "currency": "ALTER TABLE orders ADD COLUMN currency VARCHAR(3) NOT NULL DEFAULT 'usd'",
+    },
+    "products": {
+        # The VAT foundation: classification stays NULL on existing rows —
+        # no product is classified or approved automatically. Only the review
+        # status carries the quoted string default (same lesson as currency).
+        "vat_category": "ALTER TABLE products ADD COLUMN vat_category VARCHAR(20)",
+        "vat_review_status": (
+            "ALTER TABLE products ADD COLUMN vat_review_status "
+            "VARCHAR(12) NOT NULL DEFAULT 'pending'"
+        ),
+        "milk_content_percent": "ALTER TABLE products ADD COLUMN milk_content_percent NUMERIC(5,2)",
+    },
+    "order_items": {
+        # VAT snapshots, frozen at checkout once the shop prices
+        # VAT-inclusive. Nullable on purpose: historical lines keep NULL
+        # rather than a guessed tax figure.
+        "vat_category": "ALTER TABLE order_items ADD COLUMN vat_category VARCHAR(20)",
+        "vat_rate": "ALTER TABLE order_items ADD COLUMN vat_rate NUMERIC(5,2)",
+        "net_unit_price": "ALTER TABLE order_items ADD COLUMN net_unit_price NUMERIC(10,2)",
+        "gross_unit_price": "ALTER TABLE order_items ADD COLUMN gross_unit_price NUMERIC(10,2)",
+        "net_line_total": "ALTER TABLE order_items ADD COLUMN net_line_total NUMERIC(10,2)",
+        "vat_amount": "ALTER TABLE order_items ADD COLUMN vat_amount NUMERIC(10,2)",
+        "gross_line_total": "ALTER TABLE order_items ADD COLUMN gross_line_total NUMERIC(10,2)",
     },
     "store_settings": {
         "announcement": "ALTER TABLE store_settings ADD COLUMN announcement VARCHAR(255)",
@@ -126,6 +152,10 @@ def create_limiters(settings) -> dict[str, SlidingWindowLimiter]:
         # signups or catering leads is plenty for anyone.
         "newsletter": SlidingWindowLimiter(5),
         "bulk": SlidingWindowLimiter(5),
+        # Basket quotes — a read (nothing is stored), but public and
+        # unauthenticated, so it still gets a brake. Generous on purpose:
+        # the storefront re-quotes on every basket change.
+        "quote": SlidingWindowLimiter(30),
     }
 
 

@@ -158,6 +158,20 @@ class Product(Base):
     prep_time_minutes: Mapped[int | None] = mapped_column(Integer)
     ingredients: Mapped[str | None] = mapped_column(Text)
     allergens: Mapped[str | None] = mapped_column(Text)
+    # VAT classification (the euro migration's tax foundation). The category
+    # vocabulary lives in app/vat.py and is provisional until a German tax
+    # adviser confirms each product; NULL = never classified, which refuses
+    # VAT-inclusive pricing rather than guessing a rate.
+    vat_category: Mapped[str | None] = mapped_column(String(20))
+    # pending (the default) | approved | blocked — nothing goes on a
+    # VAT-inclusive price list without the approved sign-off.
+    vat_review_status: Mapped[str] = mapped_column(
+        String(12), default="pending", server_default="pending"
+    )
+    # Cow's-milk share of the finished drink, in percent — a MILK_DRINK's
+    # ticket to the reduced rate at >= 75 (Anlage 2 nr. 35). Plant-based
+    # substitutes never count toward this figure.
+    milk_content_percent: Mapped[float | None] = mapped_column(Numeric(5, 2))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -372,6 +386,10 @@ class Order(Base):
     total: Mapped[float] = mapped_column(Numeric(10, 2))
     # Kept by the shop when a customer cancels after baking started (0 otherwise)
     cancel_fee: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
+    # The money this order was placed in — a 3-letter code ("usd" historically,
+    # "eur" once the shop cuts over). Amounts are never converted: the code is
+    # how every Numeric column above should be read.
+    currency: Mapped[str] = mapped_column(String(3), default="usd")
     delivery_date: Mapped[date | None] = mapped_column(Date)
     note: Mapped[str | None] = mapped_column(Text)
 
@@ -401,10 +419,29 @@ class Order(Base):
     timeline: Mapped[list["OrderEvent"]] = relationship(
         back_populates="order", cascade="all, delete-orphan", order_by="OrderEvent.created_at"
     )
+    # The per-rate VAT totals written at checkout in VAT-inclusive mode;
+    # empty on every order placed before that cutover.
+    tax_lines: Mapped[list["OrderTaxLine"]] = relationship(
+        cascade="all, delete-orphan", order_by="OrderTaxLine.vat_rate"
+    )
 
     @property
     def can_be_cancelled(self) -> bool:
         return self.status in {s.value for s in CANCELLABLE_STATUSES}
+
+
+class VatRate(Base):
+    """A statutory VAT percentage, in force from a date (§ 12 Abs. 2 UStG:
+    7 % reduced for Anlage 2 goods, 19 % standard otherwise). Reference
+    data seeded at boot — deciding which *product* may use which rate is a
+    per-product classification (Product.vat_category), never a rate row."""
+
+    __tablename__ = "vat_rates"
+
+    # REDUCED | STANDARD — the kinds app/vat.py resolves categories into
+    code: Mapped[str] = mapped_column(String(20), primary_key=True)
+    valid_from: Mapped[date] = mapped_column(Date, primary_key=True)
+    rate: Mapped[float] = mapped_column(Numeric(5, 2))  # percent, e.g. 7.00 / 19.00
 
 
 class OrderItem(Base):
@@ -418,6 +455,18 @@ class OrderItem(Base):
     unit_price: Mapped[float] = mapped_column(Numeric(10, 2))
     quantity: Mapped[int] = mapped_column(Integer)
     subtotal: Mapped[float] = mapped_column(Numeric(10, 2))
+    # VAT snapshot, frozen at checkout once the shop prices VAT-inclusive
+    # (app/vat.py price_line_inclusive). The gross pair mirror unit_price /
+    # subtotal at write time; all seven stay NULL on every order placed
+    # before that cutover — historical tax figures are never back-filled
+    # by guessing.
+    vat_category: Mapped[str | None] = mapped_column(String(20))
+    vat_rate: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    net_unit_price: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    gross_unit_price: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    net_line_total: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    vat_amount: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    gross_line_total: Mapped[float | None] = mapped_column(Numeric(10, 2))
 
     order: Mapped[Order] = relationship(back_populates="items")
     # The live product, for the payment page's thumbnails. The snapshot
@@ -438,6 +487,44 @@ class OrderEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     order: Mapped[Order] = relationship(back_populates="timeline")
+
+
+class OrderTaxLine(Base):
+    """Per-order, per-rate VAT totals — the atom a VAT report aggregates.
+    One row per distinct rate on the order, written once at checkout in
+    VAT-inclusive mode (app/vat.py summarize_by_rate) and never recomputed."""
+
+    __tablename__ = "order_tax_lines"
+    __table_args__ = (UniqueConstraint("order_id", "vat_rate"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), index=True)
+    vat_rate: Mapped[float] = mapped_column(Numeric(5, 2))  # percent, e.g. 7.00 / 19.00
+    net_amount: Mapped[float] = mapped_column(Numeric(10, 2))
+    vat_amount: Mapped[float] = mapped_column(Numeric(10, 2))
+    gross_amount: Mapped[float] = mapped_column(Numeric(10, 2))
+
+
+class ProductVatEvent(Base):
+    """The classification's own bake log: who touched a product's VAT
+    standing, when, and exactly what changed. Records internal sign-offs —
+    it never replaces the tax adviser's classification."""
+
+    __tablename__ = "product_vat_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), index=True)
+    # Who made the change — the id links to the account (and survives its
+    # deletion as NULL), the name is the snapshot the ledger keeps.
+    admin_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    admin_name: Mapped[str] = mapped_column(String(150))
+    from_category: Mapped[str | None] = mapped_column(String(20))
+    to_category: Mapped[str | None] = mapped_column(String(20))
+    from_status: Mapped[str | None] = mapped_column(String(12))
+    to_status: Mapped[str] = mapped_column(String(12))
+    from_milk_content: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    to_milk_content: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class AdminNotification(Base):

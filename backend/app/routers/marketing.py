@@ -72,6 +72,11 @@ def storefront(db: DbSession):
         contact_phone=settings.contact_phone,
         contact_email=settings.contact_email,
         opening_hours=settings.opening_hours,
+        # The money rules behind every basket estimate the storefront quotes.
+        currency=get_settings().stripe_currency,
+        tax_rate=get_settings().tax_rate,
+        shipping_fee=get_settings().shipping_fee,
+        free_shipping_threshold=get_settings().free_shipping_threshold,
     )
 
 

@@ -97,7 +97,7 @@ export default function OrderDetail() {
       setOrder(data);
       toast.info(
         data.cancel_fee > 0
-          ? `Order cancelled — a ${money(data.cancel_fee)} late-cancellation fee was kept`
+          ? `Order cancelled — a ${money(data.cancel_fee, data.currency)} late-cancellation fee was kept`
           : "Order cancelled — stock returned to the case"
       );
       setConfirmingCancel(false);
@@ -232,7 +232,7 @@ export default function OrderDetail() {
             This order was cancelled.{" "}
             {order.payment_status === "refunded" && "Your payment was refunded in full."}
             {order.payment_status === "partially_refunded" &&
-              `Your payment was refunded less the ${money(order.cancel_fee)} late-cancellation fee — the ovens had already started.`}
+              `Your payment was refunded less the ${money(order.cancel_fee, order.currency)} late-cancellation fee — the ovens had already started.`}
           </span>
         </div>
       )}
@@ -264,10 +264,10 @@ export default function OrderDetail() {
                       <span className="font-semibold">{item.product_name}</span>
                     )}
                     <p className="text-xs opacity-60">
-                      {money(item.unit_price)} × {item.quantity}
+                      {money(item.unit_price, order.currency)} × {item.quantity}
                     </p>
                   </div>
-                  <p className="font-bold">{money(item.subtotal)}</p>
+                  <p className="font-bold">{money(item.subtotal, order.currency)}</p>
                 </li>
               ))}
             </ul>
@@ -301,25 +301,25 @@ export default function OrderDetail() {
           <section className="rounded-box bg-base-200/70 p-5">
             <h3 className="font-display mb-3 text-lg font-semibold">The tally</h3>
             <div className="space-y-1.5 text-sm">
-              <div className="flex justify-between"><span className="opacity-70">Subtotal</span><span>{money(order.subtotal)}</span></div>
+              <div className="flex justify-between"><span className="opacity-70">Subtotal</span><span>{money(order.subtotal, order.currency)}</span></div>
               {order.discount_amount > 0 && (
                 <div className="flex justify-between text-secondary">
                   <span>Discount ({order.coupon_code})</span>
-                  <span>−{money(order.discount_amount)}</span>
+                  <span>−{money(order.discount_amount, order.currency)}</span>
                 </div>
               )}
-              <div className="flex justify-between"><span className="opacity-70">Tax</span><span>{money(order.tax)}</span></div>
+              <div className="flex justify-between"><span className="opacity-70">Tax</span><span>{money(order.tax, order.currency)}</span></div>
               <div className="flex justify-between">
                 <span className="opacity-70">Delivery</span>
-                <span>{order.shipping_fee === 0 ? <span className="font-semibold text-success">FREE</span> : money(order.shipping_fee)}</span>
+                <span>{order.shipping_fee === 0 ? <span className="font-semibold text-success">FREE</span> : money(order.shipping_fee, order.currency)}</span>
               </div>
               <div className="dash-divider flex justify-between pt-2 text-base font-bold">
-                <span>Total</span><span>{money(order.total)}</span>
+                <span>Total</span><span>{money(order.total, order.currency)}</span>
               </div>
               {order.cancel_fee > 0 && (
                 <div className="flex justify-between pt-1 text-warning">
                   <span>Late-cancellation fee kept</span>
-                  <span>{money(order.cancel_fee)}</span>
+                  <span>{money(order.cancel_fee, order.currency)}</span>
                 </div>
               )}
             </div>
@@ -372,7 +372,7 @@ export default function OrderDetail() {
                   <p className="text-sm font-semibold">Cancel this order?</p>
                   <p className="text-xs opacity-70">
                     {order.cancellation_fee > 0
-                      ? `Baking has started — a ${money(order.cancellation_fee)} late-cancellation fee stays with the shop${
+                      ? `Baking has started — a ${money(order.cancellation_fee, order.currency)} late-cancellation fee stays with the shop${
                           order.payment_status === "paid" ? " and your refund is reduced by it" : ""
                         }.`
                       : `Stock goes back in the case${
@@ -392,7 +392,7 @@ export default function OrderDetail() {
                 <>
                   {order.cancellation_fee > 0 && (
                     <p className="mb-2 text-xs font-semibold text-warning">
-                      Baking has started — cancelling now keeps a {money(order.cancellation_fee)} fee with the shop.
+                      Baking has started — cancelling now keeps a {money(order.cancellation_fee, order.currency)} fee with the shop.
                     </p>
                   )}
                   <button

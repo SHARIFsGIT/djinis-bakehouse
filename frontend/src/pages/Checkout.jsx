@@ -6,15 +6,16 @@ import EmptyState from "../components/EmptyState";
 import { Loading } from "../components/Loading";
 import { useCart } from "../context/CartContext";
 import { useToast } from "../context/ToastContext";
+import useBasketQuote from "../hooks/useBasketQuote";
 import { getStoredCoupon, storeCoupon } from "../lib/coupon";
 import {
-  computeTotals,
   formatDate,
   isoDate,
   money,
   taxLabel,
   todayISO,
 } from "../lib/format";
+import { canSubmitWith } from "../lib/quote";
 
 /** A numbered step heading — the two things left to do, in order. */
 function StepHead({ n, title }) {
@@ -53,7 +54,7 @@ const ADDRESS_FIELDS = [
 ];
 
 export default function Checkout() {
-  const { items, subtotal, clear } = useCart();
+  const { items, clear } = useCart();
   const toast = useToast();
   const navigate = useNavigate();
 
@@ -73,6 +74,25 @@ export default function Checkout() {
   const [coupon, setCoupon] = useState(null); // { code, percent_off, description, min_subtotal }
   const [checkingCoupon, setCheckingCoupon] = useState(false);
   const [vouchers, setVouchers] = useState([]);
+
+  // The server prices this basket (coupon included) — the summary shows its
+  // figures, and the order button waits for them. Placement re-derives every
+  // number independently server-side, so what's shown is never what
+  // authorizes the charge.
+  const quoteState = useBasketQuote(items, coupon?.code);
+
+  // A refused quote with a code aboard almost always means the code itself
+  // (expired, spent under this account, basket under its threshold) — drop
+  // it with the reason and the summary re-prices. Anything still refused
+  // without a code is the basket; the summary says what's wrong.
+  useEffect(() => {
+    if (quoteState.status === "error" && coupon) {
+      setCoupon(null);
+      setCouponInput("");
+      storeCoupon("");
+      toast.info(apiError(quoteState.error, "That code no longer applies — removed"));
+    }
+  }, [quoteState.status, quoteState.error, coupon]);
 
   const maxDate = useMemo(() => {
     const d = new Date();
@@ -150,11 +170,12 @@ export default function Checkout() {
     );
   }
 
-  // Same cents-at-a-time arithmetic the invoice will carry — see format.js.
-  const { discount, tax, shipping, total } = computeTotals(
-    subtotal,
-    coupon?.percent_off ?? 0,
-  );
+  // The summary is the server's quote, not a local copy of its arithmetic.
+  // While the first quote is in flight the line rows fall back to the
+  // cached add-time prices (visual only), and no order can be placed.
+  const quote = quoteState.quote;
+  const quoteLines = new Map((quote?.items ?? []).map((i) => [i.product_id, i]));
+  const submittable = canSubmitWith(quoteState);
 
   const setField = (key, value) => setNewAddress((a) => ({ ...a, [key]: value }));
 
@@ -170,6 +191,7 @@ export default function Checkout() {
   const placeOrder = async (e) => {
     e.preventDefault();
     if (placing) return; // the button disables, but Enter can still submit
+    if (!submittable) return; // no settled quote for *this* basket — never charge stale numbers
     setPlacing(true);
     try {
       const payload = {
@@ -382,14 +404,21 @@ export default function Checkout() {
 
         {/* Summary */}
         <aside className="h-fit rounded-box bg-base-200/70 p-6 shadow-sm lg:sticky lg:top-24">
-          <h2 className="font-display text-xl font-semibold">Your order</h2>
+          <h2 className="font-display text-xl font-semibold">
+            Your order
+            {quoteState.status === "loading" && quote && (
+              <span className="loading loading-spinner loading-xs ml-2 align-middle opacity-50" aria-label="Refreshing your total" />
+            )}
+          </h2>
           <ul className="mt-4 space-y-2 text-sm">
             {items.map((i) => (
               <li key={i.product_id} className="flex justify-between gap-3">
                 <span className="opacity-80">
                   {i.name} <span className="opacity-60">× {i.quantity}</span>
                 </span>
-                <span className="shrink-0 font-semibold">{money(i.unit_price * i.quantity)}</span>
+                <span className="shrink-0 font-semibold">
+                  {money(quoteLines.get(i.product_id)?.line_total ?? i.unit_price * i.quantity)}
+                </span>
               </li>
             ))}
           </ul>
@@ -454,35 +483,52 @@ export default function Checkout() {
             )}
           </div>
 
-          <div className="mt-4 space-y-2 text-sm">
-            <div className="flex justify-between"><span className="opacity-70">Subtotal</span><span>{money(subtotal)}</span></div>
-            {discount > 0 && (
-              <div className="flex justify-between text-secondary">
-                <span>Discount ({coupon.code})</span><span>−{money(discount)}</span>
+          {quote ? (
+            <div className="mt-4 space-y-2 text-sm">
+              <div className="flex justify-between"><span className="opacity-70">Subtotal</span><span>{money(quote.subtotal)}</span></div>
+              {quote.discount_amount > 0 && (
+                <div className="flex justify-between text-secondary">
+                  <span>Discount ({quote.coupon_code})</span><span>−{money(quote.discount_amount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between"><span className="opacity-70">{taxLabel()}</span><span>{money(quote.tax)}</span></div>
+              <div className="flex justify-between">
+                <span className="opacity-70">Delivery</span>
+                <span>{quote.shipping_fee === 0 ? <span className="font-semibold text-success">FREE</span> : money(quote.shipping_fee)}</span>
               </div>
-            )}
-            <div className="flex justify-between"><span className="opacity-70">{taxLabel()}</span><span>{money(tax)}</span></div>
-            <div className="flex justify-between">
-              <span className="opacity-70">Delivery</span>
-              <span>{shipping === 0 ? <span className="font-semibold text-success">FREE</span> : money(shipping)}</span>
+              <div className="dash-divider flex justify-between pt-3 text-lg font-bold">
+                <span>Total</span><span>{money(quote.total)}</span>
+              </div>
+              <div className="mt-3 space-y-1 text-xs opacity-70">
+                {deliveryDate && <p>Delivery on {formatDate(deliveryDate)}</p>}
+                <p>
+                  {method === "card"
+                    ? "Paid by card on Stripe's secure page"
+                    : "Cash on delivery — pay at the door"}
+                </p>
+              </div>
             </div>
-            <div className="dash-divider flex justify-between pt-3 text-lg font-bold">
-              <span>Total</span><span>{money(total)}</span>
+          ) : quoteState.status === "error" ? (
+            <div className="mt-4">
+              <div className="alert alert-warning text-sm" role="alert">
+                <span>
+                  {apiError(quoteState.error, "This basket can't be priced right now")} —
+                  check your basket and try again.
+                </span>
+              </div>
             </div>
-            <div className="mt-3 space-y-1 text-xs opacity-70">
-              {deliveryDate && <p>Delivery on {formatDate(deliveryDate)}</p>}
-              <p>
-                {method === "card"
-                  ? "Paid by card on Stripe's secure page"
-                  : "Cash on delivery — pay at the door"}
-              </p>
+          ) : (
+            <div className="mt-4 space-y-2" aria-label="Pricing your basket">
+              <div className="skeleton h-4 w-full" />
+              <div className="skeleton h-4 w-2/3" />
+              <div className="skeleton h-6 w-1/2" />
             </div>
-          </div>
-          <button type="submit" className="btn btn-secondary btn-lg mt-6 w-full text-secondary-content" disabled={placing}>
-            {placing ? (
+          )}
+          <button type="submit" className="btn btn-secondary btn-lg mt-6 w-full text-secondary-content" disabled={placing || !submittable}>
+            {placing || !submittable ? (
               <span className="loading loading-spinner loading-sm" />
             ) : method === "card" ? (
-              `Pay ${money(total)}`
+              `Pay ${money(quote.total)}`
             ) : (
               "Place order"
             )}

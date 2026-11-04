@@ -12,6 +12,7 @@ from email.message import EmailMessage
 from html import escape
 
 from .config import get_settings
+from .money import money
 
 logger = logging.getLogger("bakery.email")
 
@@ -190,22 +191,26 @@ def order_receipt_email(receipt: dict) -> tuple[str, str, str]:
             f'color:#33322e;">{value}</td></tr>'
         )
 
-    def _usd(amount: float) -> str:
-        return f"${amount:,.2f}"
+    # The order's own money — receipts for historical orders stay in the
+    # currency they were placed in, whatever the shop charges today.
+    currency = receipt.get("currency", "usd")
 
-    shipping_label = "FREE" if receipt["shipping"] == 0 else _usd(receipt["shipping"])
+    def _amount(value: float) -> str:
+        return money(value, currency)
+
+    shipping_label = "FREE" if receipt["shipping"] == 0 else _amount(receipt["shipping"])
     item_rows = "".join(
-        _row(f"{name} × {qty}", _usd(subtotal)) for name, qty, subtotal in lines
+        _row(f"{name} × {qty}", _amount(subtotal)) for name, qty, subtotal in lines
     )
-    subtotal_row = _row("Subtotal", _usd(receipt["subtotal"]))
+    subtotal_row = _row("Subtotal", _amount(receipt["subtotal"]))
     discount_row = (
-        _row(f"Discount ({receipt['coupon_code']})", f"−{_usd(receipt['discount'])}")
+        _row(f"Discount ({receipt['coupon_code']})", f"−{_amount(receipt['discount'])}")
         if receipt["discount"]
         else ""
     )
-    tax_row = _row("Tax", _usd(receipt["tax"]))
+    tax_row = _row("Tax", _amount(receipt["tax"]))
     delivery_row = _row("Delivery", shipping_label)
-    total_row = _row("Total", _usd(receipt["total"]), bold=True)
+    total_row = _row("Total", _amount(receipt["total"]), bold=True)
     payment_line = (
         f"Paid by {payment} — this email is your proof of purchase."
         if paid
@@ -215,16 +220,16 @@ def order_receipt_email(receipt: dict) -> tuple[str, str, str]:
     text = (
         f"Hi {receipt['first_name']},\n\n"
         f"Here's your receipt for order {number}, placed {receipt['placed_at']}.\n\n"
-        + "".join(f"  {name} × {qty}  {_usd(subtotal)}\n" for name, qty, subtotal in lines)
-        + f"\n  Subtotal  {_usd(receipt['subtotal'])}\n"
+        + "".join(f"  {name} × {qty}  {_amount(subtotal)}\n" for name, qty, subtotal in lines)
+        + f"\n  Subtotal  {_amount(receipt['subtotal'])}\n"
         + (
-            f"  Discount ({receipt['coupon_code']})  −{_usd(receipt['discount'])}\n"
+            f"  Discount ({receipt['coupon_code']})  −{_amount(receipt['discount'])}\n"
             if receipt["discount"]
             else ""
         )
-        + f"  Tax  {_usd(receipt['tax'])}\n"
+        + f"  Tax  {_amount(receipt['tax'])}\n"
         + f"  Delivery  {shipping_label}\n"
-        + f"  Total  {_usd(receipt['total'])}\n\n"
+        + f"  Total  {_amount(receipt['total'])}\n\n"
         + f"{payment_line}\n\nThank you for baking with us.\n"
     )
     html = f"""\

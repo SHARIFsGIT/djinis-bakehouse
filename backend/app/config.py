@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     tax_rate: float = 0.0875
     shipping_fee: float = 5.99
     free_shipping_threshold: float = 50.0
+    # Checkout pricing mode. "exclusive" — today's behaviour: net shelf
+    # prices, tax added at the register (the USD shop as it runs now).
+    # "inclusive" — the German target: gross shelf prices, VAT extracted per
+    # line by the engine in app/vat.py. Flipped only at the EUR cutover,
+    # with the tax-adviser classifications approved; nothing reads it until
+    # then, so setting it changes nothing by itself.
+    tax_mode: str = "exclusive"
 
     # CORS
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"

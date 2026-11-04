@@ -10,7 +10,8 @@ scripts/prepare_images.py if you ever re-generate the images.
 """
 
 import logging
-from datetime import timedelta
+from datetime import date, timedelta
+from decimal import Decimal
 
 from sqlalchemy import func, select
 
@@ -31,10 +32,33 @@ from .models import (
     Review,
     Testimonial,
     User,
+    VatRate,
 )
 from .security import hash_password
 
 logger = logging.getLogger("bakery")
+
+# Statutory German VAT percentages in force from 1 January 2026 (§ 12 Abs. 2
+# UStG: 7 % reduced for Anlage 2 goods — including milk-mixed drinks from
+# >= 75 % cow's milk — 19 % standard otherwise). Rate rows are reference
+# data for the engine in app/vat.py; which *product* may use which rate is
+# a per-product classification the tax adviser approves, never something
+# the seeder decides.
+VAT_RATES = (
+    ("REDUCED", date(2026, 1, 1), Decimal("7.00")),
+    ("STANDARD", date(2026, 1, 1), Decimal("19.00")),
+)
+
+
+def _ensure_vat_rates(db) -> None:
+    """The VAT engine's reference data: statutory percentages, in force from
+    their dates, on every boot. Fills genuine gaps only — an edited row is
+    never overwritten, and a future rate change arrives as a new dated row
+    so history never moves under an old order."""
+    for code, valid_from, rate in VAT_RATES:
+        if db.get(VatRate, (code, valid_from)) is None:
+            db.add(VatRate(code=code, valid_from=valid_from, rate=rate))
+    db.commit()
 
 CATEGORIES = [
     ("Breads", "breads", "/static/products/french-baguette.jpg", 1),
@@ -408,6 +432,8 @@ def seed_db() -> None:
 
     db = SessionLocal()
     try:
+        _ensure_vat_rates(db)
+
         if db.scalar(select(func.count(Product.id))):
             _restore_promised_content(db)
             _ensure_admin(db, settings)

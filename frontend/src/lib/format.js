@@ -1,8 +1,44 @@
 /** Shared formatting helpers and domain constants. */
 
-const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+/* The shop's money rules. These defaults mirror the server's .env so the
+   storefront renders correctly before (or without) the /store fetch; App.jsx
+   applies the live values at boot. Charged figures no longer live here at
+   all — they come from POST /api/orders/quote — but the tax label and the
+   free-delivery progress bar still read these, so they stay in tune with
+   what the server charges. */
+export const shopConfig = {
+  currency: "USD",
+  taxRate: 0.0875,
+  shippingFee: 5.99,
+  freeShippingThreshold: 50,
+};
 
-export const money = (n) => usd.format(Number(n ?? 0));
+export const applyShopConfig = (data = {}) => {
+  if (data.currency) shopConfig.currency = String(data.currency).toUpperCase();
+  for (const [key, value] of [
+    ["taxRate", data.tax_rate],
+    ["shippingFee", data.shipping_fee],
+    ["freeShippingThreshold", data.free_shipping_threshold],
+  ]) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n >= 0) shopConfig[key] = n;
+  }
+};
+
+const formatters = new Map();
+const formatterFor = (currency) => {
+  const code = (currency || shopConfig.currency || "USD").toUpperCase();
+  if (!formatters.has(code)) {
+    formatters.set(
+      code,
+      new Intl.NumberFormat("en-US", { style: "currency", currency: code })
+    );
+  }
+  return formatters.get(code);
+};
+
+/** Money in the order's own currency when one is known, else the shop's. */
+export const money = (n, currency) => formatterFor(currency).format(Number(n ?? 0));
 
 export const formatDate = (value) => {
   if (!value) return "—";
@@ -125,37 +161,10 @@ export const PAYMENT_STATUSES = {
   partially_refunded: { label: "Partially refunded", badge: "badge-warning" },
 };
 
-/** Default shop rules (mirrored & re-validated by the server at checkout). */
-export const TAX_RATE = 0.0875;
-export const SHIPPING_FEE = 5.99;
-export const FREE_SHIPPING_THRESHOLD = 50;
-
-/** Delivery charge for a basket — free once it clears the threshold. */
-export const shippingFor = (subtotal) =>
-  subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_FEE;
-
-/* The checkout arithmetic, mirrored from the server (backend orders.py): every
-   figure is rounded to cents as it's charged, tax falls on the discounted
-   subtotal, and free delivery is judged on the pre-discount one. Every estimate
-   the shop quotes — the basket tally, the checkout summary — runs through this
-   one copy so the numbers a customer sees can never drift from the invoice. */
-export const computeTotals = (subtotal, percentOff = 0) => {
-  const cents = (n) => Math.round(n * 100) / 100;
-  const discount = cents((subtotal * percentOff) / 100);
-  const taxable = cents(subtotal - discount);
-  const tax = cents(taxable * TAX_RATE);
-  const shipping = shippingFor(subtotal);
-  return {
-    discount,
-    taxable,
-    tax,
-    shipping,
-    total: cents(taxable + tax + shipping),
-  };
-};
-
-/** "Tax (8.75%)" — the label and the math always come from the same constant. */
+/** "Tax (8.75%)" — the label comes from the same rule the server taxes by
+    (applied to the discounted subtotal). The amount itself is no longer
+    computed here: basket tallies come from POST /api/orders/quote. */
 export const taxLabel = () => {
-  const percent = (TAX_RATE * 100).toFixed(2).replace(/\.?0+$/, "");
+  const percent = (shopConfig.taxRate * 100).toFixed(2).replace(/\.?0+$/, "");
   return `Tax (${percent}%)`;
 };

@@ -108,10 +108,10 @@ export default function OrderReceipt() {
               <span className="font-semibold">
                 {item.product_name}
                 <span className="ml-2 text-sm font-normal opacity-60">
-                  {money(item.unit_price)} × {item.quantity}
+                  {money(item.unit_price, order.currency)} × {item.quantity}
                 </span>
               </span>
-              <span className="shrink-0 font-bold">{money(item.subtotal)}</span>
+              <span className="shrink-0 font-bold">{money(item.subtotal, order.currency)}</span>
             </li>
           ))}
         </ul>
@@ -120,17 +120,17 @@ export default function OrderReceipt() {
         <div className="mt-2 space-y-1.5 text-sm">
           <div className="flex justify-between">
             <span className="opacity-70">Subtotal</span>
-            <span>{money(order.subtotal)}</span>
+            <span>{money(order.subtotal, order.currency)}</span>
           </div>
           {order.discount_amount > 0 && (
             <div className="flex justify-between text-success">
               <span>Discount ({order.coupon_code})</span>
-              <span>−{money(order.discount_amount)}</span>
+              <span>−{money(order.discount_amount, order.currency)}</span>
             </div>
           )}
           <div className="flex justify-between">
             <span className="opacity-70">Tax</span>
-            <span>{money(order.tax)}</span>
+            <span>{money(order.tax, order.currency)}</span>
           </div>
           <div className="flex justify-between">
             <span className="opacity-70">Delivery</span>
@@ -138,18 +138,18 @@ export default function OrderReceipt() {
               {order.shipping_fee === 0 ? (
                 <span className="font-semibold text-success">FREE</span>
               ) : (
-                money(order.shipping_fee)
+                money(order.shipping_fee, order.currency)
               )}
             </span>
           </div>
           <div className="dash-divider mt-2 flex justify-between border-t-2 pt-2.5 text-base font-bold">
             <span>Total</span>
-            <span>{money(order.total)}</span>
+            <span>{money(order.total, order.currency)}</span>
           </div>
           {order.cancel_fee > 0 && (
             <div className="flex justify-between pt-1 text-warning">
               <span>Late-cancellation fee kept</span>
-              <span>{money(order.cancel_fee)}</span>
+              <span>{money(order.cancel_fee, order.currency)}</span>
             </div>
           )}
         </div>

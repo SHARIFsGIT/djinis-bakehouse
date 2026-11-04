@@ -1,7 +1,7 @@
 import { BadgePercent, Plus, Truck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import client from "../api/client";
+import client, { apiError } from "../api/client";
 import EmptyState from "../components/EmptyState";
 import PhotoTile from "../components/PhotoTile";
 import PriceTag from "../components/PriceTag";
@@ -9,13 +9,9 @@ import QuantityInput from "../components/QuantityInput";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
 import { useToast } from "../context/ToastContext";
+import useBasketQuote from "../hooks/useBasketQuote";
 import { getStoredCoupon, storeCoupon } from "../lib/coupon";
-import {
-  FREE_SHIPPING_THRESHOLD,
-  computeTotals,
-  money,
-  taxLabel,
-} from "../lib/format";
+import { money, shopConfig, taxLabel } from "../lib/format";
 
 /** One live voucher: the saving it offers and whether this basket earns it. */
 function VoucherCard({ voucher, subtotal, applied, onApply, onRemove }) {
@@ -93,6 +89,22 @@ export default function Cart() {
   const [vouchers, setVouchers] = useState([]);
   const [appliedCode, setAppliedCode] = useState(getStoredCoupon());
 
+  // The server prices this basket — coupon included — exactly as checkout
+  // will; the browser holds no money arithmetic of its own anymore.
+  const quoteState = useBasketQuote(items, appliedCode);
+
+  // A quote the server refuses while a voucher is aboard almost always means
+  // the voucher itself (paused, already spent, or the basket no longer
+  // qualifies) — drop it with the reason and let the tally re-price. A
+  // refusal that survives without one is the basket; the tally says so.
+  useEffect(() => {
+    if (quoteState.status === "error" && appliedCode) {
+      setAppliedCode("");
+      storeCoupon("");
+      toast.info(apiError(quoteState.error, "That voucher no longer applies — removed"));
+    }
+  }, [quoteState.status, quoteState.error, appliedCode]);
+
   // One-tap add-ons — the best-rated bakes not already in the basket
   useEffect(() => {
     client
@@ -152,16 +164,16 @@ export default function Cart() {
     );
   }
 
-  // A tapped voucher changes the estimate right here — the same cents-at-a-
-  // time math the server will charge. The code only counts once it's on the
-  // live board: if the baker pauses it, this tally quietly stops promising it.
-  const appliedVoucher = vouchers.find((v) => v.code === appliedCode);
-  const { discount, tax, shipping, total } = computeTotals(
-    subtotal,
-    appliedVoucher?.percent_off ?? 0,
-  );
-  const remaining = Math.max(0, FREE_SHIPPING_THRESHOLD - subtotal);
-  const progress = Math.min(100, (subtotal / FREE_SHIPPING_THRESHOLD) * 100);
+  // The tally below is the server's own pricing of this basket. Until the
+  // first quote lands, line rows fall back to the prices cached at add-time
+  // (visual only — the tally itself waits for the server).
+  const quote = quoteState.quote;
+  const quoteLines = new Map((quote?.items ?? []).map((i) => [i.product_id, i]));
+  // The free-delivery nudge is a hint, not a charge — it may run on the
+  // cached subtotal for a beat until the fresh quote arrives.
+  const hintSubtotal = quote?.subtotal ?? subtotal;
+  const remaining = Math.max(0, shopConfig.freeShippingThreshold - hintSubtotal);
+  const progress = Math.min(100, (hintSubtotal / shopConfig.freeShippingThreshold) * 100);
 
   const inCart = new Set(items.map((i) => i.product_id));
   const picks = bestRated
@@ -216,7 +228,7 @@ export default function Cart() {
                 max={item.stock || 99}
               />
               <p className="w-20 text-right font-bold">
-                {money(item.unit_price * item.quantity)}
+                {money(quoteLines.get(item.product_id)?.line_total ?? item.unit_price * item.quantity)}
               </p>
               <button
                 type="button"
@@ -287,7 +299,12 @@ export default function Cart() {
 
         {/* Summary */}
         <aside className="h-fit rounded-box bg-base-200/70 p-6 shadow-sm lg:sticky lg:top-24">
-          <h2 className="font-display text-xl font-semibold">The tally</h2>
+          <h2 className="font-display text-xl font-semibold">
+            The tally
+            {quoteState.status === "loading" && quote && (
+              <span className="loading loading-spinner loading-xs ml-2 align-middle opacity-50" aria-label="Refreshing the tally" />
+            )}
+          </h2>
 
           <div className="mt-4">
             {remaining > 0 ? (
@@ -314,38 +331,58 @@ export default function Cart() {
             />
           </div>
 
-          <div className="dash-divider mt-5 space-y-2 pt-5 text-sm">
-            <div className="flex justify-between">
-              <span className="opacity-70">Subtotal</span>
-              <span>{money(subtotal)}</span>
-            </div>
-            {appliedVoucher && (
-              <div className="flex justify-between font-semibold text-success">
-                <span>
-                  {appliedVoucher.code} ({appliedVoucher.percent_off}% off)
-                </span>
-                <span>−{money(discount)}</span>
+          {quote ? (
+            <div className="dash-divider mt-5 space-y-2 pt-5 text-sm">
+              <div className="flex justify-between">
+                <span className="opacity-70">Subtotal</span>
+                <span>{money(quote.subtotal)}</span>
               </div>
-            )}
-            <div className="flex justify-between">
-              <span className="opacity-70">{taxLabel()}</span>
-              <span>{money(tax)}</span>
+              {quote.coupon_code && (
+                <div className="flex justify-between font-semibold text-success">
+                  <span>
+                    {quote.coupon_code} ({quote.coupon_percent_off}% off)
+                  </span>
+                  <span>−{money(quote.discount_amount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="opacity-70">{taxLabel()}</span>
+                <span>{money(quote.tax)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="opacity-70">Delivery</span>
+                <span>
+                  {quote.shipping_fee === 0 ? (
+                    <span className="font-semibold text-success">FREE</span>
+                  ) : (
+                    money(quote.shipping_fee)
+                  )}
+                </span>
+              </div>
+              <div className="dash-divider flex justify-between pt-3 text-lg font-bold">
+                <span>Estimated total</span>
+                <span>{money(quote.total)}</span>
+              </div>
             </div>
-            <div className="flex justify-between">
-              <span className="opacity-70">Delivery</span>
-              <span>
-                {shipping === 0 ? (
-                  <span className="font-semibold text-success">FREE</span>
-                ) : (
-                  money(shipping)
-                )}
-              </span>
+          ) : quoteState.status === "error" ? (
+            <div className="dash-divider mt-5 pt-5">
+              <div className="alert alert-warning text-sm" role="alert">
+                <span>
+                  {apiError(quoteState.error, "This basket can't be priced right now")} —
+                  check the items and try again.
+                </span>
+              </div>
             </div>
-            <div className="dash-divider flex justify-between pt-3 text-lg font-bold">
-              <span>Estimated total</span>
-              <span>{money(total)}</span>
+          ) : (
+            <div
+              className="dash-divider mt-5 space-y-2 pt-5"
+              aria-label="Pricing your basket"
+            >
+              <div className="skeleton h-4 w-full" />
+              <div className="skeleton h-4 w-2/3" />
+              <div className="skeleton h-6 w-1/2" />
             </div>
-          </div>
+          )}
 
           {/* The voucher board — every code the shop is offering, and what
               this basket still has to do to earn it */}
@@ -359,7 +396,7 @@ export default function Cart() {
                   <VoucherCard
                     key={v.code}
                     voucher={v}
-                    subtotal={subtotal}
+                    subtotal={hintSubtotal}
                     applied={appliedCode === v.code}
                     onApply={applyVoucher}
                     onRemove={removeVoucher}

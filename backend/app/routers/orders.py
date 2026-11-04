@@ -8,6 +8,7 @@ Card orders are placed unpaid and only become paid when Stripe says so
 
 import random
 from datetime import date, timedelta
+from typing import NamedTuple
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
 from sqlalchemy import func, select, update
@@ -15,6 +16,7 @@ from sqlalchemy import func, select, update
 from .. import stripe_gateway
 from ..config import get_settings
 from ..email import send_order_receipt
+from ..money import money
 from ..notifications import notify_admin
 from ..models import (
     Address,
@@ -36,8 +38,10 @@ from ..schemas import (
     OrderListResponse,
     OrderOut,
     PaginationOut,
+    QuoteOut,
+    QuoteRequest,
 )
-from ..security import CurrentUser, DbSession
+from ..security import CurrentUser, DbSession, OptionalUser, client_key
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 settings = get_settings()
@@ -81,6 +85,75 @@ def _load_coupon(db, code: str, user: User | None = None) -> Coupon:
     return coupon
 
 
+def _resolve_basket(db, items) -> tuple[dict[int, int], dict[int, Product]]:
+    """Validate a client basket against the catalog and hand back the merged
+    quantities plus the products that carry them. Checkout and the basket
+    quote ask the exact same questions, so a quote can never promise what
+    placement would refuse: same availability rule, same stock message."""
+    merged: dict[int, int] = {}
+    for item in items:
+        merged[item.product_id] = merged.get(item.product_id, 0) + item.quantity
+
+    products = db.scalars(
+        select(Product).where(Product.id.in_(merged.keys()), Product.is_available.is_(True))
+    ).all()
+    by_id = {p.id: p for p in products}
+
+    for product_id, quantity in merged.items():
+        product = by_id.get(product_id)
+        if product is None:
+            raise HTTPException(status_code=400, detail=f"Product {product_id} is not available")
+        if product.stock < quantity:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Only {product.stock} left of {product.name}",
+            )
+    return merged, by_id
+
+
+def _basket_coupon(db, code: str | None, user: User | None, subtotal: float) -> Coupon | None:
+    """Load a coupon the way a basket spends one: valid (and, for a signed-in
+    shopper, not one-per-customer-spent) and unlocked by this subtotal."""
+    if not code:
+        return None
+    coupon = _load_coupon(db, code, user)
+    if coupon.min_subtotal and subtotal < float(coupon.min_subtotal):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{coupon.code} needs a basket of at least "
+                f"{money(float(coupon.min_subtotal), settings.stripe_currency)}"
+            ),
+        )
+    return coupon
+
+
+class BasketTotals(NamedTuple):
+    """The five figures every priced basket carries."""
+
+    discount: float
+    taxable: float
+    tax: float
+    shipping: float
+    total: float
+
+
+def _price_basket(subtotal: float, coupon: Coupon | None) -> BasketTotals:
+    """The one money recipe a basket is charged by — checkout and the quote
+    endpoint share it, so what the storefront displays and what the invoice
+    says cannot drift apart. Tax stays the shop's flat exclusive rate
+    (settings.tax_rate) exactly as today; the VAT engine is deliberately not
+    consulted until the euro migration turns it on."""
+    discount = round(subtotal * coupon.percent_off / 100, 2) if coupon else 0.0
+    taxable = round(subtotal - discount, 2)
+    tax = round(taxable * settings.tax_rate, 2)
+    shipping = 0.0 if subtotal >= settings.free_shipping_threshold else settings.shipping_fee
+    total = round(taxable + tax + shipping, 2)
+    return BasketTotals(
+        discount=discount, taxable=taxable, tax=tax, shipping=shipping, total=total
+    )
+
+
 def _late_cancel_fee(order: Order, db) -> float:
     """What cancelling this order costs right now (0 unless it's baking)."""
     if order.status != OrderStatus.BAKING.value or not order.can_be_cancelled:
@@ -105,6 +178,7 @@ def _serialize(
         shipping_fee=float(order.shipping_fee),
         total=float(order.total),
         cancel_fee=float(order.cancel_fee or 0),
+        currency=order.currency,
         delivery_date=order.delivery_date,
         note=order.note,
         recipient=order.recipient,
@@ -164,6 +238,7 @@ def _receipt_dict(order: Order) -> dict:
         "total": float(order.total),
         "payment_method": order.payment_method,
         "payment_status": order.payment_status,
+        "currency": order.currency,
     }
 
 
@@ -234,24 +309,7 @@ def checkout(
         db.flush()
 
     # Validate items against the catalog — the server is the source of truth
-    merged: dict[int, int] = {}
-    for item in payload.items:
-        merged[item.product_id] = merged.get(item.product_id, 0) + item.quantity
-
-    products = db.scalars(
-        select(Product).where(Product.id.in_(merged.keys()), Product.is_available.is_(True))
-    ).all()
-    by_id = {p.id: p for p in products}
-
-    for product_id, quantity in merged.items():
-        product = by_id.get(product_id)
-        if product is None:
-            raise HTTPException(status_code=400, detail=f"Product {product_id} is not available")
-        if product.stock < quantity:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Only {product.stock} left of {product.name}",
-            )
+    merged, by_id = _resolve_basket(db, payload.items)
 
     if payload.delivery_date and payload.delivery_date < date.today():
         raise HTTPException(status_code=400, detail="Delivery date cannot be in the past")
@@ -259,20 +317,8 @@ def checkout(
         raise HTTPException(status_code=400, detail="Delivery date is too far ahead")
 
     subtotal = round(sum(by_id[pid].current_price * qty for pid, qty in merged.items()), 2)
-
-    coupon = (
-        _load_coupon(db, payload.coupon_code, user) if payload.coupon_code else None
-    )
-    if coupon and coupon.min_subtotal and subtotal < float(coupon.min_subtotal):
-        raise HTTPException(
-            status_code=400,
-            detail=f"{coupon.code} needs a basket of at least ${float(coupon.min_subtotal):.2f}",
-        )
-    discount = round(subtotal * coupon.percent_off / 100, 2) if coupon else 0.0
-    taxable = round(subtotal - discount, 2)
-    tax = round(taxable * settings.tax_rate, 2)
-    shipping = 0.0 if subtotal >= settings.free_shipping_threshold else settings.shipping_fee
-    total = round(taxable + tax + shipping, 2)
+    coupon = _basket_coupon(db, payload.coupon_code, user, subtotal)
+    discount, _taxable, tax, shipping, total = _price_basket(subtotal, coupon)
 
     # Both rails start pending: cash settles at the door, card settles when
     # Stripe confirms the payment.
@@ -284,6 +330,9 @@ def checkout(
         status=OrderStatus.PENDING.value,
         payment_method=payload.payment_method.value,
         payment_status=payment_status,
+        # The charge currency in force when the order is placed — the same
+        # setting every Stripe session for it will be created with.
+        currency=settings.stripe_currency,
         subtotal=round(subtotal, 2),
         discount_amount=discount,
         coupon_code=coupon.code if coupon else None,
@@ -338,7 +387,7 @@ def checkout(
     notify_admin(
         db,
         kind="order",
-        title=f"New order {order.order_number} — ${total:.2f}",
+        title=f"New order {order.order_number} — {money(total, order.currency)}",
         body=f"{user.full_name} · {sum(merged.values())} items · "
         f"{payload.payment_method.value.replace('_', ' ')}",
         link=f"/admin/orders?search={order.order_number}",
@@ -379,6 +428,66 @@ def checkout(
         background.add_task(send_order_receipt, _receipt_dict(order))
 
     return _serialize(order, detailed=True, payment_url=payment_url)
+
+
+@router.post("/quote", response_model=QuoteOut)
+def basket_quote(
+    payload: QuoteRequest,
+    user: OptionalUser,
+    db: DbSession,
+    request: Request,
+):
+    """Price a basket exactly as checkout would charge it — same catalog,
+    same coupon rules, same delivery threshold, same cent rounding — while
+    touching nothing: no order, no stock movement, no Stripe session, no
+    email. The storefront's tallies come from here so the browser holds no
+    arithmetic of its own; placement then re-derives every figure
+    independently, so a displayed quote is never authorization to charge.
+
+    Open to guests (a basket can be browsed before login, like the voucher
+    board); a signed-in shopper additionally gets the one-per-customer
+    coupon check, since their identity is known.
+    """
+    # A public pricing endpoint is a free lookup — keep it from being
+    # hammered, but looser than the write endpoints: it stores nothing.
+    limiter = request.app.state.limiters["quote"]
+    if not limiter.allow(client_key(request)):
+        raise HTTPException(
+            status_code=429, detail="That's a lot of price checks — try again in a moment."
+        )
+
+    merged, by_id = _resolve_basket(db, payload.items)
+    subtotal = round(sum(by_id[pid].current_price * qty for pid, qty in merged.items()), 2)
+    coupon = _basket_coupon(db, payload.coupon_code, user, subtotal)
+    totals = _price_basket(subtotal, coupon)
+
+    lines = []
+    for product_id, quantity in merged.items():
+        product = by_id[product_id]
+        lines.append(
+            {
+                "product_id": product_id,
+                "name": product.name,
+                "slug": product.slug,
+                "unit_price": product.current_price,
+                "quantity": quantity,
+                "line_total": round(product.current_price * quantity, 2),
+            }
+        )
+
+    return QuoteOut(
+        items=lines,
+        subtotal=subtotal,
+        discount_amount=totals.discount,
+        coupon_code=coupon.code if coupon else None,
+        coupon_percent_off=coupon.percent_off if coupon else None,
+        tax=totals.tax,
+        shipping_fee=totals.shipping,
+        total=totals.total,
+        # The currency the eventual order will be charged in — checkout
+        # records this same setting on every order it writes.
+        currency=settings.stripe_currency,
+    )
 
 
 @router.get("/coupons/{code}", response_model=CouponPreviewOut)
@@ -515,7 +624,10 @@ def _cancel_order(order: Order, db, *, by_customer: bool, comment: str | None = 
         "Cancelled by customer" if by_customer else "Cancelled by bakery"
     )
     if fee:
-        text += f" — late-cancellation fee of ${fee:.2f} kept (baking had started)"
+        text += (
+            f" — late-cancellation fee of {money(fee, order.currency)} kept "
+            "(baking had started)"
+        )
     if refund_note:
         text += f" — {refund_note}"
 

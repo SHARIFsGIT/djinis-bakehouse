@@ -110,22 +110,22 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
             {order.items.map((i) => (
               <li key={i.id} className="flex justify-between gap-3 py-2">
                 <span className="font-semibold">{i.product_name} <span className="opacity-60">× {i.quantity}</span></span>
-                <span className="font-bold">{money(i.subtotal)}</span>
+                <span className="font-bold">{money(i.subtotal, order.currency)}</span>
               </li>
             ))}
           </ul>
           <div className="mt-2 space-y-1 text-sm">
-            <div className="flex justify-between"><span className="opacity-60">Subtotal</span><span>{money(order.subtotal)}</span></div>
+            <div className="flex justify-between"><span className="opacity-60">Subtotal</span><span>{money(order.subtotal, order.currency)}</span></div>
             {order.discount_amount > 0 && (
               <div className="flex justify-between text-secondary">
                 <span>Discount {order.coupon_code ? `(${order.coupon_code})` : ""}</span>
-                <span>−{money(order.discount_amount)}</span>
+                <span>−{money(order.discount_amount, order.currency)}</span>
               </div>
             )}
-            <div className="flex justify-between"><span className="opacity-60">Tax</span><span>{money(order.tax)}</span></div>
-            <div className="flex justify-between"><span className="opacity-60">Delivery</span><span>{order.shipping_fee === 0 ? "FREE" : money(order.shipping_fee)}</span></div>
+            <div className="flex justify-between"><span className="opacity-60">Tax</span><span>{money(order.tax, order.currency)}</span></div>
+            <div className="flex justify-between"><span className="opacity-60">Delivery</span><span>{order.shipping_fee === 0 ? "FREE" : money(order.shipping_fee, order.currency)}</span></div>
             <div className="flex justify-between border-t border-dashed border-base-300 pt-1 font-bold">
-              <span>Total</span><span>{money(order.total)}</span>
+              <span>Total</span><span>{money(order.total, order.currency)}</span>
             </div>
           </div>
         </section>
@@ -545,7 +545,7 @@ function OrdersTab() {
                         {o.payment_status}
                       </span>
                     </td>
-                    <td className="text-right font-bold">{money(o.total)}</td>
+                    <td className="text-right font-bold">{money(o.total, o.currency)}</td>
                     <td className="text-right text-xs whitespace-nowrap opacity-60">{formatDateTime(o.created_at)}</td>
                     <td className="text-right">
                       <button

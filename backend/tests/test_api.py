@@ -2694,3 +2694,964 @@ def test_confirm_after_a_webhook_lands_mid_request_does_not_double_receipt(caplo
     assert len(received) == 1
     logged = "\n".join(r.getMessage() for r in caplog.records)
     assert logged.count(f"Receipt {order['order_number']}") == 1
+
+
+def test_orders_remember_the_currency_they_were_placed_in(monkeypatch):
+    """The foundation of the euro migration: every order carries the charge
+    currency in force when it was placed, and flipping the shop to euro leaves
+    the dollar orders exactly as they were. Today's shop charges usd, so that
+    is what new orders say — the point is the column, the serializer and the
+    payload all carry it faithfully."""
+    from app.routers import orders as orders_router
+
+    headers = auth_header(login_customer())
+    _top_up_stock("butter-croissant")
+
+    dollar = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    assert dollar["currency"] == "usd"
+    assert client.get(f"/api/orders/{dollar['id']}", headers=headers).json()["currency"] == "usd"
+
+    # the shop cuts over to euro — only orders placed from now on change
+    monkeypatch.setattr(orders_router.settings, "stripe_currency", "eur", raising=True)
+    euro = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    assert euro["currency"] == "eur"
+
+    # history keeps its own money, whichever way the shop charges now
+    assert client.get(f"/api/orders/{dollar['id']}", headers=headers).json()["currency"] == "usd"
+    admin = client.get("/api/admin/orders", headers=admin_headers()).json()
+    by_id = {row["id"]: row["currency"] for row in admin["orders"]}
+    assert by_id[dollar["id"]] == "usd"
+    assert by_id[euro["id"]] == "eur"
+
+
+def test_the_receipt_email_speaks_each_orders_currency():
+    """A receipt is written in the money its order was placed in — a dollar
+    order keeps its dollar receipt even after the shop starts charging euro."""
+    from app.email import order_receipt_email
+
+    def receipt(currency):
+        return {
+            "email": "taster@example.com",
+            "first_name": "Taster",
+            "order_number": "DJ-TEST-0001",
+            "placed_at": "Nov 04, 2026, 8:00 AM",
+            "items": [{"name": "Butter Croissant", "quantity": 2, "subtotal": 7.5}],
+            "subtotal": 7.5,
+            "discount": 0.0,
+            "coupon_code": None,
+            "tax": 0.66,
+            "shipping": 0.0,
+            "total": 8.16,
+            "payment_method": "card",
+            "payment_status": "paid",
+            "currency": currency,
+        }
+
+    subject, html, text = order_receipt_email(receipt("usd"))
+    assert "$7.50" in text and "$7.50" in html
+    assert "€" not in text and "€" not in html
+
+    subject, html, text = order_receipt_email(receipt("eur"))
+    assert "€7.50" in text and "€7.50" in html
+    assert "$" not in text and "$" not in html
+
+
+def test_the_public_store_carries_the_shop_money_rules():
+    """/api/store is the storefront's single source of the money rules — the
+    basket's arithmetic and symbols follow it, so it must mirror the settings
+    the server actually charges with."""
+    from app.config import get_settings
+
+    store = client.get("/api/store").json()
+    settings = get_settings()
+    assert store["currency"] == settings.stripe_currency == "usd"
+    assert store["tax_rate"] == settings.tax_rate
+    assert store["shipping_fee"] == settings.shipping_fee
+    assert store["free_shipping_threshold"] == settings.free_shipping_threshold
+
+
+def test_refunding_a_historical_dollar_order_keeps_its_cents(monkeypatch):
+    """Refunds are minor units of the order's own currency: a dollar order
+    paid before a euro cutover is refunded in exactly the dollars it was
+    charged — nothing is converted, nothing recomputed."""
+    from app.routers import orders as orders_router
+
+    headers = auth_header(login_customer())
+    _top_up_stock("butter-croissant")
+    order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    pay_order_via_webhook(order["id"])
+
+    # the shop cuts over to euro after this order was placed and paid
+    monkeypatch.setattr(orders_router.settings, "stripe_currency", "eur", raising=True)
+    calls_before = len(gateway_calls)  # the recorder spans the whole suite
+    cancelled = client.put(
+        f"/api/admin/orders/{order['id']}/status",
+        json={"status": "cancelled"},
+        headers=admin_headers(),
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["payment_status"] == "refunded"
+    assert cancelled.json()["currency"] == "usd"
+
+    refunds = [call for call in gateway_calls[calls_before:] if call[0] == "refund"]
+    assert len(refunds) == 1
+    assert refunds[0][2] == round(float(order["total"]) * 100)  # the original usd cents
+
+
+def test_the_currency_column_migrates_a_legacy_sqlite_database(tmp_path, monkeypatch):
+    """A database from before the currency column boots through the additive
+    migration: the column lands and every existing row reads as the dollars
+    it was placed in. (SQLite proves the DDL runs and backfills; the statement
+    itself is pinned to the Postgres-safe shape in the test below — the
+    boolean-default lesson from 2026-11-02.)"""
+    import sqlalchemy as sa
+
+    from app import _upgrade_schema
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
+    with engine.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE orders (id INTEGER PRIMARY KEY, total NUMERIC(10,2))"))
+        conn.execute(sa.text("INSERT INTO orders (id, total) VALUES (1, 12.00)"))
+        # the boot-time data fixes touch categories unconditionally
+        conn.execute(sa.text("CREATE TABLE categories (id INTEGER PRIMARY KEY, description VARCHAR(255))"))
+
+    monkeypatch.setattr("app.engine", engine)
+    _upgrade_schema()
+
+    with engine.begin() as conn:
+        rows = conn.execute(sa.text("SELECT id, total, currency FROM orders")).fetchall()
+        assert rows == [(1, 12.0, "usd")]
+    engine.dispose()
+
+
+def test_the_currency_ddl_keeps_its_postgres_safe_shape():
+    """The additive column must stay a VARCHAR with a quoted string default —
+    an integer default or bare boolean is exactly the class of statement that
+    boots on SQLite and dies on Postgres."""
+    from app import _ADDITIVE_COLUMNS
+
+    assert (
+        _ADDITIVE_COLUMNS["orders"]["currency"]
+        == "ALTER TABLE orders ADD COLUMN currency VARCHAR(3) NOT NULL DEFAULT 'usd'"
+    )
+
+
+# --------------------------------------------------------------------------
+# The VAT foundation (Phase 2B): the engine in app/vat.py, classification
+# rules, and the snapshot columns — checkout itself is untouched.
+# --------------------------------------------------------------------------
+
+import datetime  # noqa: E402
+from decimal import Decimal  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+def _vat_product(**overrides):
+    """A classification stand-in: the engine only reads four attributes off
+    a product, so rules can be pinned without touching the shop's catalog."""
+    product = SimpleNamespace(
+        name="Whatever",
+        vat_category=None,
+        vat_review_status="approved",
+        milk_content_percent=None,
+    )
+    for key, value in overrides.items():
+        setattr(product, key, value)
+    return product
+
+
+def test_vat_math_rounds_cents_half_up():
+    """The engine's arithmetic in miniature: Decimal only, cents, half-up —
+    1.50 net at 7 % is exactly 0.105 of tax, and half-up makes it 0.11 where
+    banker's rounding (and float round()) would say 0.10."""
+    from app.vat import add_vat, extract_vat, round_cents
+
+    assert round_cents(Decimal("0.125")) == Decimal("0.13")
+
+    # the Phase 2A worked example's lines, computed the way the engine does
+    assert extract_vat(Decimal("6.75"), Decimal("7")) == (Decimal("6.31"), Decimal("0.44"))
+    assert extract_vat(Decimal("3.60"), Decimal("7")) == (Decimal("3.36"), Decimal("0.24"))
+    assert extract_vat(Decimal("2.25"), Decimal("19")) == (Decimal("1.89"), Decimal("0.36"))
+
+    # net + vat always reassembles the gross to the cent
+    net, vat = extract_vat(Decimal("16.50"), Decimal("7"))
+    assert net + vat == Decimal("16.50")
+
+    # the exclusive interface — the shape of the legacy register math
+    assert add_vat(Decimal("1.50"), Decimal("7")) == (Decimal("1.61"), Decimal("0.11"))
+    assert add_vat(Decimal("20.00"), Decimal("8.75")) == (Decimal("21.75"), Decimal("1.75"))
+
+
+def test_vat_rates_resolve_effectively_dated():
+    """Percentages come from the vat_rates table, effective-dated: a rate
+    change is a new row, and dates before any row refuse rather than guess.
+    The 2026 rows themselves were seeded by the app's own boot."""
+    from app.database import SessionLocal
+    from app.models import VatRate
+    from app.vat import VatRateNotConfiguredError, effective_rate
+
+    db = SessionLocal()
+    try:
+        assert effective_rate("REDUCED", datetime.date(2026, 6, 1), db) == Decimal("7.00")
+        assert effective_rate("STANDARD", datetime.date(2026, 6, 1), db) == Decimal("19.00")
+        assert effective_rate("REDUCED", datetime.date.today(), db) == Decimal("7.00")
+
+        with pytest.raises(VatRateNotConfiguredError):
+            effective_rate("REDUCED", datetime.date(2025, 12, 31), db)
+
+        # a hypothetical 2027 change: newer row wins from its date, older
+        # dates keep the rate that was in force when they were priced
+        db.add(VatRate(code="REDUCED", valid_from=datetime.date(2027, 1, 1), rate=Decimal("8.00")))
+        db.commit()
+        assert effective_rate("REDUCED", datetime.date(2027, 6, 1), db) == Decimal("8.00")
+        assert effective_rate("REDUCED", datetime.date(2026, 6, 1), db) == Decimal("7.00")
+        db.delete(db.get(VatRate, ("REDUCED", datetime.date(2027, 1, 1))))
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_unclassified_or_unapproved_products_never_get_a_rate():
+    """The gate VAT-inclusive checkout will price through: every way a
+    product can fail its classification raises — nothing is priced, let
+    alone sold, on a guessed rate."""
+    from app.database import SessionLocal
+    from app.vat import (
+        InvalidVatCategoryError,
+        UnclassifiedProductError,
+        UnapprovedProductError,
+        resolve_product_rate,
+    )
+
+    db = SessionLocal()
+    try:
+        with pytest.raises(UnclassifiedProductError):
+            resolve_product_rate(_vat_product(vat_category=None), db)
+        with pytest.raises(UnclassifiedProductError):
+            resolve_product_rate(_vat_product(vat_category="SMOOTHIE_REVIEW"), db)
+        with pytest.raises(UnclassifiedProductError):
+            resolve_product_rate(_vat_product(vat_category="SPECIAL_REVIEW"), db)
+        with pytest.raises(UnclassifiedProductError, match="cow's-milk"):
+            resolve_product_rate(_vat_product(vat_category="MILK_DRINK"), db)
+        with pytest.raises(InvalidVatCategoryError):
+            resolve_product_rate(_vat_product(vat_category="CAVIAR_LUXURY"), db)
+
+        with pytest.raises(UnapprovedProductError):
+            resolve_product_rate(
+                _vat_product(vat_category="FOOD_REDUCED", vat_review_status="pending"), db
+            )
+        with pytest.raises(UnapprovedProductError):
+            resolve_product_rate(
+                _vat_product(vat_category="FOOD_REDUCED", vat_review_status="blocked"), db
+            )
+
+        # the one path that prices: classified, approved, rate in force
+        rate = resolve_product_rate(_vat_product(vat_category="FOOD_REDUCED"), db)
+        assert rate == Decimal("7.00")
+    finally:
+        db.close()
+
+
+def test_milk_content_threshold_decides_the_rate():
+    """Anlage 2 nr. 35 in one pure function: at least 75.00 % cow's milk in
+    the finished drink buys the reduced rate, anything less pays standard.
+    The percentage must measure cow's milk — an oat-based shake's number is
+    its cow's-milk content (zero), no matter how much oat drink it holds."""
+    from app.vat import RATE_REDUCED, RATE_STANDARD, rate_kind_for
+
+    assert rate_kind_for("MILK_DRINK", Decimal("74.99")) == RATE_STANDARD
+    assert rate_kind_for("MILK_DRINK", Decimal("75.00")) == RATE_REDUCED
+    assert rate_kind_for("MILK_DRINK", Decimal("75.01")) == RATE_REDUCED
+
+    # plant-based: the cow's-milk share of the finished drink is zero
+    assert rate_kind_for("MILK_DRINK", Decimal("0")) == RATE_STANDARD
+
+    # non-milk categories resolve without a milk figure
+    assert rate_kind_for("FOOD_REDUCED") == RATE_REDUCED
+    assert rate_kind_for("BEVERAGE_STANDARD") == RATE_STANDARD
+
+
+def test_price_line_inclusive_snapshots_the_full_vat_picture():
+    """One line, priced end to end from a gross shelf price: the rate
+    resolved, net extracted per unit and per line, and the figures that
+    will freeze onto the OrderItem — plus the per-rate summary that feeds
+    OrderTaxLine, reconciling to the cent in both groups."""
+    from app.database import SessionLocal
+    from app.models import Product as ProductRow
+    from app.vat import price_line_inclusive, summarize_by_rate
+
+    db = SessionLocal()
+    try:
+        croissant = db.query(ProductRow).filter_by(slug="butter-croissant").one()
+        croissant.vat_category = "FOOD_REDUCED"
+        croissant.vat_review_status = "approved"
+        shake = ProductRow(
+            name="Strawberry Milkshake",
+            slug="strawberry-milkshake",
+            price=4.00,
+            stock=10,
+            is_available=True,
+            vat_category="MILK_DRINK",
+            vat_review_status="approved",
+            milk_content_percent=Decimal("80"),
+        )
+        juice = ProductRow(
+            name="Apple Juice",
+            slug="apple-juice",
+            price=2.50,
+            stock=10,
+            is_available=True,
+            vat_category="BEVERAGE_STANDARD",
+            vat_review_status="approved",
+        )
+        db.add_all([shake, juice])
+        db.commit()
+
+        when = datetime.date(2026, 6, 1)
+        lines = [
+            price_line_inclusive(croissant, 2, db, on_date=when),
+            price_line_inclusive(shake, 1, db, on_date=when),
+            price_line_inclusive(juice, 1, db, on_date=when),
+        ]
+
+        bread, milk, drink = lines
+        assert (bread.vat_category, bread.vat_rate) == ("FOOD_REDUCED", Decimal("7.00"))
+        assert bread.gross_unit_price == Decimal("3.75")
+        assert bread.net_unit_price == Decimal("3.50")  # 3.75 / 1.07 → 3.50
+        assert bread.gross_line_total == Decimal("7.50")
+        assert bread.net_line_total == Decimal("7.01")  # 7.50 / 1.07 → 7.01
+        assert bread.vat_amount == Decimal("0.49")
+        assert milk.vat_rate == Decimal("7.00")  # 80 % cow's milk → reduced
+        assert milk.net_line_total == Decimal("3.74") and milk.vat_amount == Decimal("0.26")
+        assert drink.vat_rate == Decimal("19.00")  # juice as a delivered good
+        assert drink.net_line_total == Decimal("2.10") and drink.vat_amount == Decimal("0.40")
+
+        summary = summarize_by_rate(lines)
+        assert [(s.vat_rate, s.net_amount, s.vat_amount, s.gross_amount) for s in summary] == [
+            (Decimal("7.00"), Decimal("10.75"), Decimal("0.75"), Decimal("11.50")),
+            (Decimal("19.00"), Decimal("2.10"), Decimal("0.40"), Decimal("2.50")),
+        ]
+        for group in summary:  # every bucket reconciles with itself
+            assert group.net_amount + group.vat_amount == group.gross_amount
+    finally:
+        croissant.vat_category = None
+        croissant.vat_review_status = "pending"
+        db.delete(shake)
+        db.delete(juice)
+        db.commit()
+        db.close()
+
+
+def test_orders_placed_today_keep_null_vat_snapshots():
+    """Phase 2B changes no checkout behaviour: an order placed now is priced
+    by the legacy exclusive register math, its lines carry no VAT snapshot,
+    and no per-rate rows exist for it. Snapshots only start when the
+    inclusive cutover wires the engine in."""
+    from app.database import SessionLocal
+    from app.models import OrderItem as OrderItemRow
+    from app.models import OrderTaxLine
+
+    _top_up_stock("butter-croissant")
+    order = client.post("/api/orders", json=checkout_payload(), headers=auth_header(login_customer())).json()
+
+    # the legacy math, exactly as the register has always run it
+    taxable = order["subtotal"] - order["discount_amount"]
+    assert order["tax"] == round(taxable * get_settings().tax_rate, 2)
+    assert order["total"] == round(taxable + order["tax"] + order["shipping_fee"], 2)
+
+    db = SessionLocal()
+    try:
+        items = db.query(OrderItemRow).filter_by(order_id=order["id"]).all()
+        assert items
+        for item in items:
+            assert item.vat_category is None
+            assert item.vat_rate is None
+            assert item.net_unit_price is None
+            assert item.gross_unit_price is None
+            assert item.net_line_total is None
+            assert item.vat_amount is None
+            assert item.gross_line_total is None
+        assert db.query(OrderTaxLine).filter_by(order_id=order["id"]).count() == 0
+    finally:
+        db.close()
+
+
+def test_the_vat_columns_migrate_a_legacy_sqlite_database(tmp_path, monkeypatch):
+    """A database from before the VAT foundation boots through the additive
+    migration: the columns land, every existing product reads as
+    unclassified-but-pending, and historical order lines keep NULL snapshots
+    — no guessed tax figures. The new tables arrive the way boot always
+    delivers them: create_all for the missing, ALTER for the existing."""
+    import sqlalchemy as sa
+
+    from app import _upgrade_schema
+    from app.database import Base
+
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'legacy_vat.db'}")
+    with engine.begin() as conn:
+        conn.execute(sa.text(
+            "CREATE TABLE products (id INTEGER PRIMARY KEY, name VARCHAR(150), price NUMERIC(10,2))"
+        ))
+        conn.execute(sa.text("INSERT INTO products (id, name, price) VALUES (1, 'Sourdough', 6.50)"))
+        conn.execute(sa.text(
+            "CREATE TABLE order_items (id INTEGER PRIMARY KEY, order_id INTEGER, "
+            "unit_price NUMERIC(10,2), quantity INTEGER, subtotal NUMERIC(10,2))"
+        ))
+        conn.execute(sa.text(
+            "INSERT INTO order_items (id, order_id, unit_price, quantity, subtotal) "
+            "VALUES (1, 1, 6.50, 1, 6.50)"
+        ))
+        # the boot-time data fixes touch categories unconditionally
+        conn.execute(sa.text("CREATE TABLE categories (id INTEGER PRIMARY KEY, description VARCHAR(255))"))
+
+    monkeypatch.setattr("app.engine", engine)
+    Base.metadata.create_all(engine)
+    _upgrade_schema()
+
+    with engine.begin() as conn:
+        products = conn.execute(sa.text(
+            "SELECT vat_category, vat_review_status, milk_content_percent FROM products"
+        )).fetchall()
+        assert products == [(None, "pending", None)]
+        items = conn.execute(sa.text(
+            "SELECT vat_category, vat_rate, net_unit_price, gross_unit_price, "
+            "net_line_total, vat_amount, gross_line_total FROM order_items"
+        )).fetchall()
+        assert items == [(None, None, None, None, None, None, None)]
+    tables = sa.inspect(engine).get_table_names()
+    assert "vat_rates" in tables and "order_tax_lines" in tables
+    assert "product_vat_events" in tables  # the classification audit log
+    engine.dispose()
+
+
+def test_the_vat_ddl_keeps_its_postgres_safe_shape():
+    """Every VAT additive statement must stay bare or carry a quoted string
+    default — integer or bare-boolean defaults are the class of statement
+    that boots on SQLite and dies on Postgres (the 2026-11-02 lesson)."""
+    from app import _ADDITIVE_COLUMNS
+
+    products = _ADDITIVE_COLUMNS["products"]
+    assert products["vat_category"] == "ALTER TABLE products ADD COLUMN vat_category VARCHAR(20)"
+    assert products["vat_review_status"] == (
+        "ALTER TABLE products ADD COLUMN vat_review_status VARCHAR(12) NOT NULL DEFAULT 'pending'"
+    )
+    assert products["milk_content_percent"] == (
+        "ALTER TABLE products ADD COLUMN milk_content_percent NUMERIC(5,2)"
+    )
+
+    items = _ADDITIVE_COLUMNS["order_items"]
+    expected_types = {
+        "vat_category": "VARCHAR(20)",
+        "vat_rate": "NUMERIC(5,2)",
+        "net_unit_price": "NUMERIC(10,2)",
+        "gross_unit_price": "NUMERIC(10,2)",
+        "net_line_total": "NUMERIC(10,2)",
+        "vat_amount": "NUMERIC(10,2)",
+        "gross_line_total": "NUMERIC(10,2)",
+    }
+    for column, column_type in expected_types.items():
+        assert items[column] == (
+            f"ALTER TABLE order_items ADD COLUMN {column} {column_type}"
+        )
+
+
+def test_vat_rate_rows_seed_on_every_boot_and_never_overwrite(tmp_path):
+    """The statutory percentages are reference data: seeded on a fresh
+    database, re-checked on every restart, and a deliberately edited row is
+    never clobbered back — the adviser's word always beats the seeder's."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.database import Base
+    from app.models import VatRate
+    from app.seed import _ensure_vat_rates
+
+    engine = create_engine(f"sqlite:///{(tmp_path / 'vat_rates.db').as_posix()}")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, expire_on_commit=False)()
+    try:
+        _ensure_vat_rates(db)
+        _ensure_vat_rates(db)  # a restart finds nothing left to do
+        assert db.query(VatRate).count() == 2
+
+        in_force = ("REDUCED", datetime.date(2026, 1, 1))
+        db.get(VatRate, in_force).rate = Decimal("5.50")  # a console decision
+        db.commit()
+        _ensure_vat_rates(db)
+        assert db.get(VatRate, in_force).rate == Decimal("5.50")
+    finally:
+        db.close()
+        engine.dispose()
+
+
+# --------------------------------------------------------------------------
+# The VAT classification desk (Phase 2C): admin-only writes, its own audited
+# endpoint, and the provisional-rate preview — checkout stays untouched.
+# --------------------------------------------------------------------------
+
+UNCLASSIFIED = {"vat_category": None, "vat_review_status": "pending", "milk_content_percent": None}
+
+
+def _set_vat(product_id: int, payload: dict, headers: dict):
+    return client.put(f"/api/admin/products/{product_id}/vat", json=payload, headers=headers)
+
+
+def test_admin_product_responses_carry_the_vat_classification():
+    """Admin sees the classification (and the provisional rate it implies);
+    shoppers' catalog keeps exactly the shape it always had."""
+    listing = client.get("/api/admin/products", headers=admin_headers()).json()
+    product = listing["products"][0]
+    assert product["vat_category"] is None  # nothing is auto-classified
+    assert product["vat_review_status"] == "pending"
+    assert product["milk_content_percent"] is None
+    assert product["vat_rate_preview"] is None
+
+    detail = client.get(f"/api/admin/products/{product['id']}", headers=admin_headers()).json()
+    assert detail["vat_category"] is None
+    assert detail["vat_events"] == []  # fresh product, no classification history
+
+    # the public product page leaks none of it
+    public = client.get(f"/api/products/{product['slug']}").json()
+    assert "vat_category" not in public
+    assert "vat_review_status" not in public
+    assert "vat_rate_preview" not in public
+
+
+def test_admin_assigns_and_reviews_vat_classification():
+    """The desk workflow: assign a provisional category, see the rate the
+    configuration implies (pending or not), enter milk content, approve."""
+    admin = admin_headers()
+    croissant = get_product("butter-croissant")
+    puff = get_product("beef-curry-puff")
+    try:
+        assigned = _set_vat(
+            croissant["id"],
+            {"vat_category": "FOOD_REDUCED", "vat_review_status": "pending"},
+            admin,
+        )
+        assert assigned.status_code == 200, assigned.json()
+        assert assigned.json()["vat_rate_preview"] == 7.0  # implied, still pending
+
+        # a milk drink's preview rides on its cow's-milk content
+        shake = _set_vat(
+            puff["id"],
+            {"vat_category": "MILK_DRINK", "vat_review_status": "approved", "milk_content_percent": 80},
+            admin,
+        )
+        assert shake.json()["vat_rate_preview"] == 7.0  # ≥ 75 → reduced
+        thinner = _set_vat(
+            puff["id"],
+            {"vat_category": "MILK_DRINK", "vat_review_status": "approved", "milk_content_percent": 70},
+            admin,
+        )
+        assert thinner.json()["vat_rate_preview"] == 19.0  # under the bar
+
+        # parking categories imply no rate at all
+        parked = _set_vat(
+            puff["id"],
+            {"vat_category": "SMOOTHIE_REVIEW", "vat_review_status": "pending", "milk_content_percent": None},
+            admin,
+        )
+        assert parked.json()["vat_rate_preview"] is None
+
+        # and the approval itself
+        approved = _set_vat(
+            croissant["id"],
+            {"vat_category": "FOOD_REDUCED", "vat_review_status": "approved"},
+            admin,
+        )
+        assert approved.json()["vat_review_status"] == "approved"
+        assert approved.json()["vat_rate_preview"] == 7.0
+    finally:
+        _set_vat(croissant["id"], UNCLASSIFIED, admin)
+        _set_vat(puff["id"], UNCLASSIFIED, admin)
+
+
+def test_vat_classification_validation_refuses_incoherent_writes():
+    """Every way a classification write can be nonsense, refused with a
+    reason: unknown category or status and out-of-range milk at the schema
+    layer (422); incoherent combinations at the rules layer (400)."""
+    admin = admin_headers()
+    product_id = get_product("butter-croissant")["id"]
+    try:
+        assert _set_vat(product_id, {"vat_category": "DESSERT_BAR", "vat_review_status": "pending"}, admin).status_code == 422
+        assert _set_vat(product_id, {"vat_category": None, "vat_review_status": "done"}, admin).status_code == 422
+        assert (
+            _set_vat(
+                product_id,
+                {"vat_category": "MILK_DRINK", "vat_review_status": "pending", "milk_content_percent": -0.5},
+                admin,
+            ).status_code
+            == 422
+        )
+        assert (
+            _set_vat(
+                product_id,
+                {"vat_category": "MILK_DRINK", "vat_review_status": "pending", "milk_content_percent": 100.01},
+                admin,
+            ).status_code
+            == 422
+        )
+
+        # a milk drink without its percentage never saves — pending or not
+        missing_milk = _set_vat(product_id, {"vat_category": "MILK_DRINK", "vat_review_status": "pending"}, admin)
+        assert missing_milk.status_code == 400
+        assert "cow's-milk" in missing_milk.json()["detail"]
+
+        # milk on anything else is meaningless
+        stray_milk = _set_vat(
+            product_id,
+            {"vat_category": "BEVERAGE_STANDARD", "vat_review_status": "pending", "milk_content_percent": 90},
+            admin,
+        )
+        assert stray_milk.status_code == 400
+        assert "only belongs to a MILK_DRINK" in stray_milk.json()["detail"]
+
+        # approving an unclassified product or a parked one is refused
+        unclassified = _set_vat(product_id, {"vat_category": None, "vat_review_status": "approved"}, admin)
+        assert unclassified.status_code == 400
+        assert "assign a VAT category first" in unclassified.json()["detail"]
+        for parked in ("SMOOTHIE_REVIEW", "SPECIAL_REVIEW"):
+            refused = _set_vat(product_id, {"vat_category": parked, "vat_review_status": "approved"}, admin)
+            assert refused.status_code == 400
+            assert "tax adviser" in refused.json()["detail"]
+
+        # boundaries that are fine: milk at exactly 0 and 100
+        assert _set_vat(product_id, {"vat_category": "MILK_DRINK", "vat_review_status": "pending", "milk_content_percent": 0}, admin).status_code == 200
+        assert _set_vat(product_id, {"vat_category": "MILK_DRINK", "vat_review_status": "pending", "milk_content_percent": 100}, admin).status_code == 200
+    finally:
+        _set_vat(product_id, UNCLASSIFIED, admin)
+
+
+def test_vat_classification_writes_are_admin_only():
+    """The classification endpoint opens for the desk and nobody else."""
+    from app.database import SessionLocal
+    from app.models import ProductVatEvent
+
+    product_id = get_product("butter-croissant")["id"]
+    payload = {"vat_category": "FOOD_REDUCED", "vat_review_status": "pending"}
+
+    db = SessionLocal()
+    try:
+        events_before = db.query(ProductVatEvent).filter_by(product_id=product_id).count()
+    finally:
+        db.close()
+
+    assert _set_vat(product_id, payload, {}).status_code == 401  # anonymous
+    customer = auth_header(login_customer())
+    assert _set_vat(product_id, payload, customer).status_code == 403
+
+    # and nothing was written behind the refusals
+    detail = client.get(f"/api/admin/products/{product_id}", headers=admin_headers()).json()
+    assert detail["vat_category"] is None
+    db = SessionLocal()
+    try:
+        assert db.query(ProductVatEvent).filter_by(product_id=product_id).count() == events_before
+    finally:
+        db.close()
+
+
+def test_vat_classification_changes_are_audited():
+    """Every real change lands in the log with who, when and the before/
+    after; an identical write records nothing; the API's own listing reads
+    it back on the product detail. A fresh product of its own, so earlier
+    tests' writes on the case can't pad the count."""
+    from app.database import SessionLocal
+    from app.models import ProductVatEvent
+
+    admin = admin_headers()
+    me = client.get("/api/auth/me", headers=admin).json()
+    baked = client.post(
+        "/api/admin/products",
+        json={"name": "Audit Trail Scone", "price": 3.0, "stock": 5},
+        headers=admin,
+    ).json()
+    product_id = baked["id"]
+
+    try:
+        _set_vat(product_id, {"vat_category": "FOOD_REDUCED", "vat_review_status": "approved"}, admin)
+        events = client.get(f"/api/admin/products/{product_id}", headers=admin).json()["vat_events"]
+        assert len(events) == 1
+        first = events[0]
+        assert first["from_category"] is None and first["to_category"] == "FOOD_REDUCED"
+        assert first["from_status"] == "pending" and first["to_status"] == "approved"
+        assert first["admin_name"]  # who
+        assert first["created_at"]  # when
+
+        # writing the very same state again records nothing
+        _set_vat(product_id, {"vat_category": "FOOD_REDUCED", "vat_review_status": "approved"}, admin)
+        assert len(client.get(f"/api/admin/products/{product_id}", headers=admin).json()["vat_events"]) == 1
+
+        # the next change carries the previous state as its "from"
+        _set_vat(product_id, {"vat_category": "FOOD_REDUCED", "vat_review_status": "pending"}, admin)
+        events = client.get(f"/api/admin/products/{product_id}", headers=admin).json()["vat_events"]
+        assert len(events) == 2
+        assert events[0]["from_status"] == "approved" and events[0]["to_status"] == "pending"
+
+        # the ledger links the change to the admin's account
+        db = SessionLocal()
+        try:
+            rows = db.query(ProductVatEvent).filter_by(product_id=product_id).all()
+            assert len(rows) == 2
+            assert {row.admin_user_id for row in rows} == {me["id"]}
+        finally:
+            db.close()
+    finally:
+        client.delete(f"/api/admin/products/{product_id}", headers=admin)  # events cascade
+
+
+def test_the_vat_review_filter_lists_uncleared_products():
+    """The tax-review rail: with one product signed off, the filter lists
+    everyone else and leaves the signed-off one out."""
+    admin = admin_headers()
+    product_id = get_product("butter-croissant")["id"]
+    try:
+        _set_vat(product_id, {"vat_category": "FOOD_REDUCED", "vat_review_status": "approved"}, admin)
+
+        rail = client.get("/api/admin/products", params={"needs_vat_review": True}, headers=admin).json()
+        assert rail["products"], "the rest of the case is still waiting"
+        assert all(p["vat_review_status"] != "approved" for p in rail["products"])
+        assert all(p["id"] != product_id for p in rail["products"])
+
+        whole_case = client.get("/api/admin/products", headers=admin).json()
+        assert rail["pagination"]["total_items"] < whole_case["pagination"]["total_items"]
+    finally:
+        _set_vat(product_id, UNCLASSIFIED, admin)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2D — server-side basket quotes
+# ---------------------------------------------------------------------------
+
+
+def _quote(items, coupon_code=None, token=None):
+    """POST a basket quote — ids and quantities only, optionally a code."""
+    payload = {"items": items}
+    if coupon_code:
+        payload["coupon_code"] = coupon_code
+    return client.post(
+        "/api/orders/quote", json=payload, headers=auth_header(token) if token else None
+    )
+
+
+def test_quote_prices_the_basket_from_the_catalog():
+    """The quote is the server's own tally, off the live catalog: line prices
+    are today's current prices, tax is the shop's flat exclusive rate on the
+    discounted subtotal, delivery follows the threshold, and the currency is
+    the one orders are charged in."""
+    croissant = get_product("butter-croissant")
+    puff = get_product("beef-curry-puff")
+    response = _quote(
+        [
+            {"product_id": croissant["id"], "quantity": 2},
+            {"product_id": puff["id"], "quantity": 1},
+        ]
+    )
+    assert response.status_code == 200
+    quote = response.json()
+
+    line = next(i for i in quote["items"] if i["product_id"] == croissant["id"])
+    assert line["unit_price"] == croissant["current_price"]
+    assert line["line_total"] == round(croissant["current_price"] * 2, 2)
+    assert line["name"] == croissant["name"] and line["quantity"] == 2
+
+    settings = get_settings()
+    subtotal = round(croissant["current_price"] * 2 + puff["current_price"], 2)
+    assert quote["subtotal"] == subtotal
+    assert quote["discount_amount"] == 0 and quote["coupon_code"] is None
+    assert quote["tax"] == round(subtotal * settings.tax_rate, 2)
+    expected_shipping = (
+        0.0 if subtotal >= settings.free_shipping_threshold else settings.shipping_fee
+    )
+    assert quote["shipping_fee"] == expected_shipping
+    assert quote["total"] == round(subtotal + quote["tax"] + quote["shipping_fee"], 2)
+    assert quote["currency"] == "usd"
+
+
+def test_quote_matches_the_placed_order_to_the_cent():
+    """The whole point of the endpoint: quote a basket, then buy exactly that
+    basket with the same code — every charged figure must land on the quoted
+    one, because placement prices it with the same recipe, independently."""
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    croissant = get_product("butter-croissant")
+    puff = get_product("beef-curry-puff")
+    token = register_and_login("quote-buyer@example.com", "QuoteBuyer123!")
+    items = [
+        {"product_id": croissant["id"], "quantity": 2},
+        {"product_id": puff["id"], "quantity": 1},
+    ]
+
+    quoted = _quote(items, coupon_code="WELCOME10", token=token)
+    assert quoted.status_code == 200
+    quote = quoted.json()
+    assert quote["coupon_code"] == "WELCOME10" and quote["coupon_percent_off"] == 10
+    assert quote["discount_amount"] == round(quote["subtotal"] * 10 / 100, 2) > 0
+
+    placed = client.post(
+        "/api/orders",
+        json=checkout_payload(
+            items=[{"product_id": i["product_id"], "quantity": i["quantity"]} for i in items],
+            coupon_code="WELCOME10",
+            payment_method="cash_on_delivery",
+        ),
+        headers=auth_header(token),
+    )
+    assert placed.status_code == 201
+    order = placed.json()
+    for field in ("subtotal", "discount_amount", "tax", "shipping_fee", "total"):
+        assert quote[field] == order[field], field
+    assert order["coupon_code"] == quote["coupon_code"]
+    assert order["currency"] == quote["currency"]
+
+    # The quote runs the same personal coupon rules checkout does — now that
+    # the one-per-customer code is spent, quoting it again says so.
+    spent = _quote(items, coupon_code="WELCOME10", token=token)
+    assert spent.status_code == 404
+    assert "already been used" in spent.json()["detail"]
+
+
+def test_quote_refuses_what_checkout_refuses():
+    """Same doorkeeper as placement: nonsense quantities never get priced,
+    unknown or unavailable products are refused, and stock caps the basket
+    with the message the shopper would get at the last step."""
+    # Quantities outside 1..99 (and an empty basket) fail validation outright
+    assert _quote([]).status_code == 422
+    croissant = get_product("butter-croissant")
+    assert _quote([{"product_id": croissant["id"], "quantity": 0}]).status_code == 422
+    assert _quote([{"product_id": croissant["id"], "quantity": 100}]).status_code == 422
+
+    # Unknown id → the availability refusal
+    unknown = _quote([{"product_id": 999999, "quantity": 1}])
+    assert unknown.status_code == 400
+    assert unknown.json()["detail"] == "Product 999999 is not available"
+
+    admin = admin_headers()
+    low_stock = unavailable = None
+    try:
+        low = client.post(
+            "/api/admin/products",
+            headers=admin,
+            json={"name": "Last Two Buns", "price": 4.5, "stock": 2},
+        )
+        unavailable = client.post(
+            "/api/admin/products",
+            headers=admin,
+            json={"name": "Off The Shelf Bun", "price": 4.5, "stock": 5, "is_available": False},
+        )
+        assert low.status_code == 201 and unavailable.status_code == 201
+        low_stock, unavailable = low.json()["id"], unavailable.json()["id"]
+
+        tight = _quote([{"product_id": low_stock, "quantity": 3}])
+        assert tight.status_code == 400
+        assert tight.json()["detail"] == "Only 2 left of Last Two Buns"
+
+        off = _quote([{"product_id": unavailable, "quantity": 1}])
+        assert off.status_code == 400
+        assert "is not available" in off.json()["detail"]
+    finally:
+        if low_stock:
+            client.delete(f"/api/admin/products/{low_stock}", headers=admin)
+        if unavailable:
+            client.delete(f"/api/admin/products/{unavailable}", headers=admin)
+
+
+def test_quote_coupon_rules_mirror_checkout():
+    """A code that checkout would refuse is refused at quote time too, with
+    the same wording: unknown codes, and live codes the basket hasn't
+    unlocked yet."""
+    token = register_and_login("voucher-quoter@example.com", "VoucherQuote123!")
+    croissant = get_product("butter-croissant")
+    one = [{"product_id": croissant["id"], "quantity": 1}]
+
+    bogus = _quote(one, coupon_code="NOSUCHCODE", token=token)
+    assert bogus.status_code == 404
+    assert bogus.json()["detail"] == "This coupon code is not valid"
+
+    # FRESHBAKE15 needs a $40 basket; one croissant is nowhere near
+    locked = _quote(one, coupon_code="FRESHBAKE15", token=token)
+    assert locked.status_code == 400
+    assert locked.json()["detail"].startswith("FRESHBAKE15 needs a basket of at least")
+
+    # The same code on a big enough basket prices straight through
+    _top_up_stock("butter-croissant")
+    quantity = int(40 / croissant["current_price"]) + 1
+    big = [{"product_id": croissant["id"], "quantity": quantity}]
+    earned = _quote(big, coupon_code="FRESHBAKE15", token=token)
+    assert earned.status_code == 200
+    quote = earned.json()
+    subtotal = round(croissant["current_price"] * quantity, 2)
+    assert subtotal >= 40 and quote["subtotal"] == subtotal
+    assert quote["coupon_code"] == "FRESHBAKE15" and quote["coupon_percent_off"] == 15
+    assert quote["discount_amount"] == round(subtotal * 15 / 100, 2)
+
+
+def test_quote_free_and_paid_delivery_and_cent_rounding():
+    """Delivery is the threshold's call, judged on the pre-discount subtotal,
+    and every figure is rounded to the cent exactly as the invoice will be."""
+    settings = get_settings()
+    croissant = get_product("butter-croissant")
+
+    small = _quote([{"product_id": croissant["id"], "quantity": 3}]).json()
+    assert small["subtotal"] < settings.free_shipping_threshold
+    assert small["shipping_fee"] == settings.shipping_fee
+    assert small["tax"] == round(small["subtotal"] * settings.tax_rate, 2)
+    assert small["total"] == round(small["subtotal"] + small["tax"] + small["shipping_fee"], 2)
+
+    _top_up_stock("butter-croissant")
+    quantity = int(settings.free_shipping_threshold / croissant["current_price"]) + 1
+    large = _quote([{"product_id": croissant["id"], "quantity": quantity}]).json()
+    assert large["subtotal"] >= settings.free_shipping_threshold
+    assert large["shipping_fee"] == 0.0
+    assert large["total"] == round(large["subtotal"] + large["tax"], 2)
+
+
+def test_quote_touches_nothing():
+    """Quoting is a pure read: no order, no timeline event, no stock movement
+    — and no Stripe session can exist without an order to hang it on."""
+    from sqlalchemy import func, select
+
+    from app.database import SessionLocal
+    from app.models import Order as OrderRow
+    from app.models import OrderEvent as OrderEventRow
+    from app.models import Product as ProductRow
+
+    def snapshot():
+        db = SessionLocal()
+        try:
+            return (
+                db.scalar(select(func.count()).select_from(OrderRow)),
+                db.scalar(select(func.count()).select_from(OrderEventRow)),
+                db.scalar(
+                    select(ProductRow.stock).where(ProductRow.slug == "butter-croissant")
+                ),
+            )
+        finally:
+            db.close()
+
+    croissant = get_product("butter-croissant")
+    before = snapshot()
+    response = _quote([{"product_id": croissant["id"], "quantity": 2}])
+    assert response.status_code == 200
+    assert snapshot() == before
+
+
+def test_quote_serves_guests_and_rate_limits_bursts():
+    """A basket can be priced before login (the voucher board works that way
+    too), but the endpoint is public — a burst hits the brake."""
+    croissant = get_product("butter-croissant")
+    items = [{"product_id": croissant["id"], "quantity": 1}]
+
+    guest = _quote(items)
+    assert guest.status_code == 200
+    assert guest.json()["currency"] == "usd"
+
+    throttled = None
+    for _ in range(45):
+        throttled = _quote(items)
+        if throttled.status_code == 429:
+            break
+    assert throttled is not None and throttled.status_code == 429
+    assert throttled.json()["detail"] == "That's a lot of price checks — try again in a moment."

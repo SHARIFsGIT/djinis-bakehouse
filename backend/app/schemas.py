@@ -2,10 +2,12 @@
 
 import enum
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from .models import BulkEnquiryStatus, OrderStatus, PaymentMethod, UserRole
+from .vat import VatCategory
 
 
 class ORMModel(BaseModel):
@@ -294,6 +296,41 @@ class CheckoutRequest(BaseModel):
         return self
 
 
+class QuoteRequest(BaseModel):
+    """A basket as the shopper holds it, priced without buying it: ids and
+    quantities only. The browser never gets to name a price — every figure
+    in the response comes from the catalog, the coupon table and the shop's
+    money rules, exactly as checkout will charge them."""
+
+    items: list[OrderItemRequest] = Field(min_length=1)
+    coupon_code: str | None = Field(default=None, max_length=50)
+
+
+class QuoteItemOut(BaseModel):
+    product_id: int
+    name: str
+    slug: str
+    unit_price: float
+    quantity: int
+    line_total: float
+
+
+class QuoteOut(BaseModel):
+    """The server-authoritative basket tally the storefront displays. Every
+    amount is rounded to the cent by the same recipe the invoice uses, and
+    `currency` is the currency the eventual order will be charged in."""
+
+    items: list[QuoteItemOut]
+    subtotal: float
+    discount_amount: float = 0
+    coupon_code: str | None = None
+    coupon_percent_off: int | None = None
+    tax: float
+    shipping_fee: float
+    total: float
+    currency: str = "usd"
+
+
 class OrderItemOut(ORMModel):
     id: int
     product_id: int | None
@@ -324,6 +361,8 @@ class OrderOut(ORMModel):
     shipping_fee: float
     total: float
     cancel_fee: float = 0
+    # The money this order was placed in; every amount above is in it.
+    currency: str = "usd"
     delivery_date: date | None
     note: str | None
     recipient: str
@@ -403,6 +442,14 @@ class StorefrontOut(BaseModel):
     contact_phone: str | None = None
     contact_email: str | None = None
     opening_hours: str | None = None
+    # The shop's money rules, straight from the environment — the storefront's
+    # basket arithmetic, labels and currency symbol consume these instead of
+    # keeping a second copy, so what a customer estimates can never drift from
+    # the invoice the server computes.
+    currency: str = "usd"
+    tax_rate: float
+    shipping_fee: float
+    free_shipping_threshold: float
 
 
 # --------------------------------------------------------------------------
@@ -432,6 +479,65 @@ class ProductCreateRequest(BaseModel):
 
 class ProductUpdateRequest(ProductCreateRequest):
     pass
+
+
+# The admin desk's VAT workflow (the euro migration's classification phase).
+# Public catalog schemas stay untouched — these fields ride only on admin
+# responses, and the only writer is the dedicated classification endpoint.
+
+class AdminVatEventOut(ORMModel):
+    """One entry in a product's classification log: who, when, from what, to what."""
+
+    admin_name: str
+    from_category: str | None
+    to_category: str | None
+    from_status: str | None
+    to_status: str
+    from_milk_content: float | None
+    to_milk_content: float | None
+    created_at: datetime
+
+
+class _AdminVatFields(BaseModel):
+    vat_category: str | None = None
+    vat_review_status: str = "pending"
+    milk_content_percent: float | None = None
+    # The rate the current configuration implies for this classification —
+    # a desk preview that ignores the approval gate. Provisional by design;
+    # never a legal determination.
+    vat_rate_preview: float | None = None
+
+
+class AdminProductCard(_AdminVatFields, ProductCard):
+    pass
+
+
+class AdminProductDetail(_AdminVatFields, ProductDetail):
+    vat_events: list[AdminVatEventOut] = []
+
+
+class AdminProductListResponse(BaseModel):
+    products: list[AdminProductCard]
+    pagination: PaginationOut
+
+
+class AdminVatUpdateRequest(BaseModel):
+    """A classification write: the full trio, replacing what was there.
+    Lives on its own endpoint (not ProductUpdateRequest) so an ordinary
+    product edit can never silently wipe an approval — the main PUT is a
+    full-replace of the fields it knows."""
+
+    vat_category: str | None = None
+    vat_review_status: Literal["pending", "approved", "blocked"]
+    milk_content_percent: float | None = Field(default=None, ge=0, le=100)
+
+    @field_validator("vat_category")
+    @classmethod
+    def known_category(cls, value: str | None) -> str | None:
+        if value is not None and value not in {category.value for category in VatCategory}:
+            known = ", ".join(category.value for category in VatCategory)
+            raise ValueError(f"unknown VAT category '{value}' — use one of: {known}")
+        return value
 
 
 class CouponCreateRequest(BaseModel):

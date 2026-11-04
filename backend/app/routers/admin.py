@@ -31,6 +31,7 @@ from ..models import (
     OrderStatus,
     PaymentStatus,
     Product,
+    ProductVatEvent,
     Review,
     Testimonial,
     User,
@@ -41,11 +42,15 @@ from ..schemas import (
     AdminCustomerOut,
     AdminNotificationList,
     AdminNotificationOut,
+    AdminProductCard,
+    AdminProductDetail,
+    AdminProductListResponse,
     AdminReviewCounts,
     AdminReviewList,
     AdminReviewOut,
     AdminStatsOut,
     AdminUserPage,
+    AdminVatUpdateRequest,
     BulkEnquiryOut,
     BulkEnquiryUpdate,
     BulkReplyCreate,
@@ -63,10 +68,7 @@ from ..schemas import (
     OrderStatusUpdateRequest,
     PaginationOut,
     PaymentStatusUpdateRequest,
-    ProductCard,
     ProductCreateRequest,
-    ProductDetail,
-    ProductListResponse,
     ProductUpdateRequest,
     ReviewModerationRequest,
     StoreSettingsOut,
@@ -80,6 +82,7 @@ from ..schemas import (
 )
 from ..security import CurrentAdmin, DbSession
 from ..serialize import product_to_card, review_summary, verified_buyers
+from ..vat import REVIEW_STATUS_APPROVED, preview_rate, validate_classification
 from ..uploads import MAX_PRODUCT_PHOTO_BYTES, save_photo
 from .orders import _cancel_order, _late_cancel_fee, _lock_for_cancellation, _serialize
 
@@ -452,12 +455,31 @@ def delete_category(category_id: int, admin: CurrentAdmin, db: DbSession):
 # Product management
 # --------------------------------------------------------------------------
 
-@router.get("/products", response_model=ProductListResponse)
+def _admin_card(product: Product, db: DbSession) -> AdminProductCard:
+    """The desk's view of a product: the public card plus the VAT
+    classification and the provisional rate the current configuration
+    implies for it (None when the classification implies no rate)."""
+    preview = preview_rate(product.vat_category, product.milk_content_percent, db)
+    return AdminProductCard(
+        **product_to_card(product).model_dump(),
+        vat_category=product.vat_category,
+        vat_review_status=product.vat_review_status or "pending",
+        milk_content_percent=(
+            float(product.milk_content_percent)
+            if product.milk_content_percent is not None
+            else None
+        ),
+        vat_rate_preview=float(preview) if preview is not None else None,
+    )
+
+
+@router.get("/products", response_model=AdminProductListResponse)
 def all_products(
     admin: CurrentAdmin,
     db: DbSession,
     search: str | None = None,
     category_id: int | None = Query(default=None),
+    needs_vat_review: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=15, ge=1, le=100),
 ):
@@ -468,15 +490,17 @@ def all_products(
     # tapping a shelf on the desk shows just that shelf's bakes
     if category_id is not None:
         query = query.where(Product.category_id == category_id)
+    # the tax-review rail: everything not yet signed off for the euro cutover
+    if needs_vat_review:
+        query = query.where(Product.vat_review_status != REVIEW_STATUS_APPROVED)
 
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     products = db.scalars(
         query.order_by(Product.created_at.desc()).offset((page - 1) * per_page).limit(per_page)
     ).all()
-    ratings = review_summary(db, [p.id for p in products])
 
-    return ProductListResponse(
-        products=[product_to_card(p, ratings) for p in products],
+    return AdminProductListResponse(
+        products=[_admin_card(p, db) for p in products],
         pagination=PaginationOut(
             page=page,
             per_page=per_page,
@@ -486,23 +510,30 @@ def all_products(
     )
 
 
-@router.get("/products/{product_id}", response_model=ProductDetail)
+@router.get("/products/{product_id}", response_model=AdminProductDetail)
 def admin_product_detail(product_id: int, admin: CurrentAdmin, db: DbSession):
     """Full product payload for the admin edit form (works for hidden products too)."""
     product = db.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
-    return ProductDetail(
-        **product_to_card(product).model_dump(),
+    events = db.scalars(
+        select(ProductVatEvent)
+        .where(ProductVatEvent.product_id == product.id)
+        .order_by(ProductVatEvent.created_at.desc(), ProductVatEvent.id.desc())
+        .limit(20)
+    ).all()
+    return AdminProductDetail(
+        **_admin_card(product, db).model_dump(),
         description=product.description,
         prep_time_minutes=product.prep_time_minutes,
         ingredients=product.ingredients,
         allergens=product.allergens,
         created_at=product.created_at,
+        vat_events=events,
     )
 
 
-@router.post("/products", response_model=ProductCard, status_code=status.HTTP_201_CREATED)
+@router.post("/products", response_model=AdminProductCard, status_code=status.HTTP_201_CREATED)
 def create_product(payload: ProductCreateRequest, admin: CurrentAdmin, db: DbSession):
     product = Product(
         name=payload.name.strip(),
@@ -522,10 +553,10 @@ def create_product(payload: ProductCreateRequest, admin: CurrentAdmin, db: DbSes
     db.add(product)
     db.commit()
     db.refresh(product)
-    return product_to_card(product)
+    return _admin_card(product, db)
 
 
-@router.put("/products/{product_id}", response_model=ProductCard)
+@router.put("/products/{product_id}", response_model=AdminProductCard)
 def update_product(
     product_id: int, payload: ProductUpdateRequest, admin: CurrentAdmin, db: DbSession
 ):
@@ -539,7 +570,47 @@ def update_product(
         setattr(product, field, value)
     db.commit()
     db.refresh(product)
-    return product_to_card(product)
+    return _admin_card(product, db)
+
+
+@router.put("/products/{product_id}/vat", response_model=AdminProductCard)
+def update_product_vat(
+    product_id: int, payload: AdminVatUpdateRequest, admin: CurrentAdmin, db: DbSession
+):
+    """The one writer for a product's VAT classification: replaces the trio,
+    refuses incoherent combinations, and records every actual change — who,
+    when, from what, to what. An approval here is the shop's internal
+    sign-off, never a substitute for the tax adviser's classification."""
+    product = db.get(Product, product_id)
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    try:
+        validate_classification(
+            payload.vat_category, payload.vat_review_status, payload.milk_content_percent
+        )
+    except ValueError as reason:
+        raise HTTPException(status_code=400, detail=str(reason)) from None
+
+    before = (product.vat_category, product.vat_review_status, product.milk_content_percent)
+    after = (payload.vat_category, payload.vat_review_status, payload.milk_content_percent)
+    if before != after:
+        db.add(
+            ProductVatEvent(
+                product_id=product.id,
+                admin_user_id=admin.id,
+                admin_name=admin.full_name,
+                from_category=before[0],
+                to_category=after[0],
+                from_status=before[1],
+                to_status=after[1],
+                from_milk_content=before[2],
+                to_milk_content=after[2],
+            )
+        )
+        product.vat_category, product.vat_review_status, product.milk_content_percent = after
+        db.commit()
+        db.refresh(product)
+    return _admin_card(product, db)
 
 
 @router.delete("/products/{product_id}")

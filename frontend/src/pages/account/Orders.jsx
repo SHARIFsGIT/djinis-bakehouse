@@ -74,7 +74,7 @@ export default function Orders() {
               <span className={`badge badge-sm ${statusBadge(order.status)} border`}>
                 {statusLabel(order.status)}
               </span>
-              <p className="w-20 text-right font-bold">{money(order.total)}</p>
+              <p className="w-20 text-right font-bold">{money(order.total, order.currency)}</p>
               <span className="text-sm opacity-40" aria-hidden="true">›</span>
             </Link>
           ))}

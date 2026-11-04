@@ -5,7 +5,7 @@ import client from "../api/client";
 import { ProductGridSkeleton } from "../components/Loading";
 import PhotoTile from "../components/PhotoTile";
 import ProductCard from "../components/ProductCard";
-import { productInitial } from "../lib/format";
+import { money, productInitial, shopConfig } from "../lib/format";
 
 // Shown until /store answers (and whenever the admin hasn't picked one)
 const DEFAULT_HERO = "/static/site/baker.jpg";
@@ -28,7 +28,9 @@ const PROMISES = [
   },
   {
     Icon: Truck,
-    title: "Free delivery over $50",
+    // A function so the promise stays true whenever the baker retunes the
+    // money rules — the threshold and the symbol follow the shop's config.
+    title: () => `Free delivery over ${money(shopConfig.freeShippingThreshold)}`,
   },
   {
     Icon: ShieldCheck,
@@ -161,11 +163,13 @@ export default function Home() {
             {/* The shop's four promises — icons, two columns, no ceremony */}
             <div className="mt-10 grid max-w-md grid-cols-1 gap-x-6 gap-y-3.5 sm:grid-cols-2">
               {PROMISES.map(({ Icon, title }) => (
-                <div key={title} className="flex items-center gap-3">
+                <div key={String(title)} className="flex items-center gap-3">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary/15 text-secondary">
                     <Icon size={17} />
                   </span>
-                  <p className="text-sm leading-snug font-semibold">{title}</p>
+                  <p className="text-sm leading-snug font-semibold">
+                    {typeof title === "function" ? title() : title}
+                  </p>
                 </div>
               ))}
             </div>

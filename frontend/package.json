@@ -9,7 +9,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test src/lib/format.test.js src/lib/quote.test.js"
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.0.0",

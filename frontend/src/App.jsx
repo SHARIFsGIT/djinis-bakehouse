@@ -3,6 +3,8 @@ import { Outlet, Route, Routes, useLocation } from "react-router";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
 import { AdminRoute, ProtectedRoute } from "./components/RouteGuards";
+import client from "./api/client";
+import { applyShopConfig } from "./lib/format";
 
 import Home from "./pages/Home";
 import Products from "./pages/Products";
@@ -54,6 +56,17 @@ function ShopLayout() {
 }
 
 export default function App() {
+  // The shop's money rules (currency, tax, delivery) before the first basket
+  // is tallied — one fetch, mirrored into format.js so every estimate the
+  // storefront quotes stays the server's own numbers. A failed fetch leaves
+  // the defaults, which match the server's .env.
+  useEffect(() => {
+    client
+      .get("/store")
+      .then(({ data }) => applyShopConfig(data))
+      .catch(() => {});
+  }, []);
+
   return (
     <>
       <div className="grain-overlay" aria-hidden="true" />

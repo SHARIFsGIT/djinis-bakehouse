@@ -21,11 +21,36 @@ const EMPTY_FORM = {
   prep_time_minutes: "",
   ingredients: "",
   allergens: "",
+  // VAT classification — saved through its own audited endpoint
+  vat_category: "",
+  vat_review_status: "pending",
+  milk_content_percent: "",
 };
 
+// The provisional categories the tax engine knows. Numbers stay out of the
+// labels on purpose — the desk shows the implied rate from the server, and
+// the label should never read like a legal determination.
+const VAT_CATEGORIES = [
+  ["FOOD_REDUCED", "Food — reduced rate"],
+  ["BEVERAGE_STANDARD", "Beverage — standard rate"],
+  ["MILK_DRINK", "Milk / milk-mixed drink — rate by milk content"],
+  ["SMOOTHIE_REVIEW", "Smoothie — awaiting tax adviser"],
+  ["SPECIAL_REVIEW", "Special case — awaiting tax adviser"],
+];
+
+const VAT_STATUSES = [
+  ["pending", "Pending review"],
+  ["approved", "Approved — internal sign-off"],
+  ["blocked", "Blocked"],
+];
+
+// Categories that exist to park a product for the tax adviser — they never
+// carry an approval, so picking one drops the status back to pending.
+const REVIEW_PARKED = ["SMOOTHIE_REVIEW", "SPECIAL_REVIEW"];
+
 const NUM_FIELDS = [
-  ["price", "Price ($) *", "0.01", "0.01"],
-  ["sale_price", "Sale price ($) — must be lower", "0.01", ""],
+  ["price", "Price *", "0.01", "0.01"],
+  ["sale_price", "Sale price — must be lower", "0.01", ""],
   ["stock", "Stock on hand *", "1", "0"],
   ["prep_time_minutes", "Prep time (minutes)", "1", "0"],
 ];
@@ -40,15 +65,17 @@ export default function AdminProducts() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [shelfFilter, setShelfFilter] = useState(null); // category id, or the whole case
-  const [editing, setEditing] = useState(null); // { id?, form }
+  const [editing, setEditing] = useState(null); // { id?, form, vat_rate_preview? }
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState(null);
   const [deletingShelf, setDeletingShelf] = useState(null);
+  const [needsVatReview, setNeedsVatReview] = useState(false);
 
-  const load = (p = page, s = search, cat = shelfFilter) => {
+  const load = (p = page, s = search, cat = shelfFilter, vat = needsVatReview) => {
     const query = { page: p, per_page: 15 };
     if (s) query.search = s;
     if (cat) query.category_id = cat;
+    if (vat) query.needs_vat_review = true;
     return client
       .get("/admin/products", { params: query })
       .then(({ data }) => setData(data));
@@ -62,7 +89,7 @@ export default function AdminProducts() {
     setData(null);
     load(page, search);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, shelfFilter]);
+  }, [page, search, shelfFilter, needsVatReview]);
 
   const openNew = () =>
     setEditing({
@@ -70,6 +97,7 @@ export default function AdminProducts() {
       form: { ...EMPTY_FORM },
       photo: null,
       newCategory: "",
+      vat_rate_preview: null,
     });
 
   const openEdit = async (p) => {
@@ -92,9 +120,13 @@ export default function AdminProducts() {
           prep_time_minutes: data.prep_time_minutes ?? "",
           ingredients: data.ingredients ?? "",
           allergens: data.allergens ?? "",
+          vat_category: data.vat_category ?? "",
+          vat_review_status: data.vat_review_status ?? "pending",
+          milk_content_percent: data.milk_content_percent ?? "",
         },
         photo: null,
         newCategory: "",
+        vat_rate_preview: data.vat_rate_preview ?? null,
       });
     } catch (err) {
       toast.error(apiError(err));
@@ -180,11 +212,22 @@ export default function AdminProducts() {
         ingredients: f.ingredients || null,
         allergens: f.allergens || null,
       };
+      // The classification travels on its own audited endpoint — an ordinary
+      // product save can never wipe it, and every change is logged with who
+      // and when.
+      const vatPayload = {
+        vat_category: f.vat_category || null,
+        vat_review_status: f.vat_review_status,
+        milk_content_percent:
+          f.milk_content_percent === "" ? null : Number(f.milk_content_percent),
+      };
       if (editing.id) {
         await client.put(`/admin/products/${editing.id}`, payload);
+        await client.put(`/admin/products/${editing.id}/vat`, vatPayload);
         toast.success("Product updated");
       } else {
-        await client.post("/admin/products", payload);
+        const { data: created } = await client.post("/admin/products", payload);
+        await client.put(`/admin/products/${created.id}/vat`, vatPayload);
         toast.success("Product added to the case");
       }
       closeDialog();
@@ -239,6 +282,18 @@ export default function AdminProducts() {
           }}
           aria-label="Search products"
         />
+        <button
+          type="button"
+          className={`btn btn-sm ${needsVatReview ? "btn-warning" : "btn-ghost"}`}
+          onClick={() => {
+            setPage(1);
+            setNeedsVatReview((v) => !v);
+          }}
+          aria-pressed={needsVatReview}
+          title="Everything not yet signed off for VAT-inclusive pricing"
+        >
+          Needs VAT review
+        </button>
         <div className="flex-1" />
         <button
           type="button"
@@ -385,6 +440,29 @@ export default function AdminProducts() {
                       {!p.is_available && (
                         <span className="badge badge-neutral badge-xs">
                           hidden
+                        </span>
+                      )}
+                      {p.vat_review_status === "approved" ? (
+                        <span
+                          className="badge badge-success badge-xs"
+                          title="Internal sign-off recorded — still provisional until your tax adviser confirms"
+                        >
+                          VAT signed off
+                        </span>
+                      ) : (
+                        <span
+                          className={`badge badge-xs ${
+                            p.vat_review_status === "blocked"
+                              ? "badge-error"
+                              : "badge-warning"
+                          }`}
+                          title="Not yet cleared for VAT-inclusive pricing"
+                        >
+                          {p.vat_review_status === "blocked"
+                            ? "VAT blocked"
+                            : p.vat_category
+                              ? "VAT pending"
+                              : "VAT unclassified"}
                         </span>
                       )}
                     </div>
@@ -577,6 +655,118 @@ export default function AdminProducts() {
                   value={editing.form.allergens}
                   onChange={(e) => setField("allergens", e.target.value)}
                 />
+              </div>
+
+              {/* VAT classification — provisional until the tax adviser
+                  confirms each product. Saved via its own audited endpoint. */}
+              <div className="sm:col-span-2 rounded-box bg-base-200/60 p-4">
+                <p className="mb-2 text-xs font-semibold tracking-wide uppercase opacity-60">
+                  VAT classification
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="label text-xs">Category</label>
+                    <select
+                      className="select select-bordered w-full"
+                      value={editing.form.vat_category}
+                      onChange={(e) => {
+                        const category = e.target.value;
+                        setEditing((s) => ({
+                          ...s,
+                          form: {
+                            ...s.form,
+                            vat_category: category,
+                            // parking a product takes it off the approved
+                            // list — those categories never carry approval
+                            ...(REVIEW_PARKED.includes(category) &&
+                            s.form.vat_review_status === "approved"
+                              ? { vat_review_status: "pending" }
+                              : {}),
+                            // milk only belongs to milk drinks
+                            ...(category !== "MILK_DRINK"
+                              ? { milk_content_percent: "" }
+                              : {}),
+                          },
+                        }));
+                      }}
+                    >
+                      <option value="">— not classified yet —</option>
+                      {VAT_CATEGORIES.map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label text-xs">Review status</label>
+                    <select
+                      className="select select-bordered w-full"
+                      value={editing.form.vat_review_status}
+                      onChange={(e) =>
+                        setField("vat_review_status", e.target.value)
+                      }
+                    >
+                      {VAT_STATUSES.map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-[11px] leading-tight opacity-60">
+                      Approving records your internal sign-off only — it does
+                      not replace classification by your tax adviser.
+                    </p>
+                  </div>
+                  {editing.form.vat_category === "MILK_DRINK" && (
+                    <div>
+                      <label className="label text-xs">
+                        Cow's-milk content (%) *
+                      </label>
+                      <input
+                        type="number"
+                        className="input input-bordered w-full"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={editing.form.milk_content_percent}
+                        onChange={(e) =>
+                          setField("milk_content_percent", e.target.value)
+                        }
+                      />
+                      <p className="mt-1 text-[11px] leading-tight opacity-60">
+                        Cow's-milk share of the finished drink — 75% or more
+                        earns the reduced rate. Plant-based milks never count;
+                        enter their real cow's-milk share (usually 0).
+                      </p>
+                    </div>
+                  )}
+                  <div className="sm:col-span-2 space-y-2">
+                    {editing.form.vat_review_status !== "approved" && (
+                      <div
+                        className="alert alert-warning py-2 text-xs"
+                        role="status"
+                      >
+                        <span>
+                          {editing.form.vat_category
+                            ? "Provisional classification — not cleared for VAT-inclusive checkout yet. Await your tax adviser's confirmation before the euro cutover."
+                            : "No VAT category yet — every product needs one (plus approval) before VAT-inclusive checkout can price it."}
+                        </span>
+                      </div>
+                    )}
+                    {editing.vat_rate_preview != null ? (
+                      <p className="text-[11px] opacity-60">
+                        Provisional rate implied by the saved classification:{" "}
+                        {editing.vat_rate_preview}% — set by shop configuration,
+                        not a legal determination.
+                      </p>
+                    ) : (
+                      <p className="text-[11px] opacity-60">
+                        The saved classification implies no rate yet.
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
               <label className="label cursor-pointer justify-start gap-3">
                 <input
