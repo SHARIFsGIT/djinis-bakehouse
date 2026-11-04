@@ -196,6 +196,10 @@ class Coupon(Base):
     # Powers the "add $X more to unlock" nudge on the basket page.
     min_subtotal: Mapped[float | None] = mapped_column(Numeric(10, 2))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # One-and-done per customer — the welcome voucher's small print.
+    # "Used" means a standing order carried the code; cancelling that order
+    # hands the code back.
+    once_per_customer: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

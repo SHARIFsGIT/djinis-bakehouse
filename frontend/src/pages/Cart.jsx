@@ -99,10 +99,19 @@ export default function Cart() {
       .get("/products", { params: { sort: "rating", per_page: 8 } })
       .then(({ data }) => setBestRated(data.products))
       .catch(() => setBestRated([]));
-    // The live voucher board — codes the shop is actively offering
+    // The live voucher board — codes the shop is actively offering. A code
+    // that's no longer on the board (used up, or paused at the counter) must
+    // not linger as "applied" — checkout would only reject it later.
     client
       .get("/coupons")
-      .then(({ data }) => setVouchers(data))
+      .then(({ data }) => {
+        setVouchers(data);
+        const stored = getStoredCoupon();
+        if (stored && !data.some((v) => v.code === stored)) {
+          setAppliedCode("");
+          storeCoupon("");
+        }
+      })
       .catch(() => setVouchers([]));
   }, []);
 

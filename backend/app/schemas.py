@@ -440,6 +440,8 @@ class CouponCreateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=255)
     # 0 or None = no minimum; a threshold here is what the basket nudges toward.
     min_subtotal: float | None = Field(default=None, ge=0)
+    # The welcome-voucher rule: redeemable once per customer.
+    once_per_customer: bool = False
 
 
 class CouponUpdateRequest(BaseModel):
@@ -447,6 +449,7 @@ class CouponUpdateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=255)
     min_subtotal: float | None = Field(default=None, ge=0)
     is_active: bool | None = None
+    once_per_customer: bool | None = None
 
 
 class CouponOut(ORMModel):
@@ -456,6 +459,7 @@ class CouponOut(ORMModel):
     description: str | None
     min_subtotal: float | None = None
     is_active: bool
+    once_per_customer: bool
     created_at: datetime
 
 

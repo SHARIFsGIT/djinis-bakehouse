@@ -16,6 +16,8 @@ from ..models import (
     DEFAULT_TODAY_NOTE,
     BulkEnquiry,
     Coupon,
+    Order,
+    OrderStatus,
     Subscriber,
     get_store_setting,
 )
@@ -31,7 +33,7 @@ from ..schemas import (
 from ..config import get_settings
 from ..email import bulk_enquiry_ack_email, send_email
 from ..notifications import notify_admin
-from ..security import CurrentAdmin, DbSession, client_key
+from ..security import CurrentAdmin, DbSession, OptionalUser, client_key
 from .. import facebook_gateway, sms_gateway, stripe_gateway
 
 router = APIRouter(prefix="/api", tags=["storefront"])
@@ -134,6 +136,7 @@ def create_bulk_enquiry(
         body=f"{enquiry.guests} guests · {enquiry.email} · {enquiry.phone}",
         # Straight to the enquiry rail — the Orders tab itself shows no leads
         link="/admin/orders?tab=bulk",
+        background=background,
     )
     db.commit()
     db.refresh(enquiry)
@@ -153,19 +156,33 @@ def create_bulk_enquiry(
 
 
 @router.get("/coupons", response_model=list[CouponPreviewOut])
-def public_vouchers(db: DbSession):
+def public_vouchers(user: OptionalUser, db: DbSession):
     """The live voucher board for the basket page.
 
     Only active codes, and only what a shopper needs to decide: the saving
     and the basket it needs. Codes are meant to be shown — that's the point
-    of a promotion."""
-    return list(
+    of a promotion. One exception: a once-per-customer code the signed-in
+    shopper has already used drops off their board (checkout enforces it
+    either way, so the board is just being honest)."""
+    coupons = list(
         db.scalars(
             select(Coupon)
             .where(Coupon.is_active.is_(True))
             .order_by(Coupon.min_subtotal.is_(None), Coupon.percent_off.desc())
         )
     )
+    if user is not None:
+        used = set(
+            db.scalars(
+                select(Order.coupon_code).where(
+                    Order.user_id == user.id,
+                    Order.coupon_code.is_not(None),
+                    Order.status != OrderStatus.CANCELLED.value,
+                )
+            )
+        )
+        coupons = [c for c in coupons if not (c.once_per_customer and c.code in used)]
+    return coupons
 
 
 @router.get("/admin/newsletter", response_model=list[SubscriberOut])

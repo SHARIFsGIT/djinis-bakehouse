@@ -2292,3 +2292,141 @@ def test_boot_restores_the_last_admin(tmp_path, monkeypatch):
         assert db.query(User).filter(User.role == "admin").count() == 1
     finally:
         db.close()
+
+
+# --------------------------------------------------------------------------
+# The welcome voucher's small print, and the desk ping's email copy
+# --------------------------------------------------------------------------
+
+def _register_and_login(email: str, password: str) -> dict:
+    """A fresh shopper of the test's own — coupon rules are per customer, so
+    a test that spends a code can't share the suite's fixed customer."""
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "email": email,
+            "password": password,
+            "first_name": "Fiona",
+            "last_name": "Firsttimer",
+        },
+    )
+    assert response.status_code == 201
+    token = client.post("/api/auth/login", json={"email": email, "password": password})
+    return auth_header(token.json()["access_token"])
+
+
+def _top_up_stock(slug: str, extra: int = 40) -> None:
+    """The suite bakes its way through the croissants — a late test that
+    still needs to place orders refills the case first."""
+    from app.database import SessionLocal
+    from app.models import Product as ProductRow
+
+    db = SessionLocal()
+    try:
+        db.query(ProductRow).filter_by(slug=slug).one().stock += extra
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_welcome_voucher_is_once_per_customer():
+    """WELCOME10 follows its own small print: one order per customer. After
+    redemption it leaves that shopper's voucher board and stops validating —
+    until the order is cancelled, which hands the code back."""
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    headers = _register_and_login("first-timer@example.com", "FirstTimer1!")
+
+    board = client.get("/api/coupons", headers=headers).json()
+    assert any(v["code"] == "WELCOME10" for v in board)
+
+    first = client.post(
+        "/api/orders", json=checkout_payload(coupon_code="WELCOME10"), headers=headers
+    )
+    assert first.status_code == 201
+
+    # Used: gone from this shopper's board, and neither the preview nor a
+    # second checkout will take it again.
+    board = client.get("/api/coupons", headers=headers).json()
+    assert all(v["code"] != "WELCOME10" for v in board)
+    assert any(v["code"] == "FRESHBAKE15" for v in board)  # other codes stay
+    assert client.get("/api/orders/coupons/WELCOME10", headers=headers).status_code == 404
+    again = client.post(
+        "/api/orders", json=checkout_payload(coupon_code="WELCOME10"), headers=headers
+    )
+    assert again.status_code == 404, again.json()
+    assert "one-per-customer" in again.json()["detail"]
+
+    # A guest still sees the code — only this shopper has used it.
+    assert any(v["code"] == "WELCOME10" for v in client.get("/api/coupons").json())
+
+    # Cancelling the order hands the code back.
+    assert (
+        client.post(f"/api/orders/{first.json()['id']}/cancel", headers=headers).status_code == 200
+    )
+    assert client.get("/api/orders/coupons/WELCOME10", headers=headers).status_code == 200
+    assert any(v["code"] == "WELCOME10" for v in client.get("/api/coupons", headers=headers).json())
+
+
+def test_admin_sets_and_clears_the_once_per_customer_flag():
+    admin = admin_headers()
+    minted = client.post(
+        "/api/admin/coupons",
+        json={"code": "ONCEONLY20", "percent_off": 20, "once_per_customer": True},
+        headers=admin,
+    )
+    assert minted.status_code == 201
+    assert minted.json()["once_per_customer"] is True
+
+    listing = client.get("/api/admin/coupons", headers=admin).json()
+    welcome = next(c for c in listing if c["code"] == "WELCOME10")
+    assert welcome["once_per_customer"] is True  # seeded with its small print
+    freshbake = next(c for c in listing if c["code"] == "FRESHBAKE15")
+    assert freshbake["once_per_customer"] is False
+
+    cleared = client.put(
+        f"/api/admin/coupons/{minted.json()['id']}",
+        json={"once_per_customer": False},
+        headers=admin,
+    )
+    assert cleared.json()["once_per_customer"] is False
+
+
+def test_every_desk_ping_also_lands_in_the_admin_inbox(caplog):
+    """The bell is for the desk; the same ping now travels to the active
+    admins' inbox — new orders, new customers and catering leads included."""
+    import datetime
+    import logging
+
+    tomorrow = (datetime.date.today() + datetime.timedelta(days=14)).isoformat()
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        headers = auth_header(login_customer())
+        placed = client.post("/api/orders", json=checkout_payload(), headers=headers)
+        assert placed.status_code == 201, placed.json()
+        client.post("/api/auth/register", json={
+            "email": "another-regular@example.com",
+            "password": "AnotherRegular1!",
+            "first_name": "Ayaan",
+            "last_name": "Regular",
+        })
+        client.post("/api/bulk-orders", json={
+            "name": "Party Planner",
+            "email": "planner@example.com",
+            "phone": "+1 503 555 0177",
+            "event_date": tomorrow,
+            "event_type": "birthday",
+            "guests": 30,
+            "items_note": "3 dozen doughnuts",
+            "message": "Morning delivery please",
+        })
+
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    # every ping's email copy is addressed to the active admins
+    assert "email to admin@djinisbakehouse.com" in logged
+    assert "New order DJ-" in logged
+    assert "New customer — Ayaan Regular" in logged
+    assert "Bulk enquiry from Party Planner" in logged
+    # and the customers' own mail still goes only to them
+    assert "email to another-regular@example.com" not in logged

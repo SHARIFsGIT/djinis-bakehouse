@@ -77,7 +77,7 @@ def _token_response(user: User) -> TokenResponse:
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, db: DbSession, request: Request):
+def register(payload: RegisterRequest, db: DbSession, request: Request, background: BackgroundTasks):
     _check_rate_limit(request, "register")
     if db.scalar(select(User).where(User.email == payload.email.lower())):
         raise HTTPException(status_code=409, detail="An account with this email already exists")
@@ -104,6 +104,7 @@ def register(payload: RegisterRequest, db: DbSession, request: Request):
         title=f"New customer — {user.full_name}",
         body=user.email,
         link="/admin/users",
+        background=background,
     )
     db.commit()
     db.refresh(user)
@@ -295,6 +296,7 @@ def facebook_start(request: Request):
 def facebook_callback(
     request: Request,
     db: DbSession,
+    background: BackgroundTasks,
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
@@ -348,6 +350,7 @@ def facebook_callback(
             title=f"New customer — {user.full_name}",
             body=f"{user.email} (via Facebook)",
             link="/admin/users",
+            background=background,
         )
     elif user.facebook_id != fb_id:
         user.facebook_id = fb_id  # the same person, a second way in

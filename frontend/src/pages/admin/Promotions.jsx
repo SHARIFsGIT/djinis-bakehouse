@@ -5,7 +5,7 @@ import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import { Loading } from "../../components/Loading";
 
-const EMPTY_FORM = { code: "", percent_off: "", description: "" };
+const EMPTY_FORM = { code: "", percent_off: "", description: "", once_per_customer: false };
 
 export default function Promotions() {
   const toast = useToast();
@@ -31,6 +31,7 @@ export default function Promotions() {
         code: form.code.trim(),
         percent_off: Number(form.percent_off),
         description: form.description.trim() || null,
+        once_per_customer: form.once_per_customer,
       });
       toast.success(`Coupon ${form.code.trim().toUpperCase()} is live`);
       setForm(EMPTY_FORM);
@@ -45,6 +46,17 @@ export default function Promotions() {
   const toggleActive = async (coupon) => {
     try {
       await client.put(`/admin/coupons/${coupon.id}`, { is_active: !coupon.is_active });
+      await load();
+    } catch (err) {
+      toast.error(apiError(err));
+    }
+  };
+
+  const toggleOncePerCustomer = async (coupon) => {
+    try {
+      await client.put(`/admin/coupons/${coupon.id}`, {
+        once_per_customer: !coupon.once_per_customer,
+      });
       await load();
     } catch (err) {
       toast.error(apiError(err));
@@ -88,7 +100,7 @@ export default function Promotions() {
       {/* New coupon */}
       <form
         onSubmit={create}
-        className="grid gap-3 rounded-box glass p-5 shadow-sm ring-1 ring-base-300/60 sm:grid-cols-[160px_120px_1fr_auto] sm:items-end"
+        className="grid gap-3 rounded-box glass p-5 shadow-sm ring-1 ring-base-300/60 sm:grid-cols-[160px_120px_1fr_auto_auto] sm:items-end"
       >
         <div>
           <label className="label text-xs">Code *</label>
@@ -127,6 +139,18 @@ export default function Promotions() {
             onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
           />
         </div>
+        <label
+          className="label cursor-pointer items-center justify-self-end gap-2 text-xs"
+          title="Each customer can use this code on one order — cancelling that order hands the code back"
+        >
+          <input
+            type="checkbox"
+            className="checkbox checkbox-secondary checkbox-sm"
+            checked={form.once_per_customer}
+            onChange={(e) => setForm((f) => ({ ...f, once_per_customer: e.target.checked }))}
+          />
+          One per customer
+        </label>
         <button type="submit" className="btn btn-primary" disabled={busy}>
           {busy ? <span className="loading loading-spinner loading-xs" /> : "Add coupon"}
         </button>
@@ -155,7 +179,23 @@ export default function Promotions() {
             <tbody>
               {coupons.map((c) => (
                 <tr key={c.id} className={c.is_active ? "hover:bg-base-200/50" : "opacity-55"}>
-                  <td className="font-mono font-bold">{c.code}</td>
+                  <td className="font-mono font-bold">
+                    {c.code}
+                    <button
+                      type="button"
+                      className={`badge badge-xs ml-2 border-0 ${
+                        c.once_per_customer ? "badge-secondary" : "badge-ghost opacity-60"
+                      }`}
+                      title={
+                        c.once_per_customer
+                          ? "Once per customer — click to allow repeats"
+                          : "Reusable — click to limit to one order per customer"
+                      }
+                      onClick={() => toggleOncePerCustomer(c)}
+                    >
+                      {c.once_per_customer ? "1× / customer" : "repeatable"}
+                    </button>
+                  </td>
                   <td className="text-right">
                     {editing?.id === c.id ? (
                       <span className="inline-flex items-center gap-1">

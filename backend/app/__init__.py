@@ -56,12 +56,24 @@ _ADDITIVE_COLUMNS = {
     },
     "coupons": {
         "min_subtotal": "ALTER TABLE coupons ADD COLUMN min_subtotal NUMERIC(10,2)",
+        # FALSE, not 0 — PostgreSQL refuses an integer default on a boolean.
+        "once_per_customer": "ALTER TABLE coupons ADD COLUMN once_per_customer BOOLEAN NOT NULL DEFAULT FALSE",
     },
     "reviews": {
         # TRUE, not 1 — PostgreSQL refuses an integer default on a boolean
         # column (SQLite happily takes either, which is how tests missed it).
         "is_approved": "ALTER TABLE reviews ADD COLUMN is_approved BOOLEAN NOT NULL DEFAULT TRUE",
     },
+}
+
+# Follow-up data updates tied to a column above: they run exactly once, on
+# the boot that adds the column — never again, so a later decision made in
+# the console always sticks.
+_ADDITIVE_COLUMN_FIXES = {
+    # The welcome voucher became one-per-customer after databases already
+    # carried the code; the flag arrives with the column and flips it.
+    "coupons.once_per_customer":
+        "UPDATE coupons SET once_per_customer = TRUE WHERE code = 'WELCOME10'",
 }
 
 # One-off copy corrections for older databases, matched against the exact
@@ -139,6 +151,9 @@ def _upgrade_schema() -> None:
                 if column not in present:
                     logger.info("Upgrading schema: adding %s.%s", table, column)
                     conn.execute(text(statement))
+                    fix = _ADDITIVE_COLUMN_FIXES.get(f"{table}.{column}")
+                    if fix:
+                        conn.execute(text(fix))
         for statement in _DATA_FIXES:
             result = conn.execute(text(statement))
             if result.rowcount:

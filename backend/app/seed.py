@@ -125,10 +125,10 @@ PRODUCTS = [
      "Wheat flour, butter, raisins, candied peel, marzipan, rum, spices", "Gluten, Dairy, Alcohol"),
 ]
 
-# code, percent, description, min_subtotal (None = no minimum)
+# code, percent, description, min_subtotal (None = no minimum), once per customer
 COUPONS = [
-    ("WELCOME10", 10, "10% off your first order", None),
-    ("FRESHBAKE15", 15, "15% off boxes of $40 or more", 40.00),
+    ("WELCOME10", 10, "10% off your first order", None, True),
+    ("FRESHBAKE15", 15, "15% off boxes of $40 or more", 40.00, False),
 ]
 
 # The home page's "Word around the neighborhood" — the baker's picks, not an
@@ -325,12 +325,12 @@ def _restore_promised_content(db) -> None:
     retuned from the console is left alone (a coupon threshold counts as
     untouched only while it is still NULL)."""
     existing_coupons = {c.code: c for c in db.scalars(select(Coupon))}
-    for code, percent_off, description, min_subtotal in COUPONS:
+    for code, percent_off, description, min_subtotal, once_per_customer in COUPONS:
         coupon = existing_coupons.get(code)
         if coupon is None:
             db.add(
                 Coupon(code=code, percent_off=percent_off, description=description,
-                       min_subtotal=min_subtotal)
+                       min_subtotal=min_subtotal, once_per_customer=once_per_customer)
             )
         elif coupon.min_subtotal is None and min_subtotal is not None:
             coupon.min_subtotal = min_subtotal
@@ -446,9 +446,9 @@ def seed_db() -> None:
         # The storefront copy promises these codes — they belong to the shop,
         # not to the demo dataset.
         coupons: dict[str, Coupon] = {}
-        for code, percent_off, description, min_subtotal in COUPONS:
+        for code, percent_off, description, min_subtotal, once_per_customer in COUPONS:
             coupon = Coupon(code=code, percent_off=percent_off, description=description,
-                            min_subtotal=min_subtotal)
+                            min_subtotal=min_subtotal, once_per_customer=once_per_customer)
             db.add(coupon)
             coupons[code] = coupon
 

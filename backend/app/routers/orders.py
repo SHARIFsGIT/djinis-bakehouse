@@ -51,10 +51,33 @@ def _generate_order_number(db) -> str:
             return number
 
 
-def _load_coupon(db, code: str) -> Coupon:
+def _coupon_used_by(db, code: str, user_id: int) -> bool:
+    """A once-per-customer code counts as used while the customer has any
+    standing order that carried it — cancelling that order hands the code
+    back."""
+    return (
+        db.scalar(
+            select(Order.id)
+            .where(
+                Order.user_id == user_id,
+                Order.coupon_code == code,
+                Order.status != OrderStatus.CANCELLED.value,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _load_coupon(db, code: str, user: User | None = None) -> Coupon:
     coupon = db.scalar(select(Coupon).where(Coupon.code == code.strip().upper()))
     if coupon is None or not coupon.is_active:
         raise HTTPException(status_code=404, detail="This coupon code is not valid")
+    if coupon.once_per_customer and user is not None and _coupon_used_by(db, coupon.code, user.id):
+        raise HTTPException(
+            status_code=404,
+            detail=f"{coupon.code} is a one-per-customer code and has already been used",
+        )
     return coupon
 
 
@@ -237,7 +260,9 @@ def checkout(
 
     subtotal = round(sum(by_id[pid].current_price * qty for pid, qty in merged.items()), 2)
 
-    coupon = _load_coupon(db, payload.coupon_code) if payload.coupon_code else None
+    coupon = (
+        _load_coupon(db, payload.coupon_code, user) if payload.coupon_code else None
+    )
     if coupon and coupon.min_subtotal and subtotal < float(coupon.min_subtotal):
         raise HTTPException(
             status_code=400,
@@ -317,6 +342,7 @@ def checkout(
         body=f"{user.full_name} · {sum(merged.values())} items · "
         f"{payload.payment_method.value.replace('_', ' ')}",
         link=f"/admin/orders?search={order.order_number}",
+        background=background,
     )
     db.commit()
     db.refresh(order)
@@ -358,7 +384,7 @@ def checkout(
 @router.get("/coupons/{code}", response_model=CouponPreviewOut)
 def check_coupon(code: str, user: CurrentUser, db: DbSession):
     """Preview a coupon while the customer is at the checkout screen."""
-    coupon = _load_coupon(db, code)
+    coupon = _load_coupon(db, code, user)
     return CouponPreviewOut(
         code=coupon.code,
         percent_off=coupon.percent_off,

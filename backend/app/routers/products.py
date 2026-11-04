@@ -1,6 +1,6 @@
 """Product catalog: categories, listing with filters, detail, reviews and saved bakes."""
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response, status
 from sqlalchemy import func, or_, select
 
 from ..models import Category, Favorite, Product, Review
@@ -235,7 +235,12 @@ def product_detail(slug: str, db: DbSession, user: OptionalUser):
 
 @router.post("/{product_id}/reviews", response_model=ReviewOut, status_code=status.HTTP_201_CREATED)
 def add_review(
-    product_id: int, payload: ReviewCreate, user: CurrentUser, db: DbSession, response: Response
+    product_id: int,
+    payload: ReviewCreate,
+    user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    background: BackgroundTasks,
 ):
     """Create a review, or edit the customer's existing one for this product.
 
@@ -252,14 +257,14 @@ def add_review(
         review.rating = payload.rating
         review.comment = payload.comment
         response.status_code = status.HTTP_200_OK
-        notify_review(db, review, changed=True)
+        notify_review(db, review, changed=True, background=background)
     else:
         review = Review(
             product_id=product_id, user_id=user.id, rating=payload.rating, comment=payload.comment
         )
         db.add(review)
         db.flush()  # give the ping its product/author relationships
-        notify_review(db, review, changed=False)
+        notify_review(db, review, changed=False, background=background)
     db.commit()
     db.refresh(review)
     return review_to_out(review)

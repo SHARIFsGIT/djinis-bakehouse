@@ -138,9 +138,12 @@ show the star distribution (5→1) so shoppers see the shape of the feedback.
 line (price, availability, stock) at checkout and is the source of truth for money.
 Coupon codes (`WELCOME10`, `FRESHBAKE15` — manage them under Promotions, where
 each code can carry a minimum basket) take a percent off the subtotal once that
-minimum is met; tax is recalculated on the discounted amount. The seeder
-restores these codes on startup if they're ever deleted from the console,
-because the storefront copy promises them.
+minimum is met; tax is recalculated on the discounted amount. A code can also
+be flagged **one per customer** — the welcome voucher is: once a customer has a
+standing order that carried the code, it drops off *their* voucher board and
+both preview and checkout refuse it; cancelling that order hands the code back.
+The seeder restores these codes on startup if they're ever deleted from the
+console, because the storefront copy promises them.
 Payment is cash on delivery (settled by staff when the order is marked delivered)
 plus — once Stripe is configured — **online card payments through Stripe's hosted
 Checkout**: the order is placed unpaid, the customer pays on Stripe's page (card
@@ -210,7 +213,11 @@ top (swappable from the desk, resettable to the shipped one), the storefront
 copy (announcement bar and the home page's "today" note; clearing a line hides
 it), managers for the home page's coming-soon band and testimonials (add,
 edit, re-order, shelve, photos included), and the cancellation policy at the
-very bottom.
+very bottom. Every desk ping — a new order, a new customer (Facebook sign-ups
+included), a bulk enquiry, a review — lands in the notification bell *and*,
+once SMTP is configured, in every active admin's inbox the same moment: the
+email is queued as a background task, so a slow mail server never slows the
+shop, and a failed send only logs.
 
 ## Project layout
 
@@ -237,7 +244,9 @@ backend/
                      coming-soon)
   static/            product & site photos (generated, see scripts/);
                      uploads/ holds admin- and customer-added photos
-  tests/test_api.py  58 end-to-end API tests
+  tests/test_api.py  63 end-to-end API tests; test_stripe_gateway.py adds 9
+                     more on the payment seam (webhook signing, plain-dict
+                     handback)
 frontend/
   src/
     api/client.js    axios + token attach + silent refresh on 401

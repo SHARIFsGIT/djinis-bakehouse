@@ -678,6 +678,7 @@ def create_coupon(payload: CouponCreateRequest, admin: CurrentAdmin, db: DbSessi
         percent_off=payload.percent_off,
         description=payload.description,
         min_subtotal=payload.min_subtotal or None,
+        once_per_customer=payload.once_per_customer,
     )
     db.add(coupon)
     db.commit()

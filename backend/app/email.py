@@ -263,3 +263,45 @@ def send_order_receipt(receipt: dict) -> None:
         send_email(receipt["email"], subject, html, text)
     except Exception:
         logger.exception("building the receipt email for %s failed", receipt.get("order_number"))
+
+
+def admin_notification_email(title: str, body: str | None, link: str | None) -> tuple[str, str, str]:
+    """The desk ping as an email — for the baker who isn't at the desk.
+
+    Same card the customers get, minus anything only the admin console
+    could act on: the link is shown as a desk path, not a public URL, so
+    the email never carries a guessable absolute address."""
+    shop = get_settings().bakery_name
+    subject = f"{title} — {shop}"
+    text = f"{title}\n\n{body or ''}"
+    if link:
+        text += f"\n\nAt the desk: {link}"
+    text += "\n"
+    link_html = (
+        f'<p style="margin:0;font-size:13px;color:#8a837a;">At the desk: {escape(link)}</p>'
+        if link
+        else ""
+    )
+    html = f"""\
+<div style="margin:0;padding:24px;background:#f6f1ee;font-family:Georgia,'Times New Roman',serif;color:#33322e;">
+  <div style="max-width:480px;margin:0 auto;background:#fffdf9;border-radius:14px;padding:32px;
+              border:1px solid #e7ddd6;">
+    <p style="margin:0 0 4px;font-size:15px;color:{_BRAND};font-weight:bold;">{shop}</p>
+    <h1 style="margin:0 0 12px;font-size:20px;color:#33322e;">{escape(title)}</h1>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;">
+      {escape(body) if body else ""}
+    </p>
+    {link_html}
+  </div>
+</div>
+"""
+    return subject, html, text
+
+
+def send_admin_notification(to: str, title: str, body: str | None, link: str | None) -> None:
+    """Queue-safe entry point for the mirrored desk ping."""
+    try:
+        subject, html, text = admin_notification_email(title, body, link)
+        send_email(to, subject, html, text)
+    except Exception:
+        logger.exception("building the admin notification email failed")
