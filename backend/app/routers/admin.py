@@ -81,7 +81,7 @@ from ..schemas import (
 from ..security import CurrentAdmin, DbSession
 from ..serialize import product_to_card, review_summary, verified_buyers
 from ..uploads import MAX_PRODUCT_PHOTO_BYTES, save_photo
-from .orders import _cancel_order, _late_cancel_fee, _serialize
+from .orders import _cancel_order, _late_cancel_fee, _lock_for_cancellation, _serialize
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -303,6 +303,11 @@ def update_order_status(
     # The status dial is the console's cancel path — run the full
     # cancellation (stock back, refund settled), free of the late fee.
     if payload.status == OrderStatus.CANCELLED:
+        # Judge under the lock: the customer's cancel click or the expiry
+        # sweep may have landed a moment earlier.
+        order = _lock_for_cancellation(order, db)
+        if order is None:
+            raise HTTPException(status_code=404, detail="Order not found")
         if order.status == OrderStatus.CANCELLED.value:
             raise HTTPException(status_code=400, detail="Order is already cancelled")
         _cancel_order(order, db, by_customer=False, comment=payload.comment)

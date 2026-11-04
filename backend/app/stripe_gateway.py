@@ -221,13 +221,21 @@ def retrieve_session(session_id: str) -> dict:
 def refund(payment_intent: str, amount_cents: int) -> None:
     """Send money back to the card, less any amount the shop keeps.
 
-    Raises GatewayUnavailable on failure — the caller decides how honest to
-    be about a refund that hasn't actually happened.
+    The idempotency key is deterministic — the same refund attempted again
+    (a repeated cancel click racing the lock, a retry after an uncertain
+    outcome) collapses onto the original refund at Stripe instead of
+    issuing a second one, while a genuinely different amount gets its own
+    key and proceeds. Raises GatewayUnavailable on failure — the caller
+    decides how honest to be about a refund that hasn't actually happened.
     """
     settings = get_settings()
     stripe.api_key = settings.stripe_secret_key
     try:
-        stripe.Refund.create(payment_intent=payment_intent, amount=amount_cents)
+        stripe.Refund.create(
+            payment_intent=payment_intent,
+            amount=amount_cents,
+            idempotency_key=f"refund:{payment_intent}:{amount_cents}",
+        )
     except Exception:
         logger.exception("refunding payment intent %s failed", payment_intent)
         raise GatewayUnavailable("Stripe did not answer") from None

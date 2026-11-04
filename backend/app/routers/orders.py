@@ -428,6 +428,22 @@ def _get_order_for(order_id: int, user: User, db) -> Order:
     return order
 
 
+def _lock_for_cancellation(order: Order, db) -> Order | None:
+    """The order re-read under a row lock — every cancellation path takes
+    this before judging, so no two of them (a customer's click, the admin
+    desk's dial, the expiry webhook, the sweep) can pass their guards on
+    the same order at the same time (SQLite ignores FOR UPDATE; Postgres
+    doesn't). populate_existing is the point of the re-read: the identity
+    map would otherwise hand back the first, unlocked load's stale
+    attributes. None means the row vanished between the two reads."""
+    return db.scalar(
+        select(Order)
+        .where(Order.id == order.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+
+
 @router.get("/{order_id}", response_model=OrderDetailOut)
 def order_detail(order_id: int, user: CurrentUser, db: DbSession):
     order = _get_order_for(order_id, user, db)
@@ -442,6 +458,13 @@ def _refund_paid_order(order: Order, fee: float) -> str | None:
     kept fee); cash refunds are handed back in person or by transfer, so
     only the status flips. A card order with no payment intent is demo
     history from the old simulated branch — no money ever moved.
+
+    One asymmetry is documented, not hidden: Stripe's refund cannot be
+    rolled back with this transaction. If the commit fails after Stripe
+    accepted, the order honestly stays "paid" while the customer holds
+    the money — the refund's idempotency key keeps any retry from paying
+    twice, and settling the book is then a human's (or a future sweep's)
+    job.
     """
     if order.payment_status != PaymentStatus.PAID.value:
         return None  # nothing collected, nothing owed
@@ -476,12 +499,17 @@ def _cancel_order(order: Order, db, *, by_customer: bool, comment: str | None = 
     order.cancel_fee = fee
     refund_note = _refund_paid_order(order, fee)
 
-    # Return reserved stock
+    # Return reserved stock — an additive UPDATE against the current
+    # database value, never a number computed from a loaded ORM object,
+    # so no two cancellations can read-modify-write past each other. A
+    # deleted product matches no rows: the old `if product:` guard, restated.
     for item in order.items:
         if item.product_id:
-            product = db.get(Product, item.product_id)
-            if product:
-                product.stock += item.quantity
+            db.execute(
+                update(Product)
+                .where(Product.id == item.product_id)
+                .values(stock=Product.stock + item.quantity)
+            )
 
     text = comment if comment is not None else (
         "Cancelled by customer" if by_customer else "Cancelled by bakery"
@@ -497,6 +525,11 @@ def _cancel_order(order: Order, db, *, by_customer: bool, comment: str | None = 
 @router.post("/{order_id}/cancel", response_model=OrderDetailOut)
 def cancel_order(order_id: int, user: CurrentUser, db: DbSession):
     order = _get_order_for(order_id, user, db)
+    # Judge under the lock: the admin desk's dial or the expiry sweep may
+    # have cancelled this order a moment before the click landed.
+    order = _lock_for_cancellation(order, db)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
     if not order.can_be_cancelled:
         raise HTTPException(
             status_code=400,

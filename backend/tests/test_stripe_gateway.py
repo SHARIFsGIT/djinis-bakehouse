@@ -71,6 +71,8 @@ class StubStripe:
             Session=SimpleNamespace(create=self._session, retrieve=self._retrieve)
         )
         self.Coupon = SimpleNamespace(create=self._coupon)
+        self.refunds: list[dict] = []
+        self.Refund = SimpleNamespace(create=self._refund)
 
     def _coupon(self, **kwargs):
         self.coupons.append(kwargs)
@@ -87,6 +89,10 @@ class StubStripe:
             raise RuntimeError("stripe down")
         self.retrieved.append(session_id)
         return self.retrieve_result
+
+    def _refund(self, **kwargs):
+        self.refunds.append(kwargs)
+        return SimpleNamespace(id=f"re_{len(self.refunds)}")
 
 
 def load_real_gateway(stub: StubStripe | None = None):
@@ -273,6 +279,24 @@ def test_a_silent_stripe_becomes_gateway_unavailable() -> None:
     with pytest.raises(gateway.GatewayUnavailable):
         gateway.create_checkout_session(make_order(), BASE_URL)
     assert stub.sessions == []
+
+
+def test_refund_carries_a_deterministic_idempotency_key() -> None:
+    """A retried refund must collapse onto the original at Stripe instead
+    of issuing a second one: the key is built from the payment intent and
+    the amount, so the same logical refund keeps one key while a genuinely
+    different amount gets its own."""
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+
+    gateway.refund("pi_test_1", 500)
+    gateway.refund("pi_test_1", 500)  # the retry after an uncertain outcome
+    gateway.refund("pi_test_1", 700)  # a different, legitimate amount
+
+    keys = [call["idempotency_key"] for call in stub.refunds]
+    assert keys == ["refund:pi_test_1:500", "refund:pi_test_1:500", "refund:pi_test_1:700"]
+    assert [call["amount"] for call in stub.refunds] == [500, 500, 700]
+    assert all(call["payment_intent"] == "pi_test_1" for call in stub.refunds)
 
 
 # ── The webhook seam: verified bytes in, plain JSON out ──────────────────

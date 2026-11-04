@@ -2540,3 +2540,124 @@ def test_expiry_event_for_an_already_paid_order_changes_nothing():
     assert after["payment_status"] == "paid"
     assert after["status"] == "pending"  # awaiting the ovens, not cancelled
     assert get_product("butter-croissant")["stock"] == stock_when_paid
+
+
+def test_customer_and_admin_cancellation_converge_on_one_refund():
+    """Both cancel doors, one outcome. Whichever lands first cancels and
+    refunds; the other must find the order cancelled and do nothing — one
+    refund call, one cancellation on the timeline, stock back once. (The
+    routes re-read the order under FOR UPDATE before judging; SQLite
+    ignores FOR UPDATE, so this pins the guard discipline the lock makes
+    authoritative — the locking itself is Postgres's to enforce.)"""
+    admin = admin_headers()
+    customer = auth_header(login_customer())
+    _top_up_stock("butter-croissant")
+
+    # the customer's click lands first
+    first = client.post("/api/orders", json=checkout_payload(), headers=customer).json()
+    pay_order_via_webhook(first["id"])
+    stock_when_paid = get_product("butter-croissant")["stock"]
+
+    cancelled = client.post(f"/api/orders/{first['id']}/cancel", headers=customer).json()
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["payment_status"] == "refunded"  # not baking yet → no fee
+    stock_after = get_product("butter-croissant")["stock"]
+    assert stock_after == stock_when_paid + 2
+
+    # the admin dial arrives a moment later — refused, nothing re-done
+    late = client.put(
+        f"/api/admin/orders/{first['id']}/status", json={"status": "cancelled"}, headers=admin
+    )
+    assert late.status_code == 400
+    assert get_product("butter-croissant")["stock"] == stock_after
+    detail = client.get(f"/api/orders/{first['id']}", headers=customer).json()
+    assert len([e for e in detail["timeline"] if e["comment"].startswith("Cancelled")]) == 1
+    assert len([c for c in gateway_calls if c[0] == "refund" and c[1] == f"pi_fake_{first['id']}"]) == 1
+
+    # the mirror: the desk lands first, the customer's click is refused
+    second = client.post("/api/orders", json=checkout_payload(), headers=customer).json()
+    pay_order_via_webhook(second["id"])
+    from_desk = client.put(
+        f"/api/admin/orders/{second['id']}/status", json={"status": "cancelled"}, headers=admin
+    )
+    assert from_desk.status_code == 200
+    assert client.post(f"/api/orders/{second['id']}/cancel", headers=customer).status_code == 400
+    assert len([c for c in gateway_calls if c[0] == "refund" and c[1] == f"pi_fake_{second['id']}"]) == 1
+
+
+def test_cancellation_restores_every_line_via_additive_update():
+    """Stock goes back per line item, straight from the database's own
+    arithmetic (UPDATE stock = stock + qty), so a two-product order
+    restores both products and nothing is computed from a stale ORM value."""
+    customer = auth_header(login_customer())
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    croissant = get_product("butter-croissant")
+    puff = get_product("beef-curry-puff")
+
+    order = client.post(
+        "/api/orders",
+        json=checkout_payload(
+            items=[
+                {"product_id": croissant["id"], "quantity": 2},
+                {"product_id": puff["id"], "quantity": 3},
+            ]
+        ),
+        headers=customer,
+    ).json()
+    assert get_product("butter-croissant")["stock"] == croissant["stock"] - 2
+    assert get_product("beef-curry-puff")["stock"] == puff["stock"] - 3
+
+    cancelled = client.post(f"/api/orders/{order['id']}/cancel", headers=customer)
+    assert cancelled.status_code == 200
+    assert get_product("butter-croissant")["stock"] == croissant["stock"]
+    assert get_product("beef-curry-puff")["stock"] == puff["stock"]
+
+
+def test_locked_refetch_refreshes_an_already_loaded_order():
+    """The locked re-reads must see the database's truth, not the identity
+    map's copy. On a repeated select SQLAlchemy returns the already-loaded
+    object and by default keeps its stale attributes — populate_existing is
+    what makes the guards under the lock judge fresh values, and a row that
+    vanished between the two reads comes back as None. The refresh is ORM
+    behaviour, so SQLite proves it here; only the FOR UPDATE serialisation
+    is Postgres's to enforce."""
+    from app.database import SessionLocal
+    from app.models import Order as OrderRow
+    from app.routers.orders import _lock_for_cancellation
+
+    headers = auth_header(login_customer())
+    order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+
+    db = SessionLocal()
+    try:
+        loaded = db.get(OrderRow, order["id"])
+        assert loaded.payment_status == "pending"
+
+        # another request (its own session) changes the row behind us
+        other = SessionLocal()
+        try:
+            other.get(OrderRow, order["id"]).payment_status = "paid"
+            other.commit()
+        finally:
+            other.close()
+
+        # this session's identity map still holds the stale value — even a
+        # plain db.get re-reads nothing
+        assert db.get(OrderRow, order["id"]).payment_status == "pending"
+
+        # the locked re-fetch refreshes the very same object in place
+        refreshed = _lock_for_cancellation(loaded, db)
+        assert refreshed is loaded
+        assert loaded.payment_status == "paid"  # the database's word, not the cache's
+
+        # and a row that vanished between lookup and lock is None, not a ghost
+        other = SessionLocal()
+        try:
+            other.delete(other.get(OrderRow, order["id"]))
+            other.commit()
+        finally:
+            other.close()
+        assert _lock_for_cancellation(loaded, db) is None
+    finally:
+        db.close()

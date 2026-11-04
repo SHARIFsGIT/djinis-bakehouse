@@ -86,8 +86,13 @@ def reconcile_stale_card_orders() -> None:
                 if session.get("payment_status") == "paid":
                     background = BackgroundTasks()
                     locked = db.scalar(
-                        select(Order).where(Order.id == order.id).with_for_update()
+                        select(Order)
+                        .where(Order.id == order.id)
+                        .with_for_update()
+                        .execution_options(populate_existing=True)
                     )
+                    if locked is None:
+                        continue  # the row vanished mid-sweep
                     if mark_order_paid(
                         locked,
                         db,
@@ -137,8 +142,17 @@ def _record_completed_payment(session: dict, background: BackgroundTasks, db) ->
         logger.warning("Stripe payment for unknown session %s — no order touched", session.get("id"))
         return
     # Lock the row so the webhook and the /confirm check can't both run the
-    # pending -> paid transition (SQLite ignores FOR UPDATE; Postgres doesn't).
-    order = db.scalar(select(Order).where(Order.id == order.id).with_for_update())
+    # pending -> paid transition, and refresh it in place — the identity map
+    # would otherwise keep the first, unlocked load's stale attributes
+    # (SQLite ignores FOR UPDATE; Postgres doesn't).
+    order = db.scalar(
+        select(Order)
+        .where(Order.id == order.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if order is None:
+        return  # the row vanished between the lookup and the lock
     if mark_order_paid(order, db, background, payment_intent=session.get("payment_intent")):
         logger.info("order %s paid via Stripe session %s", order.order_number, session.get("id"))
 
@@ -151,10 +165,17 @@ def _cancel_expired_session(session: dict, db) -> None:
         return
     # Lock the row before judging it, so the webhook and the sweep can't
     # both pass the guards and return the stock twice. The guards are the
-    # locked re-read: cancelled-already, superseded session, paid-after-all
-    # are all decided under the lock (SQLite ignores FOR UPDATE; Postgres
-    # doesn't).
-    order = db.scalar(select(Order).where(Order.id == order.id).with_for_update())
+    # locked re-read — refreshed in place, so they judge the database's
+    # values, not the first, unlocked load's (SQLite ignores FOR UPDATE;
+    # Postgres doesn't).
+    order = db.scalar(
+        select(Order)
+        .where(Order.id == order.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if order is None:
+        return  # the row vanished between the lookup and the lock
     if order.status == OrderStatus.CANCELLED.value:
         return
     if order.stripe_session_id and session.get("id") != order.stripe_session_id:
