@@ -2487,3 +2487,56 @@ def test_reconciliation_sweep_heals_a_webhook_outage(caplog):
     # A second sweep finds nothing left to do and changes nothing.
     reconcile_stale_card_orders()
     assert client.get(f"/api/orders/{paid['id']}", headers=headers).json()["payment_status"] == "paid"
+
+
+def test_webhook_and_sweep_converging_on_one_expired_order_return_stock_once():
+    """The race the row lock closes: Stripe's expiry webhook and the
+    reconciliation sweep judging the same stale order. The second caller
+    must re-read the order under the lock, find it cancelled, and return
+    nothing — the case must not gain the boxes twice. (SQLite ignores FOR
+    UPDATE, so this pins the guards the lock makes authoritative; the
+    locking itself is Postgres's to enforce.)"""
+    from app.database import SessionLocal
+    from app.routers.payments import _cancel_expired_session
+
+    _top_up_stock("butter-croissant")
+    headers = auth_header(login_customer())
+    order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    session_id = last_session_id(order["id"])
+
+    # the webhook's word lands first
+    expire_order_via_webhook(order["id"])
+    detail = client.get(f"/api/orders/{order['id']}", headers=headers).json()
+    assert detail["status"] == "cancelled"
+    stock_after_cancel = get_product("butter-croissant")["stock"]
+
+    # the sweep round converges on the same session a moment later
+    db = SessionLocal()
+    try:
+        _cancel_expired_session({"id": session_id}, db)
+    finally:
+        db.close()
+
+    assert get_product("butter-croissant")["stock"] == stock_after_cancel
+    after = client.get(f"/api/orders/{order['id']}", headers=headers).json()
+    expired_events = [e for e in after["timeline"] if "Payment window expired" in e["comment"]]
+    assert len(expired_events) == 1
+
+
+def test_expiry_event_for_an_already_paid_order_changes_nothing():
+    """Paid-after-all beats the clock: an expiry event arriving for a
+    session that completed must leave the paid order standing — no
+    cancellation, no stock return."""
+    _top_up_stock("butter-croissant")
+    headers = auth_header(login_customer())
+    order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+
+    pay_order_via_webhook(order["id"])
+    stock_when_paid = get_product("butter-croissant")["stock"]
+
+    expire_order_via_webhook(order["id"])
+
+    after = client.get(f"/api/orders/{order['id']}", headers=headers).json()
+    assert after["payment_status"] == "paid"
+    assert after["status"] == "pending"  # awaiting the ovens, not cancelled
+    assert get_product("butter-croissant")["stock"] == stock_when_paid

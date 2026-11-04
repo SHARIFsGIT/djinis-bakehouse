@@ -147,7 +147,15 @@ def _cancel_expired_session(session: dict, db) -> None:
     """The pay-by window closed with no payment: cancel the order and put
     the stock back so the case doesn't leak reserved boxes."""
     order = _order_for_session(session, db)
-    if order is None or order.status == OrderStatus.CANCELLED.value:
+    if order is None:
+        return
+    # Lock the row before judging it, so the webhook and the sweep can't
+    # both pass the guards and return the stock twice. The guards are the
+    # locked re-read: cancelled-already, superseded session, paid-after-all
+    # are all decided under the lock (SQLite ignores FOR UPDATE; Postgres
+    # doesn't).
+    order = db.scalar(select(Order).where(Order.id == order.id).with_for_update())
+    if order.status == OrderStatus.CANCELLED.value:
         return
     if order.stripe_session_id and session.get("id") != order.stripe_session_id:
         return  # a newer pay link superseded this session
