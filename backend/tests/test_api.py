@@ -2430,3 +2430,60 @@ def test_every_desk_ping_also_lands_in_the_admin_inbox(caplog):
     assert "Bulk enquiry from Party Planner" in logged
     # and the customers' own mail still goes only to them
     assert "email to another-regular@example.com" not in logged
+
+
+def test_reconciliation_sweep_heals_a_webhook_outage(caplog):
+    """A dead webhook endpoint must not freeze the order book. The sweep
+    asks Stripe directly about card orders still pending past their pay-by
+    window: one that was actually paid lands (receipt and all), one whose
+    window lapsed cancels with the stock returned."""
+    import datetime
+    import logging
+
+    from app.database import SessionLocal
+    from app.models import Order as OrderRow
+    from app.routers.payments import reconcile_stale_card_orders
+
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    headers = auth_header(login_customer())
+
+    paid = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    expired = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    assert paid["payment_status"] == "pending" and expired["payment_status"] == "pending"
+
+    # Stripe knows; the webhook never arrives.
+    fake_sessions[last_session_id(paid["id"])]["payment_status"] = "paid"
+    fake_sessions[last_session_id(paid["id"])]["payment_intent"] = "pi_recovered"
+    fake_sessions[last_session_id(expired["id"])]["status"] = "expired"
+
+    stock_before = get_product("butter-croissant")["stock"]
+
+    # Both orders must sit past the pay-by window for the sweep to look.
+    db = SessionLocal()
+    try:
+        stale = datetime.datetime.utcnow() - datetime.timedelta(minutes=60)
+        db.query(OrderRow).filter(OrderRow.id.in_([paid["id"], expired["id"]])).update(
+            {"created_at": stale}, synchronize_session=False
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        reconcile_stale_card_orders()
+
+    healed = client.get(f"/api/orders/{paid['id']}", headers=headers).json()
+    assert healed["payment_status"] == "paid"
+    closed = client.get(f"/api/orders/{expired['id']}", headers=headers).json()
+    assert closed["status"] == "cancelled"
+    assert "expired" in closed["timeline"][-1]["comment"]
+    # the lapsed order's croissants are back in the case; the paid one's aren't
+    assert get_product("butter-croissant")["stock"] == stock_before + 2
+    # the drained receipt really sent (log-only SMTP in tests)
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert f"Receipt {paid['order_number']}" in logged
+
+    # A second sweep finds nothing left to do and changes nothing.
+    reconcile_stale_card_orders()
+    assert client.get(f"/api/orders/{paid['id']}", headers=headers).json()["payment_status"] == "paid"

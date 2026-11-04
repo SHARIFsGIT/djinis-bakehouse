@@ -1,5 +1,6 @@
 """FastAPI application factory for Djini's Bakehouse."""
 
+import asyncio
 import logging
 import uuid
 from collections import defaultdict, deque
@@ -8,12 +9,14 @@ from pathlib import Path
 from time import monotonic
 
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
+from . import stripe_gateway
 from .config import get_settings
 from .database import Base, engine
 from .routers import admin, auth, content, marketing, orders, payments, products
@@ -187,8 +190,27 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "API docs are enabled in production — set ENABLE_DOCS=false in .env if that is not intended."
         )
+
+    # Self-heal for payment webhooks: card orders stuck pending past their
+    # pay-by window are reconciled with Stripe — at boot, then every few
+    # minutes. A moved or dead webhook endpoint must not freeze the book.
+    sweep_task: asyncio.Task | None = None
+    if stripe_gateway.configured():
+
+        async def _payment_sweep() -> None:
+            while True:
+                try:
+                    await run_in_threadpool(payments.reconcile_stale_card_orders)
+                except Exception:
+                    logger.exception("Stripe reconciliation sweep failed")
+                await asyncio.sleep(payments.SWEEP_INTERVAL_SECONDS)
+
+        sweep_task = asyncio.create_task(_payment_sweep())
+
     logger.info("%s API ready (%s)", settings.bakery_name, settings.app_env)
     yield
+    if sweep_task is not None:
+        sweep_task.cancel()
 
 
 def create_app() -> FastAPI:
@@ -197,7 +219,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=f"{settings.bakery_name} API",
-        version="3.10.0",
+        version="3.13.0",
         description="Bakery e-commerce API — customers, catalog, orders, coupons, online payments (Stripe), email / phone-code / Facebook sign-in, bulk enquiries with emailed replies, saved bakes, newsletter and admin.",
         lifespan=lifespan,
         docs_url="/api/docs" if settings.enable_docs else None,
@@ -249,6 +271,10 @@ def create_app() -> FastAPI:
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        # HSTS pins the https:// canonical domain — browsers ignore it over
+        # plain HTTP, so dev on localhost is untouched.
+        if settings.is_production or request.url.scheme == "https":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         logger.info(
             '%s %s -> %s %.1fms id=%s',
             request.method,

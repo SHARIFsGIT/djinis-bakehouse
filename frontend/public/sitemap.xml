@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The shop's permanent public pages. Product pages are left to the
+     crawler — the catalog changes with the case, and a sitemap that lists
+     retired bakes is worse than a lean one. -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://djinisbakehouse.com/</loc>
+    <changefreq>daily</changefreq>
+  </url>
+  <url>
+    <loc>https://djinisbakehouse.com/products</loc>
+    <changefreq>daily</changefreq>
+  </url>
+  <url>
+    <loc>https://djinisbakehouse.com/bulk</loc>
+    <changefreq>monthly</changefreq>
+  </url>
+  <url>
+    <loc>https://djinisbakehouse.com/privacy</loc>
+    <changefreq>yearly</changefreq>
+  </url>
+  <url>
+    <loc>https://djinisbakehouse.com/terms</loc>
+    <changefreq>yearly</changefreq>
+  </url>
+  <url>
+    <loc>https://djinisbakehouse.com/refunds</loc>
+    <changefreq>yearly</changefreq>
+  </url>
+</urlset>

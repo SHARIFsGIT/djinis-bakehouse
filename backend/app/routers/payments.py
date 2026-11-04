@@ -9,12 +9,14 @@ webhook row-locks, so exactly one of them sends the receipt.
 """
 
 import logging
+from datetime import timedelta
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 
 from .. import stripe_gateway
+from ..database import SessionLocal, utcnow
 from ..models import Order, OrderStatus, PaymentMethod, PaymentStatus
 from ..routers.orders import (
     _cancel_order,
@@ -29,6 +31,85 @@ from ..security import CurrentUser, DbSession
 logger = logging.getLogger("bakery.payments")
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
+
+# How often the reconciliation sweep below inspects the order book.
+SWEEP_INTERVAL_SECONDS = 15 * 60
+
+
+def _drain(background: BackgroundTasks) -> None:
+    """Run tasks queued on a BackgroundTasks no response will carry — the
+    sweep reconciles outside a request, so it sends its own receipts."""
+    for task in background.tasks:
+        task.func(*task.args, **task.kwargs)
+
+
+def reconcile_stale_card_orders() -> None:
+    """Self-heal for webhook outages.
+
+    A card order still pending well past its pay-by window means Stripe's
+    word never landed — endpoint moved in the dashboard, a domain cutover
+    missed, retries given up. Each one is checked against the gateway
+    directly: paid orders get their paid transition and receipt, expired
+    ones cancel with the stock returned, the same outcomes the webhook
+    would have delivered. Stripe being unreachable is not an error here —
+    the next round tries again.
+    """
+    if not stripe_gateway.configured():
+        return
+    # The pay-by window plus slack, so a session Stripe is still closing is
+    # left for its own events.
+    cutoff = utcnow() - timedelta(
+        seconds=stripe_gateway.SESSION_LIFETIME_SECONDS + 10 * 60
+    )
+    db = SessionLocal()
+    try:
+        stale = db.scalars(
+            select(Order)
+            .where(
+                Order.payment_method == PaymentMethod.CARD.value,
+                Order.payment_status == PaymentStatus.PENDING.value,
+                Order.status == OrderStatus.PENDING.value,
+                Order.stripe_session_id.is_not(None),
+                Order.created_at < cutoff,
+            )
+        ).all()
+        for order in stale:
+            try:
+                session = stripe_gateway.retrieve_session(order.stripe_session_id)
+            except stripe_gateway.GatewayUnavailable:
+                logger.warning(
+                    "reconciliation sweep: Stripe unavailable — resuming on the next round"
+                )
+                db.rollback()
+                return
+            try:
+                if session.get("payment_status") == "paid":
+                    background = BackgroundTasks()
+                    locked = db.scalar(
+                        select(Order).where(Order.id == order.id).with_for_update()
+                    )
+                    if mark_order_paid(
+                        locked,
+                        db,
+                        background,
+                        payment_intent=session.get("payment_intent"),
+                    ):
+                        logger.info(
+                            "order %s marked paid by the reconciliation sweep (the webhook never landed)",
+                            order.order_number,
+                        )
+                    _drain(background)
+                elif session.get("status") == "expired":
+                    # The expiry webhook's own guards, reused verbatim.
+                    _cancel_expired_session({"id": order.stripe_session_id}, db)
+            except Exception:
+                logger.exception(
+                    "reconciliation sweep: order %s could not be reconciled",
+                    order.order_number,
+                )
+                db.rollback()
+    finally:
+        db.close()
 
 
 def _order_for_session(session: dict, db) -> Order | None:

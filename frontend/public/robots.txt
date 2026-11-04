@@ -1,0 +1,9 @@
+# Djini's Bakehouse — crawl the shop, stay out of the back office.
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /account
+Disallow: /checkout
+Disallow: /cart
+
+Sitemap: https://djinisbakehouse.com/sitemap.xml
