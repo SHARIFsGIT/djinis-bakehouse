@@ -219,7 +219,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=f"{settings.bakery_name} API",
-        version="3.13.2",
+        version="3.13.3",
         description="Bakery e-commerce API — customers, catalog, orders, coupons, online payments (Stripe), email / phone-code / Facebook sign-in, bulk enquiries with emailed replies, saved bakes, newsletter and admin.",
         lifespan=lifespan,
         docs_url="/api/docs" if settings.enable_docs else None,

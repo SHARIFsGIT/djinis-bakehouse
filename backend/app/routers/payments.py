@@ -238,6 +238,18 @@ def confirm_payment(order_id: int, user: CurrentUser, db: DbSession, background:
                 detail="The payment provider didn't answer — check back in a moment",
             )
         if session.get("payment_status") == "paid":
+            # The webhook may have landed while retrieve_session was on the
+            # wire — judge on a locked, freshly refreshed row, the same
+            # re-read the webhook itself takes, so exactly one of the two
+            # records the payment and sends the receipt.
+            order = db.scalar(
+                select(Order)
+                .where(Order.id == order.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if order is None:
+                raise HTTPException(status_code=404, detail="Order not found")
             mark_order_paid(order, db, background, payment_intent=session.get("payment_intent"))
     return _serialize(order, detailed=True, cancel_fee_preview=_late_cancel_fee(order, db))
 

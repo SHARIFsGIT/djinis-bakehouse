@@ -2661,3 +2661,36 @@ def test_locked_refetch_refreshes_an_already_loaded_order():
         assert _lock_for_cancellation(loaded, db) is None
     finally:
         db.close()
+
+
+def test_confirm_after_a_webhook_lands_mid_request_does_not_double_receipt(caplog, monkeypatch):
+    """The race the locked re-read closes: the webhook landing while
+    confirm's retrieve_session is still on the wire. The fake gateway
+    delivers the webhook first — fully committed — then hands confirm a
+    paid session; confirm must find the order already paid and record
+    nothing more: one payment-received event, one receipt. (The two
+    requests run sequentially on SQLite — this proves the stale-read half
+    and the guard; the FOR UPDATE serialisation is Postgres's.)"""
+    import logging
+
+    headers = auth_header(login_customer())
+    _top_up_stock("butter-croissant")
+    order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    order_id = order["id"]
+
+    def webhook_lands_then_retrieve(session_id):
+        pay_order_via_webhook(order_id)  # completes fully before confirm resumes
+        return dict(fake_sessions[session_id])
+
+    monkeypatch.setattr(stripe_gateway, "retrieve_session", webhook_lands_then_retrieve)
+
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        confirmed = client.post(f"/api/payments/confirm/{order_id}", headers=headers)
+
+    assert confirmed.status_code == 200
+    assert confirmed.json()["payment_status"] == "paid"
+    detail = client.get(f"/api/orders/{order_id}", headers=headers).json()
+    received = [e for e in detail["timeline"] if e["comment"] == "Payment received — paid by card"]
+    assert len(received) == 1
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert logged.count(f"Receipt {order['order_number']}") == 1
