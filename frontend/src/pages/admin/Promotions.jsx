@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import client, { apiError } from "../../api/client";
 import { formatDate } from "../../lib/format";
+import { REDEMPTION_RULES, oncePerCustomerFromRule, redemptionRule } from "../../lib/coupons";
 import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import { Loading } from "../../components/Loading";
@@ -14,6 +15,7 @@ export default function Promotions() {
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(null); // coupon row being renamed inline
   const [deleting, setDeleting] = useState(null);
+  const [ruleSavingId, setRuleSavingId] = useState(null); // coupon whose rule select is mid-save
 
   const load = () =>
     client.get("/admin/coupons").then(({ data }) => setCoupons(data));
@@ -25,6 +27,7 @@ export default function Promotions() {
 
   const create = async (e) => {
     e.preventDefault();
+    if (busy) return; // one create in flight, whatever re-triggered the submit
     setBusy(true);
     try {
       await client.post("/admin/coupons", {
@@ -35,7 +38,8 @@ export default function Promotions() {
       });
       toast.success(`Coupon ${form.code.trim().toUpperCase()} is live`);
       setForm(EMPTY_FORM);
-      await load();
+      // The list refresh rides along; the button doesn't wait for it.
+      load().catch((e) => toast.error(apiError(e)));
     } catch (err) {
       toast.error(apiError(err));
     } finally {
@@ -52,14 +56,28 @@ export default function Promotions() {
     }
   };
 
-  const toggleOncePerCustomer = async (coupon) => {
+  const changeRedemption = async (coupon, oncePerCustomer) => {
+    if (oncePerCustomer === coupon.once_per_customer || ruleSavingId === coupon.id) return;
+    const rule = REDEMPTION_RULES.find((r) => r.once_per_customer === oncePerCustomer);
+    setRuleSavingId(coupon.id);
+    // Show the admin's pick right away; the server's answer settles it.
+    setCoupons((list) =>
+      list.map((c) => (c.id === coupon.id ? { ...c, once_per_customer: oncePerCustomer } : c)),
+    );
     try {
-      await client.put(`/admin/coupons/${coupon.id}`, {
-        once_per_customer: !coupon.once_per_customer,
+      const { data } = await client.put(`/admin/coupons/${coupon.id}`, {
+        once_per_customer: oncePerCustomer,
       });
-      await load();
+      setCoupons((list) => list.map((c) => (c.id === coupon.id ? data : c)));
+      toast.success(`${coupon.code} — ${rule.label.toLowerCase()}`);
     } catch (err) {
+      // Back to whatever the server last said this row was.
+      setCoupons((list) =>
+        list.map((c) => (c.id === coupon.id ? { ...c, once_per_customer: coupon.once_per_customer } : c)),
+      );
       toast.error(apiError(err));
+    } finally {
+      setRuleSavingId(null);
     }
   };
 
@@ -100,7 +118,7 @@ export default function Promotions() {
       {/* New coupon */}
       <form
         onSubmit={create}
-        className="grid gap-3 rounded-box glass p-5 shadow-sm ring-1 ring-base-300/60 sm:grid-cols-[160px_120px_1fr_auto_auto] sm:items-end"
+        className="grid gap-3 rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60 sm:grid-cols-[160px_120px_minmax(0,1fr)_200px_auto] sm:items-end"
       >
         <div>
           <label className="label text-xs">Code *</label>
@@ -129,8 +147,13 @@ export default function Promotions() {
             onChange={(e) => setForm((f) => ({ ...f, percent_off: e.target.value }))}
           />
         </div>
-        <div>
-          <label className="label text-xs">Note for the counter</label>
+        <div className="min-w-0">
+          <label
+            className="label text-xs"
+            title="Optional. Shows beside the code on the voucher board — a handy reminder at the counter of what the code is for."
+          >
+            Note for the counter
+          </label>
           <input
             className="input input-bordered w-full"
             maxLength={255}
@@ -138,21 +161,32 @@ export default function Promotions() {
             value={form.description}
             onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
           />
+          <p className="mt-1 text-xs opacity-60">Optional — shows beside the code on the voucher board.</p>
         </div>
-        <label
-          className="label cursor-pointer items-center justify-self-end gap-2 text-xs"
-          title="Each customer can use this code on one order — cancelling that order hands the code back"
-        >
-          <input
-            type="checkbox"
-            className="checkbox checkbox-secondary checkbox-sm"
-            checked={form.once_per_customer}
-            onChange={(e) => setForm((f) => ({ ...f, once_per_customer: e.target.checked }))}
-          />
-          One per customer
-        </label>
-        <button type="submit" className="btn btn-primary" disabled={busy}>
-          {busy ? <span className="loading loading-spinner loading-xs" /> : "Add coupon"}
+        <div>
+          <label
+            className="label text-xs"
+            title="How often each customer may use this code — a 1-per-customer code frees up again if that order is cancelled"
+          >
+            Customer limit
+          </label>
+          <select
+            className="select select-bordered w-full"
+            value={redemptionRule(form.once_per_customer)}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, once_per_customer: oncePerCustomerFromRule(e.target.value) }))
+            }
+          >
+            {REDEMPTION_RULES.map((rule) => (
+              <option key={rule.value} value={rule.value}>
+                {rule.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button type="submit" className="btn btn-primary min-w-36" disabled={busy}>
+          {busy && <span className="loading loading-spinner loading-xs" />}
+          Add coupon
         </button>
       </form>
 
@@ -181,20 +215,20 @@ export default function Promotions() {
                 <tr key={c.id} className={c.is_active ? "hover:bg-base-200/50" : "opacity-55"}>
                   <td className="font-mono font-bold">
                     {c.code}
-                    <button
-                      type="button"
-                      className={`badge badge-xs ml-2 border-0 ${
-                        c.once_per_customer ? "badge-secondary" : "badge-ghost opacity-60"
-                      }`}
-                      title={
-                        c.once_per_customer
-                          ? "Once per customer — click to allow repeats"
-                          : "Reusable — click to limit to one order per customer"
-                      }
-                      onClick={() => toggleOncePerCustomer(c)}
+                    <select
+                      className="select select-bordered select-xs ml-2 font-sans font-normal"
+                      value={redemptionRule(c.once_per_customer)}
+                      disabled={ruleSavingId === c.id}
+                      title="How often each customer may use this code — a 1-per-customer code frees up again if that order is cancelled"
+                      aria-label={`Customer limit for ${c.code}`}
+                      onChange={(e) => changeRedemption(c, oncePerCustomerFromRule(e.target.value))}
                     >
-                      {c.once_per_customer ? "1× / customer" : "repeatable"}
-                    </button>
+                      {REDEMPTION_RULES.map((rule) => (
+                        <option key={rule.value} value={rule.value}>
+                          {rule.label}
+                        </option>
+                      ))}
+                    </select>
                   </td>
                   <td className="text-right">
                     {editing?.id === c.id ? (

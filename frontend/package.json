@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test src/lib/format.test.js src/lib/quote.test.js"
+    "test": "node --test src/lib/format.test.js src/lib/quote.test.js src/lib/coupons.test.js"
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.0.0",
