@@ -110,11 +110,6 @@ export default function Promotions() {
 
   return (
     <div className="space-y-6">
-      <p className="text-sm opacity-70">
-        Coupons take a percent off the subtotal at checkout — tax is recalculated after the discount.
-        Existing orders keep whatever was applied.
-      </p>
-
       {/* New coupon */}
       <form
         onSubmit={create}
@@ -150,9 +145,9 @@ export default function Promotions() {
         <div className="min-w-0">
           <label
             className="label text-xs"
-            title="Optional. Shows beside the code on the voucher board — a handy reminder at the counter of what the code is for."
+            title="Optional. Shown beside the code on the public voucher board."
           >
-            Note for the counter
+            Note
           </label>
           <input
             className="input input-bordered w-full"
@@ -161,12 +156,11 @@ export default function Promotions() {
             value={form.description}
             onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
           />
-          <p className="mt-1 text-xs opacity-60">Optional — shows beside the code on the voucher board.</p>
         </div>
         <div>
           <label
             className="label text-xs"
-            title="How often each customer may use this code — a 1-per-customer code frees up again if that order is cancelled"
+            title="A 1-per-customer code frees up again if that order is cancelled"
           >
             Customer limit
           </label>
@@ -195,7 +189,7 @@ export default function Promotions() {
         <Loading label="Fetching the coupon tin…" />
       ) : coupons.length === 0 ? (
         <p className="rounded-box glass p-8 text-center text-sm opacity-60 ring-1 ring-base-300/60">
-          No coupons yet — add one above.
+          No coupons yet.
         </p>
       ) : (
         <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
@@ -219,7 +213,7 @@ export default function Promotions() {
                       className="select select-bordered select-xs ml-2 font-sans font-normal"
                       value={redemptionRule(c.once_per_customer)}
                       disabled={ruleSavingId === c.id}
-                      title="How often each customer may use this code — a 1-per-customer code frees up again if that order is cancelled"
+                      title="A 1-per-customer code frees up again if that order is cancelled"
                       aria-label={`Customer limit for ${c.code}`}
                       onChange={(e) => changeRedemption(c, oncePerCustomerFromRule(e.target.value))}
                     >
@@ -253,7 +247,7 @@ export default function Promotions() {
                       <button
                         type="button"
                         className="btn btn-ghost btn-xs font-bold"
-                        title="Change the percent"
+                        title="Edit discount"
                         onClick={() => setEditing({ id: c.id, value: String(c.percent_off) })}
                       >
                         {c.percent_off}% off
