@@ -7,7 +7,7 @@ server databases); valid values are enforced at the API layer by Pydantic.
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base, utcnow
@@ -596,3 +596,260 @@ def get_store_setting(db) -> StoreSetting:
         db.add(row)
         db.commit()
     return row
+
+
+# ---------------------------------------------------------------------------
+# Costing foundation (spec v1.2 §21, Phase 2). Nine new tables, all additive:
+# built by create_all, starting empty — the owner enters every figure. No
+# column is added to any existing table.
+# ---------------------------------------------------------------------------
+
+class IngredientCategory(Base):
+    """An ingredient grouping that also carries the D18 review cadence its
+    members inherit (dairy moves weekly → 30 days; dried goods → 180)."""
+
+    __tablename__ = "ingredient_categories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    # D18: the default review interval for members without their own override.
+    review_interval_days: Mapped[int] = mapped_column(Integer, default=90)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    ingredients: Mapped[list["Ingredient"]] = relationship(back_populates="category")
+
+
+class Ingredient(Base):
+    """One purchased input, with the figures costing reads. The current
+    state lives here; every change to the purchase figures lands in the
+    append-only ingredient_price_events ledger."""
+
+    __tablename__ = "ingredients"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(150), unique=True)
+    category_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ingredient_categories.id", ondelete="RESTRICT"), index=True
+    )
+    # Canonical unit (app/costing.py vocabulary) the purchase figures read in.
+    unit: Mapped[str] = mapped_column(String(20))
+    purchase_qty: Mapped[float] = mapped_column(Numeric(12, 4))
+    purchase_price: Mapped[float] = mapped_column(Numeric(10, 2))
+    # Derived rate (price / qty), stored for costing — a rate, not an amount:
+    # per-gram costs need more than cent precision (25 kg @ €37.50 → 1.50/kg).
+    effective_cost_per_unit: Mapped[float] = mapped_column(Numeric(12, 6))
+    currency: Mapped[str] = mapped_column(String(3), default="eur")
+    # The only mass↔volume bridge costing will ever use — an explicitly
+    # recorded, ingredient-specific figure. Never a silent density guess.
+    density_g_per_ml: Mapped[float | None] = mapped_column(Numeric(10, 4))
+    # §12 provenance — every estimate says where it came from and when to
+    # trust it again. Estimates are labelled, never "verified".
+    source: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[str] = mapped_column(String(6), default="medium")
+    is_estimate: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_reviewed: Mapped[date | None] = mapped_column(Date)
+    next_reviewed: Mapped[date | None] = mapped_column(Date)  # computed, stored
+    # Explicit per-ingredient override (wins over the category, then 90).
+    review_interval_days: Mapped[int | None] = mapped_column(Integer)
+    # Free text only — invoice/receipt reference; never credentials (§26).
+    invoice_ref: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    category: Mapped[IngredientCategory | None] = relationship(back_populates="ingredients")
+    price_events: Mapped[list["IngredientPriceEvent"]] = relationship(
+        back_populates="ingredient", cascade="all, delete-orphan"
+    )
+
+
+class IngredientPriceEvent(Base):
+    """The ingredient price ledger: append-only, written only on an actual
+    change to the purchase figures or their provenance, with the actor and
+    the full before/after snapshot (D5's estimate→actual replacement trail)."""
+
+    __tablename__ = "ingredient_price_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ingredient_id: Mapped[int] = mapped_column(
+        ForeignKey("ingredients.id", ondelete="CASCADE"), index=True
+    )
+    # Who made the change — the id links to the account (surviving its
+    # deletion as NULL), the name is the snapshot the ledger keeps.
+    admin_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    admin_name: Mapped[str] = mapped_column(String(150))
+    prev_purchase_qty: Mapped[float | None] = mapped_column(Numeric(12, 4))
+    new_purchase_qty: Mapped[float | None] = mapped_column(Numeric(12, 4))
+    prev_purchase_price: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    new_purchase_price: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    prev_effective_cost_per_unit: Mapped[float | None] = mapped_column(Numeric(12, 6))
+    new_effective_cost_per_unit: Mapped[float | None] = mapped_column(Numeric(12, 6))
+    prev_unit: Mapped[str | None] = mapped_column(String(20))
+    new_unit: Mapped[str | None] = mapped_column(String(20))
+    prev_currency: Mapped[str | None] = mapped_column(String(3))
+    new_currency: Mapped[str | None] = mapped_column(String(3))
+    prev_is_estimate: Mapped[bool | None] = mapped_column(Boolean)
+    new_is_estimate: Mapped[bool | None] = mapped_column(Boolean)
+    prev_source: Mapped[str | None] = mapped_column(Text)
+    new_source: Mapped[str | None] = mapped_column(Text)
+    prev_confidence: Mapped[str | None] = mapped_column(String(6))
+    new_confidence: Mapped[str | None] = mapped_column(String(6))
+    # The date the new figures apply from (the write date; D5 effective-dating).
+    effective_from: Mapped[date] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    ingredient: Mapped[Ingredient] = relationship(back_populates="price_events")
+
+
+class Recipe(Base):
+    """The costing truth for one product (1:1) — distinct from the
+    customer-facing products.ingredients statement. Quantities, losses,
+    labour split and yield all live here with their own provenance."""
+
+    __tablename__ = "recipes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    # Hands-on minutes (labour, D3) — unattended time is recorded but never
+    # costs labour; any justified unattended cost belongs in overhead (§9).
+    hands_on_minutes: Mapped[float] = mapped_column(Numeric(7, 2))
+    unattended_minutes: Mapped[float] = mapped_column(Numeric(7, 2), default=0)
+    expected_batch_yield: Mapped[int] = mapped_column(Integer)
+    # A1: the recipe-level *estimated* batch overhead — a placeholder that a
+    # closed batch's actual replaces for future costings; never both at once.
+    batch_overhead_estimate: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
+    source: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[str] = mapped_column(String(6), default="medium")
+    is_estimate: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_reviewed: Mapped[date | None] = mapped_column(Date)
+    next_reviewed: Mapped[date | None] = mapped_column(Date)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    items: Mapped[list["RecipeItem"]] = relationship(
+        back_populates="recipe", cascade="all, delete-orphan", order_by="RecipeItem.id"
+    )
+
+
+class RecipeItem(Base):
+    """One ingredient line of a recipe: usable quantity, its own unit and its
+    own preparation loss. There is deliberately no global loss percentage
+    anywhere — 0 % is a valid, explicit entry (D6)."""
+
+    __tablename__ = "recipe_items"
+    __table_args__ = (UniqueConstraint("recipe_id", "ingredient_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    recipe_id: Mapped[int] = mapped_column(
+        ForeignKey("recipes.id", ondelete="CASCADE"), index=True
+    )
+    ingredient_id: Mapped[int] = mapped_column(
+        ForeignKey("ingredients.id", ondelete="RESTRICT"), index=True
+    )
+    usable_qty: Mapped[float] = mapped_column(Numeric(12, 4))
+    unit: Mapped[str] = mapped_column(String(20))
+    loss_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    note: Mapped[str | None] = mapped_column(String(255))
+
+    recipe: Mapped[Recipe] = relationship(back_populates="items")
+    ingredient: Mapped[Ingredient] = relationship()
+
+
+class ProductionBatch(Base):
+    """One production run: expected vs actual sellable yield, estimated vs
+    actual batch overhead, actual usage notes. Closed batches are history —
+    immutable (§8), and their actuals feed future costings (A1)."""
+
+    __tablename__ = "production_batches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), index=True)
+    produced_at: Mapped[date] = mapped_column(Date)
+    # Snapshot of the recipe's figure at creation — the recipe may change
+    # later; the batch record may not.
+    expected_yield: Mapped[int] = mapped_column(Integer)
+    actual_yield: Mapped[int | None] = mapped_column(Integer)
+    batch_overhead_estimated: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
+    # Required at close (explicit zero allowed — never a guess).
+    batch_overhead_actual: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    # AC-8 ledger 2: newline list of the cost categories this batch charges.
+    overhead_categories: Mapped[str | None] = mapped_column(Text)
+    usage_notes: Mapped[str | None] = mapped_column(Text)
+    # open | closed — plain string, Pydantic-enforced at the API layer.
+    status: Mapped[str] = mapped_column(String(6), default="open")
+    # (actual − expected) / expected × 100, stored once at close (−8.33).
+    yield_variance_pct: Mapped[float | None] = mapped_column(Numeric(8, 2))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class OverheadMonth(Base):
+    """The fixed-overhead ledger, one row per month (D8/§10B): the forecast
+    total and the expected monthly production hours define the hourly rate;
+    month-end actuals are recorded beside the forecast, never over it."""
+
+    __tablename__ = "overhead_months"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # First of the month; unique — one forecast per month.
+    month: Mapped[date] = mapped_column(Date, unique=True)
+    fixed_overhead_total: Mapped[float] = mapped_column(Numeric(10, 2))
+    forecast_hours: Mapped[float] = mapped_column(Numeric(7, 2))
+    currency: Mapped[str] = mapped_column(String(3), default="eur")
+    # AC-8 ledger 1: newline list of the categories this pool includes.
+    included_categories: Mapped[str | None] = mapped_column(Text)
+    actual_total: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    actual_hours: Mapped[float | None] = mapped_column(Numeric(7, 2))
+    variance_note: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[str] = mapped_column(String(6), default="medium")
+    is_estimate: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class LabourRate(Base):
+    """The centrally managed labour rate (D3): effective-dated rows in the
+    vat_rates pattern — a change is a new dated row, history never moves.
+    The table starts empty; until a row exists, costing falls back to the
+    single named default in app/costing.py (€20.00/h, source
+    "default_fallback"), snapshotted into every cost record either way."""
+
+    __tablename__ = "labour_rates"
+
+    valid_from: Mapped[date] = mapped_column(Date, primary_key=True)
+    rate: Mapped[float] = mapped_column(Numeric(10, 2))
+    currency: Mapped[str] = mapped_column(String(3), default="eur")
+    source: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ProductCostRecord(Base):
+    """One cost computation, append-only — the current cost of a product is
+    its latest record (§12). The breakdown freezes every input and figure the
+    calculation used (units, losses, rate version, overhead mode, yield
+    source; Decimals as strings), so any historical decision can be
+    reconstructed exactly. Incomplete results are stored as data: total NULL
+    plus machine-readable missing reasons — never a guessed figure."""
+
+    __tablename__ = "product_cost_records"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(
+        ForeignKey("products.id", ondelete="CASCADE"), index=True
+    )
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # ingredient_price_change | recipe_change | batch_closed |
+    # overhead_month_change | labour_rate_change | initial
+    trigger: Mapped[str] = mapped_column(String(30))
+    # NULL only on incomplete records whose inputs mixed currencies.
+    currency: Mapped[str | None] = mapped_column(String(3))
+    # NULL while incomplete — an incomplete cost is never a number.
+    total_cost: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    is_complete: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Machine-readable reason codes, e.g. ["no_overhead_month", "mixed_currencies"].
+    missing: Mapped[list | None] = mapped_column(JSON)
+    breakdown: Mapped[dict | None] = mapped_column(JSON)

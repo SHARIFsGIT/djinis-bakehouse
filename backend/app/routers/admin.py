@@ -33,6 +33,7 @@ from ..models import (
     PaymentStatus,
     Product,
     ProductVatEvent,
+    Recipe,
     Review,
     Testimonial,
     User,
@@ -85,6 +86,7 @@ from ..schemas import (
 )
 from ..security import CurrentAdmin, DbSession
 from ..serialize import product_to_card, review_summary, verified_buyers
+from .. import costing
 from ..vat import REVIEW_STATUS_APPROVED, preview_rate, validate_classification
 from ..uploads import MAX_PRODUCT_PHOTO_BYTES, save_photo
 from .orders import _cancel_order, _late_cancel_fee, _lock_for_cancellation, _serialize
@@ -502,8 +504,13 @@ def delete_category(category_id: int, admin: CurrentAdmin, db: DbSession):
 def _admin_card(product: Product, db: DbSession) -> AdminProductCard:
     """The desk's view of a product: the public card plus the VAT
     classification and the provisional rate the current configuration
-    implies for it (None when the classification implies no rate)."""
+    implies for it (None when the classification implies no rate), plus
+    the Phase 2 derived cost status."""
     preview = preview_rate(product.vat_category, product.milk_content_percent, db)
+    settings = get_settings()
+    cost_status, _summary = costing.product_cost_summary(
+        db, product, settings.stripe_currency, settings.tax_mode
+    )
     return AdminProductCard(
         **product_to_card(product).model_dump(),
         vat_category=product.vat_category,
@@ -514,6 +521,7 @@ def _admin_card(product: Product, db: DbSession) -> AdminProductCard:
             else None
         ),
         vat_rate_preview=float(preview) if preview is not None else None,
+        cost_status=cost_status,
     )
 
 
@@ -524,6 +532,7 @@ def all_products(
     search: str | None = None,
     category_id: int | None = Query(default=None),
     needs_vat_review: bool = Query(default=False),
+    needs_cost_review: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=15, ge=1, le=100),
 ):
@@ -537,6 +546,11 @@ def all_products(
     # the tax-review rail: everything not yet signed off for the euro cutover
     if needs_vat_review:
         query = query.where(Product.vat_review_status != REVIEW_STATUS_APPROVED)
+    # the cost-review rail: recipe recorded but cost missing, incomplete,
+    # or running on overdue inputs (derived at read — never stored state)
+    if needs_cost_review:
+        needing = costing.products_needing_cost_review(db)
+        query = query.where(Product.id.in_(needing or {0}))
 
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
     products = db.scalars(
@@ -566,6 +580,11 @@ def admin_product_detail(product_id: int, admin: CurrentAdmin, db: DbSession):
         .order_by(ProductVatEvent.created_at.desc(), ProductVatEvent.id.desc())
         .limit(20)
     ).all()
+    settings = get_settings()
+    _status, cost_summary = costing.product_cost_summary(
+        db, product, settings.stripe_currency, settings.tax_mode
+    )
+    has_recipe = db.scalar(select(Recipe).where(Recipe.product_id == product.id)) is not None
     return AdminProductDetail(
         **_admin_card(product, db).model_dump(),
         description=product.description,
@@ -574,6 +593,9 @@ def admin_product_detail(product_id: int, admin: CurrentAdmin, db: DbSession):
         allergens=product.allergens,
         created_at=product.created_at,
         vat_events=events,
+        # the full cost picture exists only once costing has started —
+        # no recipe means there is nothing to summarize yet
+        cost=ProductCostSummaryOut(**cost_summary) if has_recipe else None,
     )
 
 

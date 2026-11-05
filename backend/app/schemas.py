@@ -508,12 +508,43 @@ class _AdminVatFields(BaseModel):
     vat_rate_preview: float | None = None
 
 
-class AdminProductCard(_AdminVatFields, ProductCard):
+# Defined here (before the admin card composes them) because the admin
+# product detail carries the full cost summary alongside its VAT state.
+class MarginEvaluationOut(BaseModel):
+    status: Literal["ok", "flagged", "not_computable", "not_set"]
+    margin: float | None = None
+    min_net: float | None = None
+    net_price: float | None = None
+    reason: dict | None = None
+
+
+class ProductCostSummaryOut(BaseModel):
+    """The derived cost state of one product, read-side only."""
+
+    total_cost: float | None
+    currency: str | None
+    computed_at: datetime | None
+    is_complete: bool
+    missing: list[str] = []
+    margins: dict[str, MarginEvaluationOut] = {}
+    inputs_overdue: bool = False
+
+
+class _AdminCostFields(BaseModel):
+    """Cost state on the admin product card — a flag plus the headline
+    figure; the full picture is the cost-review desk and the detail view.
+    Public cards never carry any of this."""
+
+    cost_status: str = "not_costed"
+
+
+class AdminProductCard(_AdminVatFields, _AdminCostFields, ProductCard):
     pass
 
 
-class AdminProductDetail(_AdminVatFields, ProductDetail):
+class AdminProductDetail(_AdminVatFields, _AdminCostFields, ProductDetail):
     vat_events: list[AdminVatEventOut] = []
+    cost: ProductCostSummaryOut | None = None
 
 
 class AdminProductListResponse(BaseModel):
@@ -895,3 +926,304 @@ class ComingSoonOut(ORMModel):
     is_active: bool
     sort_order: int
     created_at: datetime
+
+
+# The Phase 2 costing foundation (spec §21, plan §8). API-only surfaces for
+# the admin desk — no frontend exists yet, and none of these fields ride on
+# public catalog responses. Money is float only at the Pydantic boundary;
+# every stored figure is Decimal, and the JSON breakdown preserves exact
+# decimal strings.
+
+class IngredientCategoryOut(ORMModel):
+    id: int
+    name: str
+    review_interval_days: int
+    ingredient_count: int = 0
+    created_at: datetime
+
+
+class IngredientCategoryCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    review_interval_days: int = Field(default=90, ge=1, le=3650)
+
+
+class IngredientCategoryUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    review_interval_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class IngredientOut(ORMModel):
+    id: int
+    name: str
+    category_id: int | None
+    category_name: str | None = None
+    unit: str
+    purchase_qty: float
+    purchase_price: float
+    effective_cost_per_unit: float | None
+    currency: str
+    density_g_per_ml: float | None = None
+    source: str | None = None
+    confidence: str = "medium"
+    is_estimate: bool = True
+    last_reviewed: date | None = None
+    next_reviewed: date | None = None
+    review_interval_days: int | None = None
+    effective_interval_days: int | None = None
+    overdue: bool = False
+    invoice_ref: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class IngredientCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=150)
+    category_id: int | None = None
+    unit: str = Field(min_length=1, max_length=20)
+    purchase_qty: float = Field(gt=0)
+    purchase_price: float = Field(ge=0)
+    currency: str = Field(default="eur", min_length=3, max_length=3)
+    density_g_per_ml: float | None = Field(default=None, gt=0)
+    source: str | None = Field(default=None, max_length=1000)
+    confidence: Literal["high", "medium", "low"] = "medium"
+    invoice_ref: str | None = Field(default=None, max_length=255)
+    last_reviewed: date | None = None
+    review_interval_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class IngredientUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=150)
+    category_id: int | None = None
+    unit: str | None = Field(default=None, min_length=1, max_length=20)
+    purchase_qty: float | None = Field(default=None, gt=0)
+    purchase_price: float | None = Field(default=None, ge=0)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    density_g_per_ml: float | None = Field(default=None, gt=0)
+    source: str | None = Field(default=None, max_length=1000)
+    confidence: Literal["high", "medium", "low"] | None = None
+    invoice_ref: str | None = Field(default=None, max_length=255)
+    # Set is_estimate to False only through the review endpoint — that is
+    # the act of confirming figures; a plain edit keeps its estimate flag.
+    review_interval_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class IngredientReviewRequest(BaseModel):
+    """Confirming the recorded figures as reviewed (is_estimate → False,
+    last_reviewed → the review date, next_reviewed advanced)."""
+
+    reviewed_on: date | None = None  # defaults to today
+
+
+class IngredientPriceEventOut(ORMModel):
+    """One append-only price-change entry: full prev/new provenance."""
+
+    ingredient_id: int
+    admin_user_id: int | None
+    admin_name: str
+    prev_purchase_qty: float | None
+    new_purchase_qty: float | None
+    prev_purchase_price: float | None
+    new_purchase_price: float | None
+    prev_effective_cost_per_unit: float | None
+    new_effective_cost_per_unit: float | None
+    prev_unit: str | None
+    new_unit: str | None
+    prev_currency: str | None
+    new_currency: str | None
+    prev_is_estimate: bool | None
+    new_is_estimate: bool | None
+    prev_source: str | None
+    new_source: str | None
+    prev_confidence: str | None
+    new_confidence: str | None
+    effective_from: date
+    created_at: datetime
+
+
+class RecipeItemIn(BaseModel):
+    ingredient_id: int
+    usable_qty: float = Field(gt=0)
+    unit: str = Field(min_length=1, max_length=20)
+    loss_pct: float = Field(default=0, ge=0, lt=100)
+    note: str | None = Field(default=None, max_length=255)
+
+
+class RecipeItemOut(RecipeItemIn):
+    id: int
+    ingredient_name: str | None = None
+    ingredient_unit: str | None = None
+
+
+class RecipeUpsertRequest(BaseModel):
+    """Full-replace upsert of a product's recipe. `items` may be empty
+    (clearing a recipe); each ingredient may appear once."""
+
+    hands_on_minutes: float = Field(default=0, ge=0)
+    unattended_minutes: float = Field(default=0, ge=0)
+    expected_batch_yield: int = Field(gt=0)
+    batch_overhead_estimate: float = Field(default=0, ge=0)
+    source: str | None = Field(default=None, max_length=1000)
+    confidence: Literal["high", "medium", "low"] = "medium"
+    notes: str | None = Field(default=None, max_length=4000)
+    last_reviewed: date | None = None
+    items: list[RecipeItemIn] = []
+
+
+class RecipeOut(ORMModel):
+    id: int
+    product_id: int
+    hands_on_minutes: float
+    unattended_minutes: float
+    expected_batch_yield: int
+    batch_overhead_estimate: float
+    source: str | None
+    confidence: str
+    is_estimate: bool
+    last_reviewed: date | None
+    next_reviewed: date | None
+    inputs_overdue: bool = False
+    notes: str | None
+    items: list[RecipeItemOut] = []
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProductionBatchOut(ORMModel):
+    id: int
+    product_id: int
+    produced_at: date
+    expected_yield: int
+    actual_yield: int | None
+    batch_overhead_estimated: float
+    batch_overhead_actual: float | None
+    overhead_categories: str | None
+    usage_notes: str | None
+    status: str
+    yield_variance_pct: float | None
+    closed_at: datetime | None
+    created_at: datetime
+
+
+class ProductionBatchCreate(BaseModel):
+    product_id: int
+    produced_at: date | None = None  # defaults to today
+    # Omitted values fall back to the product's recipe — the desk starts a
+    # batch from what the recipe promises.
+    expected_yield: int | None = Field(default=None, gt=0)
+    batch_overhead_estimated: float | None = Field(default=None, ge=0)
+    overhead_categories: str | None = Field(default=None, max_length=2000)
+    usage_notes: str | None = Field(default=None, max_length=4000)
+
+
+class ProductionBatchUpdate(BaseModel):
+    produced_at: date | None = None
+    expected_yield: int | None = Field(default=None, gt=0)
+    batch_overhead_estimated: float | None = Field(default=None, ge=0)
+    overhead_categories: str | None = Field(default=None, max_length=2000)
+    usage_notes: str | None = Field(default=None, max_length=4000)
+
+
+class ProductionBatchClose(BaseModel):
+    actual_yield: int = Field(ge=0)
+    batch_overhead_actual: float = Field(ge=0)
+    usage_notes: str | None = Field(default=None, max_length=4000)
+
+
+class OverheadMonthOut(ORMModel):
+    id: int
+    month: date
+    fixed_overhead_total: float
+    forecast_hours: float
+    currency: str
+    included_categories: str | None
+    actual_total: float | None = None
+    actual_hours: float | None = None
+    variance_note: str | None = None
+    source: str | None
+    confidence: str
+    is_estimate: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class OverheadMonthCreate(BaseModel):
+    month: date
+    fixed_overhead_total: float = Field(ge=0)
+    forecast_hours: float = Field(gt=0)
+    currency: str = Field(default="eur", min_length=3, max_length=3)
+    included_categories: str | None = Field(default=None, max_length=2000)
+    source: str | None = Field(default=None, max_length=1000)
+    confidence: Literal["high", "medium", "low"] = "medium"
+
+
+class OverheadMonthUpdate(BaseModel):
+    fixed_overhead_total: float | None = Field(default=None, ge=0)
+    forecast_hours: float | None = Field(default=None, gt=0)
+    included_categories: str | None = Field(default=None, max_length=2000)
+    actual_total: float | None = Field(default=None, ge=0)
+    actual_hours: float | None = Field(default=None, ge=0)
+    variance_note: str | None = Field(default=None, max_length=2000)
+    source: str | None = Field(default=None, max_length=1000)
+    confidence: Literal["high", "medium", "low"] | None = None
+
+
+class OverheadMonthSaveOut(OverheadMonthOut):
+    """A month write's response: the row plus the AC-8 overlap warnings the
+    desk should see (never blocking)."""
+
+    overlap_warnings: list[dict] = []
+
+
+class LabourRateOut(ORMModel):
+    valid_from: date
+    rate: float
+    currency: str
+    source: str | None
+    created_at: datetime
+
+
+class LabourRateSetRequest(BaseModel):
+    """A new effective-dated rate. Appends a row (history is never edited);
+    valid_from must not collide with an existing row."""
+
+    valid_from: date
+    rate: float = Field(gt=0)
+    currency: str = Field(default="eur", min_length=3, max_length=3)
+    source: str | None = Field(default=None, max_length=1000)
+
+
+class LabourRateStatusOut(BaseModel):
+    """What costing resolves right now, plus the full effective-dated
+    history. `source` says whether the table or the D3 default fallback
+    supplied the current figure."""
+
+    rate: float
+    currency: str
+    source: str  # "table" | "default_fallback"
+    valid_from: date | None = None
+    history: list[LabourRateOut] = []
+
+
+class IngredientListResponse(BaseModel):
+    ingredients: list[IngredientOut]
+    pagination: PaginationOut
+
+
+class CostReviewEntryOut(BaseModel):
+    """One product on the cost-review desk: what it is, its cost state,
+    and what review work it needs."""
+
+    product_id: int
+    product_name: str
+    cost_status: str
+    cost: ProductCostSummaryOut | None = None
+    reason: str | None = None  # "no_cost_record" | "incomplete" | "inputs_overdue" | "scheduled"
+    next_reviewed: date | None = None
+    overdue_on: date | None = None
+
+
+class CostReviewOut(BaseModel):
+    overdue: list[CostReviewEntryOut] = []
+    upcoming: list[CostReviewEntryOut] = []
+    window_days: int
+    overlap_warnings: list[dict] = []

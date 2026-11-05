@@ -20,6 +20,10 @@ from . import stripe_gateway
 from .config import get_settings
 from .database import Base, engine
 from .routers import admin, auth, content, marketing, orders, payments, products
+# Aliased on purpose: a plain `from .routers import costing` would rebind
+# the app package's `costing` attribute to the router module, shadowing
+# the app.costing engine module everywhere `from app import costing` runs.
+from .routers import costing as costing_routes
 from .security import DbSession
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -332,6 +336,7 @@ def create_app() -> FastAPI:
     app.include_router(orders.router)
     app.include_router(payments.router)
     app.include_router(admin.router)
+    app.include_router(costing_routes.router)
     app.include_router(marketing.router)
     app.include_router(content.router)
 
