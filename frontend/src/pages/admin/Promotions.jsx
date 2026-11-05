@@ -6,7 +6,7 @@ import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import { Loading } from "../../components/Loading";
 
-const EMPTY_FORM = { code: "", percent_off: "", description: "", once_per_customer: false };
+const EMPTY_FORM = { code: "", percent_off: "", description: "" };
 
 export default function Promotions() {
   const toast = useToast();
@@ -34,7 +34,6 @@ export default function Promotions() {
         code: form.code.trim(),
         percent_off: Number(form.percent_off),
         description: form.description.trim() || null,
-        once_per_customer: form.once_per_customer,
       });
       toast.success(`Coupon ${form.code.trim().toUpperCase()} is live`);
       setForm(EMPTY_FORM);
@@ -113,7 +112,7 @@ export default function Promotions() {
       {/* New coupon */}
       <form
         onSubmit={create}
-        className="grid gap-3 rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60 sm:grid-cols-[160px_120px_minmax(0,1fr)_200px_auto] sm:items-end"
+        className="grid gap-3 rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60 sm:grid-cols-[160px_120px_minmax(0,1fr)_auto] sm:items-end"
       >
         <div>
           <label className="label text-xs">Code *</label>
@@ -143,12 +142,7 @@ export default function Promotions() {
           />
         </div>
         <div className="min-w-0">
-          <label
-            className="label text-xs"
-            title="Optional. Shown beside the code on the public voucher board."
-          >
-            Note
-          </label>
+          <label className="label text-xs">Note</label>
           <input
             className="input input-bordered w-full"
             maxLength={255}
@@ -156,27 +150,6 @@ export default function Promotions() {
             value={form.description}
             onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
           />
-        </div>
-        <div>
-          <label
-            className="label text-xs"
-            title="A 1-per-customer code frees up again if that order is cancelled"
-          >
-            Customer limit
-          </label>
-          <select
-            className="select select-bordered w-full"
-            value={redemptionRule(form.once_per_customer)}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, once_per_customer: oncePerCustomerFromRule(e.target.value) }))
-            }
-          >
-            {REDEMPTION_RULES.map((rule) => (
-              <option key={rule.value} value={rule.value}>
-                {rule.label}
-              </option>
-            ))}
-          </select>
         </div>
         <button type="submit" className="btn btn-primary min-w-36" disabled={busy}>
           {busy && <span className="loading loading-spinner loading-xs" />}
@@ -208,21 +181,23 @@ export default function Promotions() {
               {coupons.map((c) => (
                 <tr key={c.id} className={c.is_active ? "hover:bg-base-200/50" : "opacity-55"}>
                   <td className="font-mono font-bold">
-                    {c.code}
-                    <select
-                      className="select select-bordered select-xs ml-2 font-sans font-normal"
-                      value={redemptionRule(c.once_per_customer)}
-                      disabled={ruleSavingId === c.id}
-                      title="A 1-per-customer code frees up again if that order is cancelled"
-                      aria-label={`Customer limit for ${c.code}`}
-                      onChange={(e) => changeRedemption(c, oncePerCustomerFromRule(e.target.value))}
-                    >
-                      {REDEMPTION_RULES.map((rule) => (
-                        <option key={rule.value} value={rule.value}>
-                          {rule.label}
-                        </option>
-                      ))}
-                    </select>
+                    <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                      {c.code}
+                      <select
+                        className="select select-bordered select-xs font-sans font-normal"
+                        value={redemptionRule(c.once_per_customer)}
+                        disabled={ruleSavingId === c.id}
+                        title="A 1-per-customer code frees up again if that order is cancelled"
+                        aria-label={`Customer limit for ${c.code}`}
+                        onChange={(e) => changeRedemption(c, oncePerCustomerFromRule(e.target.value))}
+                      >
+                        {REDEMPTION_RULES.map((rule) => (
+                          <option key={rule.value} value={rule.value}>
+                            {rule.label}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
                   </td>
                   <td className="text-right">
                     {editing?.id === c.id ? (
