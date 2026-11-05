@@ -82,4 +82,14 @@ export function apiError(error, fallback = "Something went wrong") {
   return error?.message ?? fallback;
 }
 
+/** True when the server paused pricing itself — quotes and placement
+    refuse with 503 while the delivery rules await owner approval as EUR
+    figures. The server's message already tells the customer what's wrong
+    ("Checkout is paused — …"), so callers show it as-is instead of
+    appending "check your basket" advice that would point the finger at
+    the wrong thing. */
+export function checkoutPaused(error) {
+  return apiError(error, "").toLowerCase().includes("paused");
+}
+
 export default client;

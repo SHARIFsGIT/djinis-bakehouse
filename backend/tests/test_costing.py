@@ -1106,43 +1106,88 @@ def test_unit_change_records_event_and_preserves_history():
 
 def test_currency_mismatch_is_not_computable_a2():
     headers = admin_headers()
-    # The AC-5 product costs in EUR; the active selling currency (test
-    # settings) is USD. Margins must refuse, naming both currencies.
+    # Since the cutover the costing book and the prices both speak EUR, so
+    # the AC-5 record computes real margins out of the box — the EUR costing
+    # the shop actually runs on.
     settings = get_settings()
-    assert settings.stripe_currency == "usd"
+    assert settings.stripe_currency == "eur"
     review = client.get("/api/admin/costing/cost-review", headers=headers).json()
     entry = next(e for e in review["overdue"] + review["upcoming"]
                  if e["product_id"] == STATE["ac5_product_id"])
-    assert entry["cost_status"] == "not_computable"
-    regular = entry["cost"]["margins"]["regular"]
-    assert regular["status"] == "not_computable"
-    assert regular["reason"]["code"] == "currency_mismatch"
-    assert regular["reason"]["cost_currency"] == "eur"
-    assert regular["reason"]["price_currency"] == "usd"
+    margins = entry["cost"]["margins"]["regular"]
+    assert margins["status"] in ("ok", "flagged")
+    assert Decimal(str(margins["min_net"])) == costing.round_cents(
+        costing.min_net_price(Decimal("1.20"))
+    )
 
-    # On the admin card the same state shows as not_computable.
     detail = client.get(
         f"/api/admin/products/{STATE['ac5_product_id']}", headers=headers
     ).json()
-    assert detail["cost_status"] == "not_computable"
-    assert detail["cost"]["margins"]["regular"]["reason"]["code"] == "currency_mismatch"
+    assert detail["cost"]["margins"]["regular"]["status"] in ("ok", "flagged")
+    assert margins["net_price"] == detail["price"]
 
-    # Matching currencies compute: with EUR active, the same record gets
-    # real margin figures (restored before the test ends).
+    # A relapse to the old charge currency must not reprice the book: EUR
+    # costs against USD prices are not computable — margins refuse, naming
+    # both currencies (restored before the test ends).
     original = settings.stripe_currency
     try:
-        settings.stripe_currency = "eur"
+        settings.stripe_currency = "usd"
         review = client.get("/api/admin/costing/cost-review", headers=headers).json()
         entry = next(e for e in review["overdue"] + review["upcoming"]
                      if e["product_id"] == STATE["ac5_product_id"])
-        margins = entry["cost"]["margins"]["regular"]
-        assert margins["status"] in ("ok", "flagged")
-        assert Decimal(str(margins["min_net"])) == costing.round_cents(
-            costing.min_net_price(Decimal("1.20"))
-        )
-        assert margins["net_price"] == detail["price"]
+        assert entry["cost_status"] == "not_computable"
+        regular = entry["cost"]["margins"]["regular"]
+        assert regular["status"] == "not_computable"
+        assert regular["reason"]["code"] == "currency_mismatch"
+        assert regular["reason"]["cost_currency"] == "eur"
+        assert regular["reason"]["price_currency"] == "usd"
+
+        # On the admin card the same state shows as not_computable.
+        detail = client.get(
+            f"/api/admin/products/{STATE['ac5_product_id']}", headers=headers
+        ).json()
+        assert detail["cost_status"] == "not_computable"
+        assert detail["cost"]["margins"]["regular"]["reason"]["code"] == "currency_mismatch"
     finally:
         settings.stripe_currency = original
+
+
+def test_the_costing_book_refuses_new_non_eur_writes():
+    """EUR-only since the cutover: ingredients, overhead months and labour
+    rates can no longer be written in any other currency — the API refuses
+    with the book's own message rather than letting a second currency in.
+    (Existing rows keep their stored currency; only new writes are gated.)"""
+    headers = admin_headers()
+
+    ingredient = client.post(
+        "/api/admin/costing/ingredients",
+        json={"name": "Dollar sugar", "unit": "kg", "purchase_qty": 1,
+              "purchase_price": 2.00, "currency": "usd"},
+        headers=headers,
+    )
+    assert ingredient.status_code == 422
+    assert "EUR-only" in ingredient.json()["detail"][0]["msg"]
+
+    month = client.post(
+        "/api/admin/costing/overhead-months",
+        json={"month": "2027-01-01", "fixed_overhead_total": 800.0,
+              "forecast_hours": 160, "currency": "usd"},
+        headers=headers,
+    )
+    assert month.status_code == 422
+    assert "EUR-only" in month.json()["detail"][0]["msg"]
+
+    rate = client.put(
+        "/api/admin/costing/labour-rate",
+        json={"valid_from": "2027-01-01", "rate": 22.00, "currency": "usd"},
+        headers=headers,
+    )
+    assert rate.status_code == 422
+    assert "EUR-only" in rate.json()["detail"][0]["msg"]
+
+    # and the default write needs no currency at all — euro is implied
+    made = make_ingredient("Implicit euro flour", "kg", 1, 1.50)
+    assert made["currency"] == "eur"
 
 
 def test_labour_rate_effective_dating():

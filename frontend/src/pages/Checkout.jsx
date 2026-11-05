@@ -1,7 +1,7 @@
 import { Banknote, CreditCard, Lock } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
-import client, { apiError } from "../api/client";
+import client, { apiError, checkoutPaused } from "../api/client";
 import EmptyState from "../components/EmptyState";
 import { Loading } from "../components/Loading";
 import { useCart } from "../context/CartContext";
@@ -491,7 +491,11 @@ export default function Checkout() {
                   <span>Discount ({quote.coupon_code})</span><span>−{money(quote.discount_amount)}</span>
                 </div>
               )}
-              <div className="flex justify-between"><span className="opacity-70">{taxLabel()}</span><span>{money(quote.tax)}</span></div>
+              {/* No tax row while none is charged — a "Tax €0.00" line would
+                  read as a 0%-VAT decision the shop hasn't made. */}
+              {quote.tax > 0 && (
+                <div className="flex justify-between"><span className="opacity-70">{taxLabel()}</span><span>{money(quote.tax)}</span></div>
+              )}
               <div className="flex justify-between">
                 <span className="opacity-70">Delivery</span>
                 <span>{quote.shipping_fee === 0 ? <span className="font-semibold text-success">FREE</span> : money(quote.shipping_fee)}</span>
@@ -512,8 +516,10 @@ export default function Checkout() {
             <div className="mt-4">
               <div className="alert alert-warning text-sm" role="alert">
                 <span>
-                  {apiError(quoteState.error, "This basket can't be priced right now")} —
-                  check your basket and try again.
+                  {apiError(quoteState.error, "This basket can't be priced right now")}
+                  {/* A pause is the shop's own doing — its message already
+                      says what's wrong; basket-checking advice would not. */}
+                  {!checkoutPaused(quoteState.error) && " — check your basket and try again."}
                 </span>
               </div>
             </div>

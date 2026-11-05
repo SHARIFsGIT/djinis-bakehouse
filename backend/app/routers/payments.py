@@ -19,6 +19,7 @@ from .. import stripe_gateway
 from ..database import SessionLocal, utcnow
 from ..models import Order, OrderStatus, PaymentMethod, PaymentStatus
 from ..routers.orders import (
+    _approved_money_rules,
     _cancel_order,
     _get_order_for,
     _late_cancel_fee,
@@ -264,6 +265,11 @@ def new_payment_session(order_id: int, user: CurrentUser, db: DbSession, request
         raise HTTPException(status_code=400, detail="This order isn't a card order")
     if order.status == OrderStatus.CANCELLED.value or order.payment_status != PaymentStatus.PENDING.value:
         raise HTTPException(status_code=400, detail="This order has no payment to complete")
+    # The same fail-closed gate as checkout: while the shop's delivery
+    # pricing is unapproved, no new Stripe session is minted for any order,
+    # even one placed when the rules were live. The stored totals are never
+    # recalculated — this only decides whether charging may resume.
+    _approved_money_rules()
     try:
         session = stripe_gateway.create_checkout_session(
             order, str(request.base_url).rstrip("/")

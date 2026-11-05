@@ -17,6 +17,15 @@ os.environ["OTP_RATE_LIMIT"] = "1000"
 # a fake (below), but the key must exist so checkout considers it configured.
 os.environ["STRIPE_SECRET_KEY"] = "sk_test_fake_gateway"
 os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_fake"
+# Approved-for-tests EUR money rules — deliberately NOT the old USD numerals
+# (8.75% / $5.99 / $50) so no test can pass on relabelled dollars: a 5% tax
+# rate, €3.50 delivery, free delivery from €30. Production ships with all
+# three unset (checkout paused fail-closed) until the owner approves real
+# EUR figures; VIP_SPEND_THRESHOLD stays unset here too, so the loyalty
+# tiers in these tests ride on order counts alone.
+os.environ["TAX_RATE"] = "0.05"
+os.environ["SHIPPING_FEE"] = "3.50"
+os.environ["FREE_SHIPPING_THRESHOLD"] = "30.00"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -1122,9 +1131,9 @@ def test_coupon_at_checkout():
     assert order["coupon_code"] == "WELCOME10"
     assert order["discount_amount"] == round(order["subtotal"] * 0.10, 2)
 
-    # tax is charged on the discounted amount
+    # tax is charged on the discounted amount, at the approved EUR rate
     taxable = order["subtotal"] - order["discount_amount"]
-    assert abs(order["tax"] - round(taxable * 0.0875, 2)) < 0.01
+    assert abs(order["tax"] - round(taxable * get_settings().tax_rate, 2)) < 0.01
 
     # an inactive/unknown code is rejected at checkout too
     bad = client.post(
@@ -1919,7 +1928,9 @@ def test_public_voucher_board():
     vouchers = {v["code"]: v for v in client.get("/api/coupons").json()}
     assert set(vouchers) >= {"WELCOME10", "FRESHBAKE15"}
     assert vouchers["WELCOME10"]["min_subtotal"] is None
-    assert vouchers["FRESHBAKE15"]["min_subtotal"] == 40.0
+    # FRESHBAKE15's $40 floor came off with the EUR cutover — a dollar
+    # figure is not an approved euro minimum, so the code promises none.
+    assert vouchers["FRESHBAKE15"]["min_subtotal"] is None
 
     # paused codes leave the board
     admin = admin_headers()
@@ -1932,28 +1943,119 @@ def test_coupon_min_subtotal_enforced():
     token = login_customer()
     headers = auth_header(token)
 
-    preview = client.get("/api/orders/coupons/freshbake15", headers=headers).json()
-    assert preview["min_subtotal"] == 40.0
+    # FRESHBAKE15's $40 floor came off with the EUR cutover, so the floor
+    # itself is tested on a coupon that explicitly carries an approved one.
+    assert (
+        client.get("/api/orders/coupons/freshbake15", headers=headers).json()["min_subtotal"]
+        is None
+    )
+
+    created = client.post(
+        "/api/admin/coupons",
+        json={"code": "WEEKEND20", "percent_off": 20, "min_subtotal": 20.0},
+        headers=admin_headers(),
+    )
+    assert created.status_code == 201
+    coupon_id = created.json()["id"]
+
+    preview = client.get("/api/orders/coupons/weekend20", headers=headers).json()
+    assert preview["min_subtotal"] == 20.0
 
     # too small a basket: rejected with the threshold named
-    small = checkout_payload(coupon_code="FRESHBAKE15")
+    small = checkout_payload(coupon_code="WEEKEND20")
     small["items"] = small["items"][:1]
     rejected = client.post("/api/orders", json=small, headers=headers)
     assert rejected.status_code == 400
-    assert "40.00" in rejected.json()["detail"]
+    assert "20.00" in rejected.json()["detail"]
 
-    # over the threshold it applies like any other code (8 maritozzi ≈ $42)
+    # over the threshold it applies like any other code (8 maritozzi ≈ €42)
     maritozzo = get_product("maritozzo")
     order = client.post(
         "/api/orders",
         json=checkout_payload(
-            coupon_code="FRESHBAKE15",
+            coupon_code="WEEKEND20",
             items=[{"product_id": maritozzo["id"], "quantity": 8}],
         ),
         headers=headers,
     ).json()
-    assert order["coupon_code"] == "FRESHBAKE15"
-    assert order["discount_amount"] == round(order["subtotal"] * 0.15, 2)
+    assert order["coupon_code"] == "WEEKEND20"
+    assert order["discount_amount"] == round(order["subtotal"] * 0.20, 2)
+
+    client.delete(f"/api/admin/coupons/{coupon_id}", headers=admin_headers())
+
+
+def test_a_pre_cutover_minimum_stays_unappliable_until_reapproved():
+    """A minimum recorded before the EUR cutover is a USD numeral the app
+    cannot re-read as euros. The coupon itself survives, but its minimum is
+    neither shown nor spendable — board, code check, quote, placement all
+    refuse or hide it — until an administrator re-saves it from the
+    Promotions desk, and that save is the approval."""
+    from app.database import SessionLocal
+    from app.models import Coupon as CouponRow
+
+    token = login_customer()
+    headers = auth_header(token)
+    admin = admin_headers()
+
+    made = client.post(
+        "/api/admin/coupons",
+        json={"code": "OLDBUNDLE", "percent_off": 15, "min_subtotal": 40.0},
+        headers=admin,
+    )
+    assert made.status_code == 201
+    # A threshold typed at the desk is chosen in today's currency: approved.
+    assert made.json()["min_subtotal_approved"] is True
+    coupon_id = made.json()["id"]
+
+    # Time-travel the row to its pre-cutover shape — a minimum written
+    # before the approval column existed (the ALTER ships DEFAULT FALSE).
+    db = SessionLocal()
+    try:
+        db.get(CouponRow, coupon_id).min_subtotal_approved = False
+        db.commit()
+    finally:
+        db.close()
+
+    # The board shows the saving with no threshold at all.
+    board = {v["code"]: v for v in client.get("/api/coupons").json()}
+    assert board["OLDBUNDLE"]["min_subtotal"] is None
+
+    # The code check says "under review" instead of quoting a $40-as-€40 floor.
+    refused = client.get("/api/orders/coupons/oldbundle", headers=headers)
+    assert refused.status_code == 400
+    assert "minimum spend is being reviewed" in refused.json()["detail"]
+
+    # And the code can't be spent: not quoted, not placed — even by a basket
+    # that would clear the old floor comfortably.
+    _top_up_stock("butter-croissant")
+    croissant = get_product("butter-croissant")
+    big_basket = [{"product_id": croissant["id"], "quantity": 30}]
+    quote = _quote(big_basket, coupon_code="OLDBUNDLE", token=token)
+    assert quote.status_code == 400
+    assert "being reviewed" in quote.json()["detail"]
+    placed = client.post(
+        "/api/orders",
+        json=checkout_payload(coupon_code="OLDBUNDLE", items=big_basket),
+        headers=headers,
+    )
+    assert placed.status_code == 400
+    assert "being reviewed" in placed.json()["detail"]
+
+    # The admin's re-save is the approval — and the threshold it approves is
+    # enforced as euros from then on.
+    resaved = client.put(
+        f"/api/admin/coupons/{coupon_id}", json={"min_subtotal": 40.0}, headers=admin
+    )
+    assert resaved.json()["min_subtotal_approved"] is True
+    preview = client.get("/api/orders/coupons/oldbundle", headers=headers).json()
+    assert preview["min_subtotal"] == 40.0
+    small = _quote(
+        [{"product_id": croissant["id"], "quantity": 1}], coupon_code="OLDBUNDLE", token=token
+    )
+    assert small.status_code == 400
+    assert small.json()["detail"].startswith("OLDBUNDLE needs a basket of at least €40.00")
+
+    client.delete(f"/api/admin/coupons/{coupon_id}", headers=admin)
 
 
 def test_bulk_enquiry_flow(caplog):
@@ -2696,32 +2798,44 @@ def test_confirm_after_a_webhook_lands_mid_request_does_not_double_receipt(caplo
     assert logged.count(f"Receipt {order['order_number']}") == 1
 
 
-def test_orders_remember_the_currency_they_were_placed_in(monkeypatch):
+def test_orders_remember_the_currency_they_were_placed_in():
     """The foundation of the euro migration: every order carries the charge
-    currency in force when it was placed, and flipping the shop to euro leaves
-    the dollar orders exactly as they were. Today's shop charges usd, so that
-    is what new orders say — the point is the column, the serializer and the
-    payload all carry it faithfully."""
-    from app.routers import orders as orders_router
+    currency in force when it was placed. Since the 2026-11-05 cutover the
+    shop charges eur, so that is what new orders say — and a dollar order
+    from before the cutover keeps its dollars exactly as placed, whichever
+    way the shop charges now."""
+    from app.database import SessionLocal
+    from app.models import Order as OrderRow
 
     headers = auth_header(login_customer())
     _top_up_stock("butter-croissant")
 
-    dollar = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
-    assert dollar["currency"] == "usd"
-    assert client.get(f"/api/orders/{dollar['id']}", headers=headers).json()["currency"] == "usd"
-
-    # the shop cuts over to euro — only orders placed from now on change
-    monkeypatch.setattr(orders_router.settings, "stripe_currency", "eur", raising=True)
     euro = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
     assert euro["currency"] == "eur"
+    assert client.get(f"/api/orders/{euro['id']}", headers=headers).json()["currency"] == "eur"
 
-    # history keeps its own money, whichever way the shop charges now
-    assert client.get(f"/api/orders/{dollar['id']}", headers=headers).json()["currency"] == "usd"
+    # a pre-cutover order, placed back when the shop charged usd. Checkout
+    # can't mint those any more (EUR-only by owner decision), so history is
+    # written the honest way: directly, as the migration itself would have.
+    db = SessionLocal()
+    try:
+        db.query(OrderRow).filter_by(id=euro["id"]).one().currency = "usd"
+        db.commit()
+    finally:
+        db.close()
+
+    # history keeps its own money through every read the shop can do
+    assert client.get(f"/api/orders/{euro['id']}", headers=headers).json()["currency"] == "usd"
     admin = client.get("/api/admin/orders", headers=admin_headers()).json()
     by_id = {row["id"]: row["currency"] for row in admin["orders"]}
-    assert by_id[dollar["id"]] == "usd"
-    assert by_id[euro["id"]] == "eur"
+    assert by_id[euro["id"]] == "usd"
+
+    # and orders placed today still say eur, in the same listing
+    newer = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    admin = client.get("/api/admin/orders", headers=admin_headers()).json()
+    by_id = {row["id"]: row["currency"] for row in admin["orders"]}
+    assert by_id[euro["id"]] == "usd"
+    assert by_id[newer["id"]] == "eur"
 
 
 def test_the_receipt_email_speaks_each_orders_currency():
@@ -2764,25 +2878,33 @@ def test_the_public_store_carries_the_shop_money_rules():
 
     store = client.get("/api/store").json()
     settings = get_settings()
-    assert store["currency"] == settings.stripe_currency == "usd"
+    assert store["currency"] == settings.stripe_currency == "eur"
     assert store["tax_rate"] == settings.tax_rate
     assert store["shipping_fee"] == settings.shipping_fee
     assert store["free_shipping_threshold"] == settings.free_shipping_threshold
 
 
-def test_refunding_a_historical_dollar_order_keeps_its_cents(monkeypatch):
+def test_refunding_a_historical_dollar_order_keeps_its_cents():
     """Refunds are minor units of the order's own currency: a dollar order
-    paid before a euro cutover is refunded in exactly the dollars it was
+    paid before the euro cutover is refunded in exactly the dollars it was
     charged — nothing is converted, nothing recomputed."""
-    from app.routers import orders as orders_router
+    from app.database import SessionLocal
+    from app.models import Order as OrderRow
 
     headers = auth_header(login_customer())
     _top_up_stock("butter-croissant")
     order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
     pay_order_via_webhook(order["id"])
 
-    # the shop cuts over to euro after this order was placed and paid
-    monkeypatch.setattr(orders_router.settings, "stripe_currency", "eur", raising=True)
+    # it becomes pre-cutover history the honest way: this order was placed
+    # and paid back when the shop charged usd, so its row says so
+    db = SessionLocal()
+    try:
+        db.query(OrderRow).filter_by(id=order["id"]).one().currency = "usd"
+        db.commit()
+    finally:
+        db.close()
+
     calls_before = len(gateway_calls)  # the recorder spans the whole suite
     cancelled = client.put(
         f"/api/admin/orders/{order['id']}/status",
@@ -2798,12 +2920,13 @@ def test_refunding_a_historical_dollar_order_keeps_its_cents(monkeypatch):
     assert refunds[0][2] == round(float(order["total"]) * 100)  # the original usd cents
 
 
-def test_stats_split_money_by_currency_never_summing_it(monkeypatch):
+def test_stats_split_money_by_currency_never_summing_it():
     """A dollar book and a euro book side by side: the headline tiles
     describe the active currency only, and every currency's own revenue,
     average and order count ride in revenue_by_currency. No total anywhere
     adds dollars to euros."""
-    from app.routers import orders as orders_router
+    from app.database import SessionLocal
+    from app.models import Order as OrderRow
 
     _top_up_stock("butter-croissant")
     _top_up_stock("beef-curry-puff")
@@ -2820,17 +2943,22 @@ def test_stats_split_money_by_currency_never_summing_it(monkeypatch):
         "total_revenue": 0.0, "order_count": 0, "refunded_revenue": 0.0
     }
 
+    # The dollar book is history now — pre-cutover orders written directly,
+    # the way checkout can no longer produce (EUR-only since 2026-11-05).
     dollar = client.post(
         "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
     ).json()
-    assert dollar["currency"] == "usd"
+    db = SessionLocal()
+    try:
+        db.query(OrderRow).filter_by(id=dollar["id"]).one().currency = "usd"
+        db.commit()
+    finally:
+        db.close()
 
-    monkeypatch.setattr(orders_router.settings, "stripe_currency", "eur", raising=True)
     euro = client.post(
         "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
     ).json()
     assert euro["currency"] == "eur"
-    monkeypatch.setattr(orders_router.settings, "stripe_currency", "usd", raising=True)
 
     stats = client.get("/api/admin/stats", headers=admin_headers()).json()
     by_code = {c["currency"]: c for c in stats["revenue_by_currency"]}
@@ -2848,35 +2976,42 @@ def test_stats_split_money_by_currency_never_summing_it(monkeypatch):
 
     # The headline money is the active currency's slice alone, and the
     # average is per-currency arithmetic, never a mixed mean.
-    assert stats["total_revenue"] == by_code["usd"]["total_revenue"]
-    assert stats["avg_order_value"] == by_code["usd"]["avg_order_value"]
-    assert by_code["usd"]["avg_order_value"] == round(
-        by_code["usd"]["total_revenue"] / by_code["usd"]["order_count"], 2
+    assert stats["total_revenue"] == by_code["eur"]["total_revenue"]
+    assert stats["avg_order_value"] == by_code["eur"]["avg_order_value"]
+    assert by_code["eur"]["avg_order_value"] == round(
+        by_code["eur"]["total_revenue"] / by_code["eur"]["order_count"], 2
     )
 
     # Counts are facts, not money — they may span currencies.
     assert stats["order_count"] >= by_code["usd"]["order_count"] + by_code["eur"]["order_count"]
 
 
-def test_lifetime_spend_never_mixes_currencies(monkeypatch):
-    """A customer who shopped before and after a cutover keeps two honest
+def test_lifetime_spend_never_mixes_currencies():
+    """A customer who shopped before and after the cutover keeps two honest
     numbers, not one invented sum: lifetime_spend is the active currency's
     spend, and the full split rides alongside. The order count and last
     visit span everything — they're facts, not money."""
-    from app.routers import orders as orders_router
+    from app.database import SessionLocal
+    from app.models import Order as OrderRow
 
     _top_up_stock("butter-croissant")
     _top_up_stock("beef-curry-puff")
     headers = _register_and_login("mixed-wallet@example.com", "MixedWallet1!")
 
+    # the pre-cutover dollar purchase, written directly as history
     dollar = client.post(
         "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
     ).json()
-    monkeypatch.setattr(orders_router.settings, "stripe_currency", "eur", raising=True)
+    db = SessionLocal()
+    try:
+        db.query(OrderRow).filter_by(id=dollar["id"]).one().currency = "usd"
+        db.commit()
+    finally:
+        db.close()
+
     euro = client.post(
         "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
     ).json()
-    monkeypatch.setattr(orders_router.settings, "stripe_currency", "usd", raising=True)
 
     page = client.get(
         "/api/admin/users",
@@ -2885,7 +3020,7 @@ def test_lifetime_spend_never_mixes_currencies(monkeypatch):
     ).json()
     (customer,) = page["items"]
     assert customer["order_count"] == 2
-    assert customer["lifetime_spend"] == dollar["total"]
+    assert customer["lifetime_spend"] == euro["total"]  # the active currency's slice
     assert customer["lifetime_spend_by_currency"] == {
         "usd": dollar["total"],
         "eur": euro["total"],
@@ -2896,7 +3031,9 @@ def test_checkout_pauses_when_the_charge_currency_is_unusable(monkeypatch):
     """A misconfigured charge currency (typo, unset, unchargeable code)
     pauses checkout entirely — cash included — rather than stamping orders
     with money nothing can charge or report. The quote promises nothing
-    either: it prices exactly what placement would refuse."""
+    either: it prices exactly what placement would refuse. USD counts as
+    unchargeable since the EUR-only cutover: a relapse to the old setting
+    must pause the shop, never quietly charge dollars again."""
     from app.routers import orders as orders_router
 
     _top_up_stock("butter-croissant")
@@ -2904,16 +3041,17 @@ def test_checkout_pauses_when_the_charge_currency_is_unusable(monkeypatch):
     headers = auth_header(login_customer())
     orders_before = client.get("/api/orders", headers=headers).json()["pagination"]["total_items"]
 
-    monkeypatch.setattr(orders_router.settings, "stripe_currency", "gbp", raising=True)
+    for unusable in ("gbp", "usd"):
+        monkeypatch.setattr(orders_router.settings, "stripe_currency", unusable, raising=True)
 
-    refused = client.post(
-        "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
-    )
-    assert refused.status_code == 503
-    assert "paused" in refused.json()["detail"]
+        refused = client.post(
+            "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
+        )
+        assert refused.status_code == 503
+        assert "paused" in refused.json()["detail"]
 
-    quote = client.post("/api/orders/quote", json={"items": checkout_payload()["items"]})
-    assert quote.status_code == 503
+        quote = client.post("/api/orders/quote", json={"items": checkout_payload()["items"]})
+        assert quote.status_code == 503
 
     orders_after = client.get("/api/orders", headers=headers).json()["pagination"]["total_items"]
     assert orders_after == orders_before  # nothing was written
@@ -2933,14 +3071,20 @@ def test_a_new_pay_link_refuses_an_unchargeable_order_currency(monkeypatch):
     _top_up_stock("butter-croissant")
     _top_up_stock("beef-curry-puff")
     headers = auth_header(login_customer())
+    # Both orders are placed while the fake gateway is in place: the fresh
+    # real gateway that arrives below refuses unchargeable currencies, and
+    # neither of these should be refused at placement.
     order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    dollar = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
     sessions_before = len(fake_sessions)
 
     # The order's stored currency goes bad — a currency the pipeline never
-    # supported, exactly the shape a botched cutover would leave behind.
+    # supported, exactly the shape a botched cutover would leave behind —
+    # and the dollar order becomes pre-cutover history (placed as usd).
     db = SessionLocal()
     try:
         db.query(OrderRow).filter_by(id=order["id"]).one().currency = "gbp"
+        db.query(OrderRow).filter_by(id=dollar["id"]).one().currency = "usd"
         db.commit()
     finally:
         db.close()
@@ -2966,12 +3110,90 @@ def test_a_new_pay_link_refuses_an_unchargeable_order_currency(monkeypatch):
     assert detail["currency"] == "gbp"  # history isn't rewritten
     assert len(fake_sessions) == sessions_before  # and no session was minted
 
+    # The pre-cutover currency itself: a usd order stays readable everywhere
+    # but can never be charged again — its pay link refuses too.
+    refused_usd = client.post(f"/api/payments/{dollar['id']}/session", headers=headers)
+    assert refused_usd.status_code == 400
+    assert "can no longer be charged" in refused_usd.json()["detail"]
+
+
+def test_pay_links_pause_with_checkout_while_delivery_pricing_is_unapproved(monkeypatch):
+    """The pay-link route shares checkout's fail-closed gate: while the
+    shop's delivery pricing awaits approved EUR figures, no new Stripe
+    session is minted for any order — not even a valid euro pending one.
+    The stored totals are never recalculated; approving the rules simply
+    lets charging resume."""
+    from app.database import SessionLocal
+    from app.models import Order as OrderRow
+    from app.routers import orders as orders_router
+
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    headers = auth_header(login_customer())
+    placed = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    assert placed["payment_status"] == "pending"
+    assert placed["payment_url"]  # the fake gateway minted a session at placement
+    session_at_placement = last_session_id(placed["id"])
+
+    def sessions_for_order():
+        return [sid for sid in fake_sessions if sid.startswith(f"cs_fake_{placed['id']}_")]
+
+    assert len(sessions_for_order()) == 1
+
+    # Checkout's pause (no approved free-delivery threshold) must reach the
+    # pay link too — a fresh session would charge unapproved pricing.
+    monkeypatch.setattr(orders_router.settings, "free_shipping_threshold", None, raising=True)
+    paused = client.post(f"/api/payments/{placed['id']}/session", headers=headers)
+    assert paused.status_code == 503
+    assert "paused" in paused.json()["detail"]
+    assert len(sessions_for_order()) == 1  # nothing was minted
+
+    db = SessionLocal()
+    try:
+        stored = db.get(OrderRow, placed["id"])
+        assert stored.stripe_session_id == session_at_placement  # untouched
+        # totals never recalculated (Numeric comes back as Decimal)
+        assert float(stored.total) == placed["total"]
+    finally:
+        db.close()
+
+    # Rules approved again (the suite's threshold): the same order's pay
+    # link works and points at a fresh session.
+    monkeypatch.setattr(orders_router.settings, "free_shipping_threshold", 30.00, raising=True)
+    resumed = client.post(f"/api/payments/{placed['id']}/session", headers=headers)
+    assert resumed.status_code == 201
+    assert resumed.json()["payment_url"]
+    assert len(sessions_for_order()) == 2
+    db = SessionLocal()
+    try:
+        assert db.get(OrderRow, placed["id"]).stripe_session_id != session_at_placement
+        assert float(db.get(OrderRow, placed["id"]).total) == placed["total"]
+    finally:
+        db.close()
+
 
 def test_the_orders_export_names_each_rows_currency():
     """The bookkeeping CSV says which money each row's figures read in —
     after any cutover, no spreadsheet ever has to guess."""
     import csv
     import io as _io
+
+    from app.database import SessionLocal
+    from app.models import Order as OrderRow
+
+    # one pre-cutover dollar order of our own, so this test needs no
+    # ordering contract with the currency tests above
+    _top_up_stock("butter-croissant")
+    headers = auth_header(login_customer())
+    dollar = client.post(
+        "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
+    ).json()
+    db = SessionLocal()
+    try:
+        db.query(OrderRow).filter_by(id=dollar["id"]).one().currency = "usd"
+        db.commit()
+    finally:
+        db.close()
 
     response = client.get("/api/admin/orders/export", headers=admin_headers())
     assert response.status_code == 200
@@ -2985,6 +3207,7 @@ def test_the_orders_export_names_each_rows_currency():
     # above reports as gbp, visibly not summed with its neighbours.
     codes = {row[currency_column] for row in data}
     assert all(code and code == code.strip() for code in codes)
+    assert "eur" in codes
     assert "usd" in codes
     assert "gbp" in codes
 
@@ -3024,10 +3247,11 @@ def test_the_orders_export_blanks_read_as_unknown():
 
 def test_the_currency_column_migrates_a_legacy_sqlite_database(tmp_path, monkeypatch):
     """A database from before the currency column boots through the additive
-    migration: the column lands and every existing row reads as the dollars
-    it was placed in. (SQLite proves the DDL runs and backfills; the statement
-    itself is pinned to the Postgres-safe shape in the test below — the
-    boolean-default lesson from 2026-11-02.)"""
+    migration: the column lands and every existing row reads as euro, the
+    shop's one charge currency since the 2026-11-05 cutover. (SQLite proves
+    the DDL runs and backfills; the statement itself is pinned to the
+    Postgres-safe shape in the test below — the boolean-default lesson from
+    2026-11-02.)"""
     import sqlalchemy as sa
 
     from app import _upgrade_schema
@@ -3036,15 +3260,19 @@ def test_the_currency_column_migrates_a_legacy_sqlite_database(tmp_path, monkeyp
     with engine.begin() as conn:
         conn.execute(sa.text("CREATE TABLE orders (id INTEGER PRIMARY KEY, total NUMERIC(10,2))"))
         conn.execute(sa.text("INSERT INTO orders (id, total) VALUES (1, 12.00)"))
-        # the boot-time data fixes touch categories unconditionally
+        # the boot-time data fixes touch categories and store_settings
+        # unconditionally
         conn.execute(sa.text("CREATE TABLE categories (id INTEGER PRIMARY KEY, description VARCHAR(255))"))
+        conn.execute(sa.text(
+            "CREATE TABLE store_settings (id INTEGER PRIMARY KEY, announcement VARCHAR(255))"
+        ))
 
     monkeypatch.setattr("app.engine", engine)
     _upgrade_schema()
 
     with engine.begin() as conn:
         rows = conn.execute(sa.text("SELECT id, total, currency FROM orders")).fetchall()
-        assert rows == [(1, 12.0, "usd")]
+        assert rows == [(1, 12.0, "eur")]
     engine.dispose()
 
 
@@ -3056,8 +3284,100 @@ def test_the_currency_ddl_keeps_its_postgres_safe_shape():
 
     assert (
         _ADDITIVE_COLUMNS["orders"]["currency"]
-        == "ALTER TABLE orders ADD COLUMN currency VARCHAR(3) NOT NULL DEFAULT 'usd'"
+        == "ALTER TABLE orders ADD COLUMN currency VARCHAR(3) NOT NULL DEFAULT 'eur'"
     )
+
+
+def test_checkout_stays_paused_until_delivery_pricing_is_approved(monkeypatch):
+    """The EUR cutover leaves the delivery rules unapproved (the old $5.99
+    fee / $50 free-delivery figures are NOT approved euro): while either is
+    unset, quotes and placement refuse fail-closed — the shop would rather
+    pause than charge an invented delivery price. Cash included, and nothing
+    is written."""
+    from app.routers import orders as orders_router
+
+    _top_up_stock("butter-croissant")
+    headers = auth_header(login_customer())
+    orders_before = client.get("/api/orders", headers=headers).json()["pagination"]["total_items"]
+
+    monkeypatch.setattr(orders_router.settings, "shipping_fee", None, raising=True)
+    monkeypatch.setattr(orders_router.settings, "free_shipping_threshold", None, raising=True)
+
+    quote = client.post("/api/orders/quote", json={"items": checkout_payload()["items"]})
+    assert quote.status_code == 503
+    assert "paused" in quote.json()["detail"]
+
+    refused = client.post(
+        "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
+    )
+    assert refused.status_code == 503
+
+    # one of the two coming back is still enough to stay paused
+    monkeypatch.setattr(orders_router.settings, "shipping_fee", 3.50, raising=True)
+    still = client.post("/api/orders/quote", json={"items": checkout_payload()["items"]})
+    assert still.status_code == 503
+
+    orders_after = client.get("/api/orders", headers=headers).json()["pagination"]["total_items"]
+    assert orders_after == orders_before  # nothing was written
+
+
+def test_no_tax_is_charged_or_shown_while_no_rate_is_approved(monkeypatch):
+    """VAT treatment is pending professional review: with no approved rate,
+    orders carry no tax at all — the quote, the order and the receipt simply
+    omit it. Nothing may read as a 0%-VAT decision."""
+    from app.email import order_receipt_email
+    from app.routers import orders as orders_router
+
+    _top_up_stock("butter-croissant")
+    headers = auth_header(login_customer())
+
+    monkeypatch.setattr(orders_router.settings, "tax_rate", None, raising=True)
+
+    quote = client.post("/api/orders/quote", json={"items": checkout_payload()["items"]}).json()
+    assert quote["tax"] == 0
+
+    order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    assert order["tax"] == 0
+
+    # the receipt drops the row entirely — a "Tax €0.00" line would read as
+    # a 0%-VAT claim the shop hasn't made
+    subject, html, text = order_receipt_email(
+        {
+            "email": "taster@example.com",
+            "first_name": "Taster",
+            "order_number": "DJ-TEST-0002",
+            "placed_at": "Nov 05, 2026, 8:00 AM",
+            "items": [{"name": "Butter Croissant", "quantity": 2, "subtotal": 7.5}],
+            "subtotal": 7.5,
+            "discount": 0.0,
+            "coupon_code": None,
+            "tax": 0.0,
+            "shipping": 3.5,
+            "total": 11.0,
+            "payment_method": "card",
+            "payment_status": "paid",
+            "currency": "eur",
+        }
+    )
+    assert "Tax" not in text and "Tax" not in html
+
+
+def test_money_formats_euro_by_default():
+    """The shop's one money formatter defaults to euro — the currency every
+    new figure is written in since the cutover — and a missing or blank
+    code falls back to euro too, never silently to dollars."""
+    from app.money import money
+
+    assert money(7.5) == money(7.5, "eur")
+    assert "7.50" in money(7.5) and money(7.5) != money(7.5, "usd")
+
+    # a missing or blank currency must not quietly print a dollar figure
+    assert money(7.5, None) == "€7.50"
+    assert money(7.5, "") == "€7.50"
+    assert money(7.5, "   ") == "€7.50"
+    assert money(7.5, "eur") == "€7.50"
+    # named history keeps its own symbol
+    assert money(7.5, "usd") == "$7.50"
 
 
 # --------------------------------------------------------------------------
@@ -3691,7 +4011,7 @@ def test_quote_prices_the_basket_from_the_catalog():
     )
     assert quote["shipping_fee"] == expected_shipping
     assert quote["total"] == round(subtotal + quote["tax"] + quote["shipping_fee"], 2)
-    assert quote["currency"] == "usd"
+    assert quote["currency"] == "eur"
 
 
 def test_quote_matches_the_placed_order_to_the_cent():
@@ -3794,22 +4114,33 @@ def test_quote_coupon_rules_mirror_checkout():
     assert bogus.status_code == 404
     assert bogus.json()["detail"] == "This coupon code is not valid"
 
-    # FRESHBAKE15 needs a $40 basket; one croissant is nowhere near
-    locked = _quote(one, coupon_code="FRESHBAKE15", token=token)
+    # A code the basket hasn't unlocked yet — checkout's rule, quoted here
+    # with the same wording. (FRESHBAKE15 itself no longer carries a
+    # minimum: the old $40 floor was a dollar figure, not approved euro.)
+    admin = admin_headers()
+    made = client.post(
+        "/api/admin/coupons",
+        json={"code": "EURMIN20", "percent_off": 10, "min_subtotal": 20.0},
+        headers=admin,
+    )
+    assert made.status_code == 201
+    locked = _quote(one, coupon_code="EURMIN20", token=token)
     assert locked.status_code == 400
-    assert locked.json()["detail"].startswith("FRESHBAKE15 needs a basket of at least")
+    assert locked.json()["detail"].startswith("EURMIN20 needs a basket of at least")
 
     # The same code on a big enough basket prices straight through
     _top_up_stock("butter-croissant")
-    quantity = int(40 / croissant["current_price"]) + 1
+    quantity = int(20 / croissant["current_price"]) + 1
     big = [{"product_id": croissant["id"], "quantity": quantity}]
-    earned = _quote(big, coupon_code="FRESHBAKE15", token=token)
+    earned = _quote(big, coupon_code="EURMIN20", token=token)
     assert earned.status_code == 200
     quote = earned.json()
     subtotal = round(croissant["current_price"] * quantity, 2)
-    assert subtotal >= 40 and quote["subtotal"] == subtotal
-    assert quote["coupon_code"] == "FRESHBAKE15" and quote["coupon_percent_off"] == 15
-    assert quote["discount_amount"] == round(subtotal * 15 / 100, 2)
+    assert subtotal >= 20 and quote["subtotal"] == subtotal
+    assert quote["coupon_code"] == "EURMIN20" and quote["coupon_percent_off"] == 10
+    assert quote["discount_amount"] == round(subtotal * 10 / 100, 2)
+
+    client.delete(f"/api/admin/coupons/{made.json()['id']}", headers=admin)
 
 
 def test_quote_free_and_paid_delivery_and_cent_rounding():
@@ -3870,7 +4201,7 @@ def test_quote_serves_guests_and_rate_limits_bursts():
 
     guest = _quote(items)
     assert guest.status_code == 200
-    assert guest.json()["currency"] == "usd"
+    assert guest.json()["currency"] == "eur"
 
     throttled = None
     for _ in range(45):

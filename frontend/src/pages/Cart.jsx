@@ -1,7 +1,7 @@
 import { BadgePercent, Plus, Truck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import client, { apiError } from "../api/client";
+import client, { apiError, checkoutPaused } from "../api/client";
 import EmptyState from "../components/EmptyState";
 import PhotoTile from "../components/PhotoTile";
 import PriceTag from "../components/PriceTag";
@@ -97,8 +97,9 @@ export default function Cart() {
   // the voucher itself (paused, already spent, or the basket no longer
   // qualifies) — drop it with the reason and let the tally re-price. A
   // refusal that survives without one is the basket; the tally says so.
+  // (A shop-wide checkout pause is neither: the coupon stays aboard.)
   useEffect(() => {
-    if (quoteState.status === "error" && appliedCode) {
+    if (quoteState.status === "error" && appliedCode && !checkoutPaused(quoteState.error)) {
       setAppliedCode("");
       storeCoupon("");
       toast.info(apiError(quoteState.error, "That voucher no longer applies — removed"));
@@ -170,10 +171,15 @@ export default function Cart() {
   const quote = quoteState.quote;
   const quoteLines = new Map((quote?.items ?? []).map((i) => [i.product_id, i]));
   // The free-delivery nudge is a hint, not a charge — it may run on the
-  // cached subtotal for a beat until the fresh quote arrives.
+  // cached subtotal for a beat until the fresh quote arrives. While no
+  // threshold is approved (the old $50 figure is not an approved euro
+  // value) it stays hidden entirely: no number, and no "unlocked!" either.
   const hintSubtotal = quote?.subtotal ?? subtotal;
-  const remaining = Math.max(0, shopConfig.freeShippingThreshold - hintSubtotal);
-  const progress = Math.min(100, (hintSubtotal / shopConfig.freeShippingThreshold) * 100);
+  const freeThreshold = shopConfig.freeShippingThreshold;
+  const remaining =
+    freeThreshold != null ? Math.max(0, freeThreshold - hintSubtotal) : null;
+  const progress =
+    freeThreshold != null ? Math.min(100, (hintSubtotal / freeThreshold) * 100) : null;
 
   const inCart = new Set(items.map((i) => i.product_id));
   const picks = bestRated
@@ -307,28 +313,31 @@ export default function Cart() {
           </h2>
 
           <div className="mt-4">
-            {remaining > 0 ? (
-              <p className="flex items-start gap-2 text-sm">
-                <Truck size={18} className="mt-0.5 shrink-0 text-secondary" />
-                <span>
-                  Add{" "}
-                  <span className="font-bold text-secondary">
-                    {money(remaining)}
-                  </span>{" "}
-                  more for free delivery
-                </span>
-              </p>
-            ) : (
-              <p className="flex items-center gap-2 text-sm font-semibold text-success">
-                <Truck size={16} className="shrink-0" />
-                You&rsquo;ve unlocked free delivery
-              </p>
+            {freeThreshold != null &&
+              (remaining > 0 ? (
+                <p className="flex items-start gap-2 text-sm">
+                  <Truck size={18} className="mt-0.5 shrink-0 text-secondary" />
+                  <span>
+                    Add{" "}
+                    <span className="font-bold text-secondary">
+                      {money(remaining)}
+                    </span>{" "}
+                    more for free delivery
+                  </span>
+                </p>
+              ) : (
+                <p className="flex items-center gap-2 text-sm font-semibold text-success">
+                  <Truck size={16} className="shrink-0" />
+                  You&rsquo;ve unlocked free delivery
+                </p>
+              ))}
+            {freeThreshold != null && (
+              <progress
+                className="progress progress-secondary mt-2 h-2"
+                value={progress}
+                max={100}
+              />
             )}
-            <progress
-              className="progress progress-secondary mt-2 h-2"
-              value={progress}
-              max={100}
-            />
           </div>
 
           {quote ? (
@@ -345,10 +354,14 @@ export default function Cart() {
                   <span>−{money(quote.discount_amount)}</span>
                 </div>
               )}
-              <div className="flex justify-between">
-                <span className="opacity-70">{taxLabel()}</span>
-                <span>{money(quote.tax)}</span>
-              </div>
+              {/* No tax row while none is charged — a "Tax €0.00" line would
+                  read as a 0%-VAT decision the shop hasn't made. */}
+              {quote.tax > 0 && (
+                <div className="flex justify-between">
+                  <span className="opacity-70">{taxLabel()}</span>
+                  <span>{money(quote.tax)}</span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="opacity-70">Delivery</span>
                 <span>
@@ -368,8 +381,10 @@ export default function Cart() {
             <div className="dash-divider mt-5 pt-5">
               <div className="alert alert-warning text-sm" role="alert">
                 <span>
-                  {apiError(quoteState.error, "This basket can't be priced right now")} —
-                  check the items and try again.
+                  {apiError(quoteState.error, "This basket can't be priced right now")}
+                  {/* A pause is the shop's own doing — its message already
+                      says what's wrong; item-checking advice would not. */}
+                  {!checkoutPaused(quoteState.error) && " — check the items and try again."}
                 </span>
               </div>
             </div>

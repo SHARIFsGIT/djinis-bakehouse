@@ -99,6 +99,19 @@ def _load_coupon(db, code: str, user: User | None = None) -> Coupon:
             status_code=404,
             detail=f"{coupon.code} is a one-per-customer code and has already been used",
         )
+    # A minimum recorded before the 2026-11-05 EUR cutover is a USD numeral
+    # the app cannot re-read as euros, so it must not be spent (nor nudged
+    # toward) until an administrator re-saves the coupon from the Promotions
+    # desk — that save re-stamps the approval. Every coupon path (preview,
+    # quote, placement) funnels through here, so one gate covers all.
+    if coupon.min_subtotal and not coupon.min_subtotal_approved:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{coupon.code}'s minimum spend is being reviewed — "
+                "please try again soon"
+            ),
+        )
     return coupon
 
 
@@ -155,16 +168,39 @@ class BasketTotals(NamedTuple):
     total: float
 
 
+def _approved_money_rules() -> tuple[float | None, float, float]:
+    """The currency-bound money rules a basket may be charged by, or a 503.
+
+    Delivery pricing (SHIPPING_FEE, FREE_SHIPPING_THRESHOLD) are pending
+    owner approval as EUR figures since the 2026-11-05 EUR-only decision —
+    the old USD values must not be relabelled as euro — so while either is
+    unset, no basket can be priced or placed: checkout fails closed rather
+    than charge unapproved figures. TAX_RATE is also pending (the 8.75% US
+    sales-tax default is gone; German VAT awaits professional review), but
+    an unset tax rate is simply no tax line — it pauses nothing by itself
+    and nothing labels it as VAT.
+    """
+    if settings.shipping_fee is None or settings.free_shipping_threshold is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Checkout is paused — the shop's delivery pricing is being "
+            "finalised. Please try again soon.",
+        )
+    tax_rate = settings.tax_rate if settings.tax_rate is not None else 0.0
+    return tax_rate, float(settings.shipping_fee), float(settings.free_shipping_threshold)
+
+
 def _price_basket(subtotal: float, coupon: Coupon | None) -> BasketTotals:
     """The one money recipe a basket is charged by — checkout and the quote
     endpoint share it, so what the storefront displays and what the invoice
-    says cannot drift apart. Tax stays the shop's flat exclusive rate
-    (settings.tax_rate) exactly as today; the VAT engine is deliberately not
-    consulted until the euro migration turns it on."""
+    says cannot drift apart. Tax is the shop's flat exclusive rate once the
+    owner approves one (None = no tax line, VAT pending professional
+    review); the VAT-inclusive engine is deliberately not consulted."""
+    tax_rate, shipping_fee, free_threshold = _approved_money_rules()
     discount = round(subtotal * coupon.percent_off / 100, 2) if coupon else 0.0
     taxable = round(subtotal - discount, 2)
-    tax = round(taxable * settings.tax_rate, 2)
-    shipping = 0.0 if subtotal >= settings.free_shipping_threshold else settings.shipping_fee
+    tax = round(taxable * tax_rate, 2)
+    shipping = 0.0 if subtotal >= free_threshold else shipping_fee
     total = round(taxable + tax + shipping, 2)
     return BasketTotals(
         discount=discount, taxable=taxable, tax=tax, shipping=shipping, total=total
@@ -524,6 +560,7 @@ def check_coupon(code: str, user: CurrentUser, db: DbSession):
         percent_off=coupon.percent_off,
         description=coupon.description,
         min_subtotal=float(coupon.min_subtotal) if coupon.min_subtotal else None,
+        min_subtotal_approved=coupon.min_subtotal_approved,
     )
 
 

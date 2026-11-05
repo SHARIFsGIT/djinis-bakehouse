@@ -68,6 +68,9 @@ CATEGORIES = [
 
 # name, slug, category, price, sale_price, featured, stock, prep_minutes,
 # description, ingredients, allergens
+#
+# Prices are EUR price points (2026-11-05 owner decision: EUR only, numerals
+# unchanged from the shipped catalog — no FX conversion was performed).
 PRODUCTS = [
     # --- breads ---------------------------------------------------------
     ("French Baguette", "french-baguette", "breads", 4.50, None, False, 36, 720,
@@ -150,9 +153,12 @@ PRODUCTS = [
 ]
 
 # code, percent, description, min_subtotal (None = no minimum), once per customer
+# FRESHBAKE15's old "$40" minimum was a USD figure and is NOT an approved EUR
+# threshold, so the seeded code carries no minimum until the owner sets one
+# from the Promotions desk (min_subtotal is money in the shop's currency).
 COUPONS = [
     ("WELCOME10", 10, "10% off your first order", None, True),
-    ("FRESHBAKE15", 15, "15% off boxes of $40 or more", 40.00, False),
+    ("FRESHBAKE15", 15, "15% off your box", None, False),
 ]
 
 # The home page's "Word around the neighborhood" — the baker's picks, not an
@@ -277,8 +283,15 @@ def _seed_order(db, users: dict, products: dict, coupons: dict, index: int, seq:
     coupon = coupons.get(coupon_code) if coupon_code else None
     discount = round(subtotal * coupon.percent_off / 100, 2) if coupon else 0.0
     taxable = round(subtotal - discount, 2)
-    tax = round(taxable * settings.tax_rate, 2)
-    shipping = 0.0 if subtotal >= settings.free_shipping_threshold else settings.shipping_fee
+    # Demo history only. The real money rules may be pending owner approval
+    # as EUR figures (None) — demo orders then carry no tax and free
+    # delivery rather than silently reusing the old USD numbers as euro.
+    tax_rate = settings.tax_rate if settings.tax_rate is not None else 0.0
+    tax = round(taxable * tax_rate, 2)
+    if settings.shipping_fee is None or settings.free_shipping_threshold is None:
+        shipping = 0.0
+    else:
+        shipping = 0.0 if subtotal >= settings.free_shipping_threshold else settings.shipping_fee
     total = round(taxable + tax + shipping, 2)
 
     _label, recipient, phone, line1, line2, city, state, postal = DEMO_ADDRESSES[email]
@@ -354,10 +367,14 @@ def _restore_promised_content(db) -> None:
         if coupon is None:
             db.add(
                 Coupon(code=code, percent_off=percent_off, description=description,
-                       min_subtotal=min_subtotal, once_per_customer=once_per_customer)
+                       min_subtotal=min_subtotal, once_per_customer=once_per_customer,
+                       # a shipped threshold is chosen in the shop's currency —
+                       # unlike a pre-cutover row, it ships approved.
+                       min_subtotal_approved=min_subtotal is not None)
             )
         elif coupon.min_subtotal is None and min_subtotal is not None:
             coupon.min_subtotal = min_subtotal
+            coupon.min_subtotal_approved = True
 
     if get_settings().demo_data_enabled:
         if not db.scalar(select(func.count(Testimonial.id))):
@@ -474,7 +491,8 @@ def seed_db() -> None:
         coupons: dict[str, Coupon] = {}
         for code, percent_off, description, min_subtotal, once_per_customer in COUPONS:
             coupon = Coupon(code=code, percent_off=percent_off, description=description,
-                            min_subtotal=min_subtotal, once_per_customer=once_per_customer)
+                            min_subtotal=min_subtotal, once_per_customer=once_per_customer,
+                            min_subtotal_approved=min_subtotal is not None)
             db.add(coupon)
             coupons[code] = coupon
 

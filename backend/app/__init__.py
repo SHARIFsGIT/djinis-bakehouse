@@ -51,8 +51,10 @@ _ADDITIVE_COLUMNS = {
         "stripe_session_id": "ALTER TABLE orders ADD COLUMN stripe_session_id VARCHAR(255)",
         "stripe_payment_intent_id": "ALTER TABLE orders ADD COLUMN stripe_payment_intent_id VARCHAR(255)",
         # A string default is safe on both engines (the boolean DEFAULT 1
-        # lesson); every order placed before this column lands reads as "usd".
-        "currency": "ALTER TABLE orders ADD COLUMN currency VARCHAR(3) NOT NULL DEFAULT 'usd'",
+        # lesson); EUR since the 2026-11-05 cutover. Databases that already
+        # carry the column keep it as created — their historical rows stay
+        # "usd" exactly as placed, never relabelled.
+        "currency": "ALTER TABLE orders ADD COLUMN currency VARCHAR(3) NOT NULL DEFAULT 'eur'",
     },
     "products": {
         # The VAT foundation: classification stays NULL on existing rows —
@@ -91,6 +93,10 @@ _ADDITIVE_COLUMNS = {
         "min_subtotal": "ALTER TABLE coupons ADD COLUMN min_subtotal NUMERIC(10,2)",
         # FALSE, not 0 — PostgreSQL refuses an integer default on a boolean.
         "once_per_customer": "ALTER TABLE coupons ADD COLUMN once_per_customer BOOLEAN NOT NULL DEFAULT FALSE",
+        # FALSE by design: pre-cutover minimums stay unapproved (USD numerals
+        # must not present themselves as euro thresholds) until an admin
+        # re-saves the coupon from the Promotions desk.
+        "min_subtotal_approved": "ALTER TABLE coupons ADD COLUMN min_subtotal_approved BOOLEAN NOT NULL DEFAULT FALSE",
     },
     "reviews": {
         # TRUE, not 1 — PostgreSQL refuses an integer default on a boolean
@@ -117,6 +123,13 @@ _DATA_FIXES = (
     "'Daily loaves, baguettes, focaccia and soft rolls — baked every morning.'",
     "UPDATE categories SET description = NULL WHERE description = "
     "'Doughnuts, maritozzo and seasonal sweet things.'",
+    # The EUR cutover (2026-11-05): the shipped announcement promised a
+    # dollar-denominated delivery threshold that is pending owner approval as
+    # an EUR figure, so the untouched default stops promising a number.
+    "UPDATE store_settings SET announcement = "
+    "'WELCOME10 takes 10% off your first order' "
+    "WHERE announcement = 'Free delivery on boxes over $50 · "
+    "WELCOME10 takes 10% off your first order'",
 )
 
 
@@ -223,6 +236,24 @@ async def lifespan(app: FastAPI):
     if settings.is_production and settings.enable_docs:
         logger.warning(
             "API docs are enabled in production — set ENABLE_DOCS=false in .env if that is not intended."
+        )
+    # Currency-bound money rules pending owner approval as EUR figures: each
+    # unset value keeps checkout fail-closed (see routers/orders). Say it at
+    # boot so a paused shop is never a mystery.
+    pending_rules = [
+        name
+        for name, value in (
+            ("SHIPPING_FEE", settings.shipping_fee),
+            ("FREE_SHIPPING_THRESHOLD", settings.free_shipping_threshold),
+            ("TAX_RATE", settings.tax_rate),
+        )
+        if value is None
+    ]
+    if pending_rules:
+        logger.warning(
+            "Checkout is PAUSED — %s pending owner approval as EUR values; "
+            "quotes and placement refuse rather than charge unapproved figures.",
+            ", ".join(pending_rules),
         )
 
     # Self-heal for payment webhooks: card orders stuck pending past their

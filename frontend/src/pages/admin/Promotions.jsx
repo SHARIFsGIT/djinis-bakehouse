@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import client, { apiError } from "../../api/client";
-import { formatDate } from "../../lib/format";
+import { formatDate, money } from "../../lib/format";
 import { REDEMPTION_RULES, oncePerCustomerFromRule, redemptionRule } from "../../lib/coupons";
 import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
@@ -14,6 +14,7 @@ export default function Promotions() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(null); // coupon row being renamed inline
+  const [minEditing, setMinEditing] = useState(null); // coupon row whose minimum is mid-edit
   const [deleting, setDeleting] = useState(null);
   const [ruleSavingId, setRuleSavingId] = useState(null); // coupon whose rule select is mid-save
 
@@ -96,6 +97,29 @@ export default function Promotions() {
     }
   };
 
+  const saveMinimum = async (coupon) => {
+    const raw = minEditing.value.trim();
+    const value = raw === "" ? null : Number(raw);
+    if (value !== null && (!Number.isFinite(value) || value < 0)) {
+      toast.error("Minimum spend must be 0 or more");
+      return;
+    }
+    try {
+      // Saving a minimum is the approval: the backend re-stamps it as a
+      // euro threshold the moment it is chosen here.
+      await client.put(`/admin/coupons/${coupon.id}`, { min_subtotal: value });
+      toast.success(
+        value === null
+          ? `${coupon.code} no longer has a minimum`
+          : `${coupon.code} now needs baskets of ${money(value)}+`,
+      );
+      setMinEditing(null);
+      await load();
+    } catch (err) {
+      toast.error(apiError(err));
+    }
+  };
+
   const confirmDelete = async () => {
     try {
       await client.delete(`/admin/coupons/${deleting.id}`);
@@ -171,6 +195,7 @@ export default function Promotions() {
               <tr className="text-xs uppercase opacity-50">
                 <th>Code</th>
                 <th className="text-right">Discount</th>
+                <th>Minimum</th>
                 <th>Note</th>
                 <th>Status</th>
                 <th className="text-right">Added</th>
@@ -226,6 +251,52 @@ export default function Promotions() {
                         onClick={() => setEditing({ id: c.id, value: String(c.percent_off) })}
                       >
                         {c.percent_off}% off
+                      </button>
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap text-right">
+                    {minEditing?.id === c.id ? (
+                      <span className="inline-flex items-center gap-1">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="input input-bordered input-xs w-20"
+                          placeholder="none"
+                          value={minEditing.value}
+                          onChange={(e) => setMinEditing({ id: c.id, value: e.target.value })}
+                          autoFocus
+                          onKeyDown={(e) => e.key === "Enter" && saveMinimum(c)}
+                        />
+                        <button type="button" className="btn btn-secondary btn-xs" onClick={() => saveMinimum(c)}>
+                          Save
+                        </button>
+                        <button type="button" className="btn btn-ghost btn-xs" onClick={() => setMinEditing(null)}>
+                          Cancel
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        title="Edit minimum spend — saving it approves the threshold in euros"
+                        onClick={() =>
+                          setMinEditing({ id: c.id, value: c.min_subtotal == null ? "" : String(c.min_subtotal) })
+                        }
+                      >
+                        {c.min_subtotal == null ? (
+                          <span className="opacity-50">none</span>
+                        ) : c.min_subtotal_approved ? (
+                          `${money(c.min_subtotal)}+`
+                        ) : (
+                          // A number recorded before the EUR cutover — a dollar
+                          // numeral, not an approved euro threshold. Shoppers
+                          // can't use the code until it is re-saved here.
+                          <span className="inline-flex items-center gap-1 text-warning">
+                            {money(c.min_subtotal)}
+                            <span className="badge badge-warning badge-xs whitespace-nowrap">pending review</span>
+                          </span>
+                        )}
                       </button>
                     )}
                   </td>

@@ -30,6 +30,7 @@ import AdminLayout from "./pages/admin/AdminLayout";
 import Dashboard from "./pages/admin/Dashboard";
 import AdminOrders from "./pages/admin/Orders";
 import AdminProducts from "./pages/admin/Products";
+import Costing from "./pages/admin/Costing";
 import AdminReviews from "./pages/admin/Reviews";
 import Promotions from "./pages/admin/Promotions";
 import AdminUsers from "./pages/admin/Users";
@@ -110,6 +111,7 @@ export default function App() {
               <Route index element={<Dashboard />} />
               <Route path="orders" element={<AdminOrders />} />
               <Route path="products" element={<AdminProducts />} />
+              <Route path="costing" element={<Costing />} />
               <Route path="reviews" element={<AdminReviews />} />
               <Route path="promotions" element={<Promotions />} />
               <Route path="users" element={<AdminUsers />} />

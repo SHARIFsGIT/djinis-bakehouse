@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { BadgeDollarSign, ScrollText, TrendingUp, Users } from "lucide-react";
+import { BadgeEuro, ScrollText, TrendingUp, Users } from "lucide-react";
 import client from "../../api/client";
 import { formatDate, hasNonActiveCurrency, money, ORDER_STATUSES, statusBadge, statusLabel } from "../../lib/format";
 import PhotoTile from "../../components/PhotoTile";
@@ -45,7 +45,7 @@ export default function Dashboard() {
     <div className="space-y-8">
       {/* Headline stats */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatTile Icon={BadgeDollarSign} label="Paid revenue" value={money(stats.paid_revenue)} sub={`${money(stats.total_revenue)} incl. pending${mixed ? " · active currency" : ""}`} />
+        <StatTile Icon={BadgeEuro} label="Paid revenue" value={money(stats.paid_revenue)} sub={`${money(stats.total_revenue)} incl. pending${mixed ? " · active currency" : ""}`} />
         <StatTile
           Icon={ScrollText}
           label="Orders"

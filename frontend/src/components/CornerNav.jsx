@@ -1,6 +1,7 @@
 import { NavLink, useNavigate } from "react-router";
 import {
   CakeSlice,
+  Calculator,
   Heart,
   LayoutDashboard,
   LogOut,
@@ -40,6 +41,7 @@ const DESK_SECTIONS = [
     tabs: [
       { to: "/admin/orders", label: "Orders", Icon: ScrollText, end: true },
       { to: "/admin/products", label: "Products", Icon: CakeSlice, end: true },
+      { to: "/admin/costing", label: "Costing", Icon: Calculator, end: true },
       { to: "/admin/reviews", label: "Reviews", Icon: Star, end: true },
       { to: "/admin/promotions", label: "Promotions", Icon: TicketPercent, end: true },
     ],

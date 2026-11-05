@@ -328,7 +328,9 @@ class QuoteOut(BaseModel):
     tax: float
     shipping_fee: float
     total: float
-    currency: str = "usd"
+    # EUR since the 2026-11-05 owner decision — filled from the validated
+    # charge currency at runtime, so the default is documentation, not logic.
+    currency: str = "eur"
 
 
 class OrderItemOut(ORMModel):
@@ -362,7 +364,8 @@ class OrderOut(ORMModel):
     total: float
     cancel_fee: float = 0
     # The money this order was placed in; every amount above is in it.
-    currency: str = "usd"
+    # Historical rows still say "usd" — the code is read off each order.
+    currency: str = "eur"
     delivery_date: date | None
     note: str | None
     recipient: str
@@ -445,11 +448,14 @@ class StorefrontOut(BaseModel):
     # The shop's money rules, straight from the environment — the storefront's
     # basket arithmetic, labels and currency symbol consume these instead of
     # keeping a second copy, so what a customer estimates can never drift from
-    # the invoice the server computes.
-    currency: str = "usd"
-    tax_rate: float
-    shipping_fee: float
-    free_shipping_threshold: float
+    # the invoice the server computes. The delivery figures are None while
+    # their EUR values await owner approval (checkout is paused then — see
+    # routers/orders._approved_money_rules); a None tax rate means no tax line
+    # (VAT treatment pending professional review), never a 0%-VAT claim.
+    currency: str = "eur"
+    tax_rate: float | None = None
+    shipping_fee: float | None = None
+    free_shipping_threshold: float | None = None
 
 
 # --------------------------------------------------------------------------
@@ -595,6 +601,9 @@ class CouponOut(ORMModel):
     percent_off: int
     description: str | None
     min_subtotal: float | None = None
+    # Pre-cutover minimums are USD numerals the app cannot honestly show as
+    # euro thresholds; False is the promotions desk's "pending review" badge.
+    min_subtotal_approved: bool = False
     is_active: bool
     once_per_customer: bool
     created_at: datetime
@@ -609,6 +618,19 @@ class CouponPreviewOut(BaseModel):
     percent_off: int
     description: str | None
     min_subtotal: float | None = None
+    # Shopper-facing responses never carry the approval flag itself — the
+    # validator below simply withdraws an unapproved minimum from view.
+    min_subtotal_approved: bool = False
+
+    @model_validator(mode="after")
+    def _hide_unapproved_minimum(self):
+        # A minimum recorded before the 2026-11-05 EUR cutover is a dollar
+        # numeral wearing a euro sign. Until an administrator re-approves
+        # it, shoppers see the saving with no threshold at all rather than
+        # a figure nobody approved (checkout refuses the code outright).
+        if self.min_subtotal and not self.min_subtotal_approved:
+            self.min_subtotal = None
+        return self
 
 
 class OrderStatusUpdateRequest(BaseModel):
@@ -976,6 +998,18 @@ class IngredientOut(ORMModel):
     updated_at: datetime
 
 
+def _require_eur_currency(value: str | None) -> str | None:
+    """The costing book is EUR-only (2026-11-05 owner decision): a figure in
+    any other currency is refused with a validation error — never converted,
+    never relabelled. None (an update leaving the field alone) passes."""
+    if value is None:
+        return None
+    code = value.strip().lower()
+    if code != "eur":
+        raise ValueError("the costing book is EUR-only — record the figure in euro (eur)")
+    return code
+
+
 class IngredientCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     category_id: int | None = None
@@ -989,6 +1023,8 @@ class IngredientCreate(BaseModel):
     invoice_ref: str | None = Field(default=None, max_length=255)
     last_reviewed: date | None = None
     review_interval_days: int | None = Field(default=None, ge=1, le=3650)
+
+    _eur_only = field_validator("currency")(_require_eur_currency)
 
 
 class IngredientUpdate(BaseModel):
@@ -1005,6 +1041,8 @@ class IngredientUpdate(BaseModel):
     # Set is_estimate to False only through the review endpoint — that is
     # the act of confirming figures; a plain edit keeps its estimate flag.
     review_interval_days: int | None = Field(default=None, ge=1, le=3650)
+
+    _eur_only = field_validator("currency")(_require_eur_currency)
 
 
 class IngredientReviewRequest(BaseModel):
@@ -1155,6 +1193,8 @@ class OverheadMonthCreate(BaseModel):
     source: str | None = Field(default=None, max_length=1000)
     confidence: Literal["high", "medium", "low"] = "medium"
 
+    _eur_only = field_validator("currency")(_require_eur_currency)
+
 
 class OverheadMonthUpdate(BaseModel):
     fixed_overhead_total: float | None = Field(default=None, ge=0)
@@ -1190,6 +1230,8 @@ class LabourRateSetRequest(BaseModel):
     rate: float = Field(gt=0)
     currency: str = Field(default="eur", min_length=3, max_length=3)
     source: str | None = Field(default=None, max_length=1000)
+
+    _eur_only = field_validator("currency")(_require_eur_currency)
 
 
 class LabourRateStatusOut(BaseModel):

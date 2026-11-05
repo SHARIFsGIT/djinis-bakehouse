@@ -57,11 +57,12 @@ class BadSignature(Exception):
     """The webhook payload failed signature verification."""
 
 
-# What the gateway will actually bill in. Stripe supports many more, but the
-# shop's money pipeline (minor units, receipts, reporting) is proven for these
-# two only — a third currency joins this set when the shop decides to charge
-# it, not by accident of configuration.
-SUPPORTED_CURRENCIES = ("usd", "eur")
+# What the gateway will actually bill in. EUR only since the 2026-11-05 owner
+# decision — new orders are placed and charged in euro, full stop. USD stays
+# readable everywhere (historical orders report and refund in the currency
+# they were placed in) but can no longer be *charged*: a checkout attempt
+# configured otherwise pauses fail-closed instead of relabelling money.
+SUPPORTED_CURRENCIES = ("eur",)
 
 
 def order_currency(order) -> str:
@@ -89,7 +90,12 @@ def cents(amount: float) -> int:
 
 
 def _tax_label(settings) -> str:
-    """The tax row's name, matching the storefront's checkout ("Tax (8.75%)")."""
+    """The tax row's name, matching the storefront's checkout ("Tax (5%)").
+    A shop with no approved rate (None while VAT treatment is pending)
+    names the row plainly rather than printing a percentage it can't stand
+    behind."""
+    if settings.tax_rate is None:
+        return "Tax"
     percent = f"{settings.tax_rate * 100:.2f}".rstrip("0").rstrip(".")
     return f"Tax ({percent}%)"
 

@@ -112,10 +112,10 @@ def make_order(
     quantity=4,
     discount=0.0,
     coupon_code=None,
-    shipping=5.99,
-    tax=1.23,
+    shipping=3.50,
+    tax=0.70,
     photo="/static/products/croissant.jpg",
-    currency="usd",
+    currency="eur",
 ):
     """An order shaped like the API's own output (croissants by default),
     totals pre-computed with the shop's money math."""
@@ -152,10 +152,12 @@ def line_total_cents(session_kwargs) -> int:
     )
 
 
-def test_lines_sum_to_the_invoice_and_the_page_is_dressed() -> None:
+def test_lines_sum_to_the_invoice_and_the_page_is_dressed(monkeypatch) -> None:
     stub = StubStripe()
     gateway = load_real_gateway(stub)
-    order = make_order()  # 14.00 + 1.23 tax + 5.99 delivery = 21.22
+    # An approved 5% rate gives the tax row its storefront-matching name.
+    monkeypatch.setattr(gateway.get_settings(), "tax_rate", 0.05, raising=True)
+    order = make_order()  # 14.00 + 0.70 tax + 3.50 delivery = 18.20
 
     result = gateway.create_checkout_session(order, BASE_URL)
 
@@ -165,7 +167,7 @@ def test_lines_sum_to_the_invoice_and_the_page_is_dressed() -> None:
 
     # The page can never disagree with the invoice: lines are the stored
     # subtotal + tax + delivery, in integer cents.
-    assert line_total_cents(kwargs) == gateway.cents(float(order.total)) == 2122
+    assert line_total_cents(kwargs) == gateway.cents(float(order.total)) == 1820
 
     # One line per product, with its photo as an absolute URL.
     croissant = kwargs["line_items"][0]
@@ -177,9 +179,9 @@ def test_lines_sum_to_the_invoice_and_the_page_is_dressed() -> None:
     ]
     # Then delivery and tax rows, named like the storefront's checkout.
     names = [line["price_data"]["product_data"]["name"] for line in kwargs["line_items"]]
-    assert names == ["Butter Croissant", "Delivery", "Tax (8.75%)"]
+    assert names == ["Butter Croissant", "Delivery", "Tax (5%)"]
     delivery = kwargs["line_items"][1]
-    assert delivery["price_data"]["unit_amount"] == 599
+    assert delivery["price_data"]["unit_amount"] == 350
 
     # The bakery's palette, a serif face, and the two copy slots.
     assert kwargs["branding_settings"] == {
@@ -287,32 +289,34 @@ def test_a_silent_stripe_becomes_gateway_unavailable() -> None:
 
 
 def test_every_line_speaks_the_currency_the_order_was_placed_in() -> None:
-    """Phase 1's core seam: a euro order builds an euro hosted page, a
-    dollar order a dollar one — the currency rides on the order itself."""
+    """Phase 1's core seam, after the 2026-11-05 cutover: the currency
+    rides on the order itself — and the shop's one charge currency is
+    euro, so every line of the hosted page speaks it."""
     stub = StubStripe()
     gateway = load_real_gateway(stub)
 
-    gateway.create_checkout_session(make_order(), BASE_URL)  # usd
-    gateway.create_checkout_session(make_order(currency="eur"), BASE_URL)
+    gateway.create_checkout_session(make_order(), BASE_URL)  # eur
 
     currencies = [
         {line["price_data"]["currency"] for line in kwargs["line_items"]}
         for kwargs in stub.sessions
     ]
-    assert currencies == [{"usd"}, {"eur"}]
+    assert currencies == [{"eur"}]
 
 
 def test_an_orders_currency_beats_the_global_setting(monkeypatch) -> None:
-    """A dollar order stays a dollar order after the shop cuts over to
-    euro: flipping the configured currency must not relabel history's
-    money on the payment page."""
+    """The order's own money, not the setting's: flipping the configured
+    currency cannot relabel the order on the payment page. (usd can't
+    legitimately be configured any more — EUR-only since the cutover —
+    which is exactly why this seam matters: a relapsed or mis-set knob
+    still can't redraw an order's money.)"""
     stub = StubStripe()
     gateway = load_real_gateway(stub)
-    monkeypatch.setattr(gateway.get_settings(), "stripe_currency", "eur", raising=True)
+    monkeypatch.setattr(gateway.get_settings(), "stripe_currency", "usd", raising=True)
 
-    gateway.create_checkout_session(make_order(), BASE_URL)  # placed as usd
+    gateway.create_checkout_session(make_order(), BASE_URL)  # placed as eur
 
-    assert {line["price_data"]["currency"] for line in stub.sessions[0]["line_items"]} == {"usd"}
+    assert {line["price_data"]["currency"] for line in stub.sessions[0]["line_items"]} == {"eur"}
 
 
 def test_coupon_discounts_ride_in_the_orders_currency() -> None:
@@ -339,16 +343,34 @@ def test_coupon_discounts_ride_in_the_orders_currency() -> None:
 def test_an_order_without_a_chargeable_currency_is_refused_not_guessed() -> None:
     """Missing, blank and unsupported codes all refuse before Stripe is
     touched. The gateway never falls back to the shop's current currency:
-    guessing would charge an order in money it wasn't placed in."""
+    guessing would charge an order in money it wasn't placed in. USD is on
+    the list since the EUR-only cutover — dollar history stays readable
+    everywhere, but it can never be charged again."""
     stub = StubStripe()
     gateway = load_real_gateway(stub)
 
-    for bad in (None, "", "   ", "gbp", "bitcoin"):
+    for bad in (None, "", "   ", "usd", "USD", "gbp", "bitcoin"):
         with pytest.raises(gateway.InvalidOrderCurrency):
             gateway.create_checkout_session(make_order(currency=bad), BASE_URL)
 
     assert stub.sessions == []
     assert stub.coupons == []
+
+
+def test_the_tax_row_never_prints_an_unapproved_rate(monkeypatch) -> None:
+    """With no approved tax rate (None while VAT treatment is pending), a
+    taxed order's row is named plainly — the page must not print a
+    percentage the shop can't stand behind, and must not crash either."""
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+    monkeypatch.setattr(gateway.get_settings(), "tax_rate", None, raising=True)
+
+    gateway.create_checkout_session(make_order(tax=0.70), BASE_URL)
+
+    names = [
+        line["price_data"]["product_data"]["name"] for line in stub.sessions[0]["line_items"]
+    ]
+    assert names == ["Butter Croissant", "Delivery", "Tax"]
 
 
 def test_upper_case_currency_codes_normalize() -> None:

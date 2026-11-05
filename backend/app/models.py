@@ -7,7 +7,7 @@ server databases); valid values are enforced at the API layer by Pydantic.
 import enum
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base, utcnow
@@ -207,8 +207,16 @@ class Coupon(Base):
     percent_off: Mapped[int] = mapped_column(Integer)  # 1..100
     description: Mapped[str | None] = mapped_column(String(255))
     # Minimum basket subtotal the code applies to (None/0 = no minimum).
-    # Powers the "add $X more to unlock" nudge on the basket page.
+    # Powers the "add €X more to unlock" nudge on the basket page.
     min_subtotal: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    # A minimum recorded before the 2026-11-05 EUR cutover is a USD numeral;
+    # the application cannot tell it from a deliberately chosen euro figure,
+    # so it stays False (the coupon's minimum unshown, the code unappliable)
+    # until an administrator re-saves the coupon from the Promotions desk —
+    # that save is the approval. Rows minted through the desk carry True.
+    min_subtotal_approved: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("FALSE")
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # One-and-done per customer — the welcome voucher's small print.
     # "Used" means a standing order carried the code; cancelling that order
@@ -386,10 +394,11 @@ class Order(Base):
     total: Mapped[float] = mapped_column(Numeric(10, 2))
     # Kept by the shop when a customer cancels after baking started (0 otherwise)
     cancel_fee: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
-    # The money this order was placed in — a 3-letter code ("usd" historically,
-    # "eur" once the shop cuts over). Amounts are never converted: the code is
+    # The money this order was placed in — a 3-letter code. New orders are
+    # EUR only (2026-11-05 owner decision); rows that say "usd" are history
+    # and stay exactly as placed. Amounts are never converted: the code is
     # how every Numeric column above should be read.
-    currency: Mapped[str] = mapped_column(String(3), default="usd")
+    currency: Mapped[str] = mapped_column(String(3), default="eur")
     delivery_date: Mapped[date | None] = mapped_column(Date)
     note: Mapped[str | None] = mapped_column(Text)
 
@@ -545,8 +554,11 @@ class AdminNotification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
-# Storefront copy the admin can rewrite — these are the out-of-the-box lines
-DEFAULT_ANNOUNCEMENT = "Free delivery on boxes over $50 · WELCOME10 takes 10% off your first order"
+# Storefront copy the admin can rewrite — these are the out-of-the-box lines.
+# No delivery threshold is promised: the free-delivery threshold is a
+# currency-bound figure pending owner approval as an EUR value, so the
+# default copy must not quote one (the baker can write her own once set).
+DEFAULT_ANNOUNCEMENT = "WELCOME10 takes 10% off your first order"
 DEFAULT_TODAY_NOTE = "Croffles out at 8, doughnuts at 9"
 DEFAULT_HERO_IMAGE = "/static/site/baker.jpg"
 # The home page's scrolling strip — one phrase per line, the baker's to edit.

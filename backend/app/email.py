@@ -192,8 +192,9 @@ def order_receipt_email(receipt: dict) -> tuple[str, str, str]:
         )
 
     # The order's own money — receipts for historical orders stay in the
-    # currency they were placed in, whatever the shop charges today.
-    currency = receipt.get("currency", "usd")
+    # currency they were placed in, whatever the shop charges today (EUR for
+    # every order since the 2026-11-05 cutover).
+    currency = receipt.get("currency", "eur")
 
     def _amount(value: float) -> str:
         return money(value, currency)
@@ -208,7 +209,9 @@ def order_receipt_email(receipt: dict) -> tuple[str, str, str]:
         if receipt["discount"]
         else ""
     )
-    tax_row = _row("Tax", _amount(receipt["tax"]))
+    # No tax line at all while no rate is approved — a "Tax €0.00" row would
+    # read as a 0%-VAT decision, and VAT treatment is explicitly pending.
+    tax_row = _row("Tax", _amount(receipt["tax"])) if receipt["tax"] else ""
     delivery_row = _row("Delivery", shipping_label)
     total_row = _row("Total", _amount(receipt["total"]), bold=True)
     payment_line = (
@@ -227,7 +230,7 @@ def order_receipt_email(receipt: dict) -> tuple[str, str, str]:
             if receipt["discount"]
             else ""
         )
-        + f"  Tax  {_amount(receipt['tax'])}\n"
+        + (f"  Tax  {_amount(receipt['tax'])}\n" if receipt["tax"] else "")
         + f"  Delivery  {shipping_label}\n"
         + f"  Total  {_amount(receipt['total'])}\n\n"
         + f"{payment_line}\n\nThank you for baking with us.\n"

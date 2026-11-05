@@ -30,6 +30,10 @@ const PROMISES = [
     Icon: Truck,
     // A function so the promise stays true whenever the baker retunes the
     // money rules — the threshold and the symbol follow the shop's config.
+    // And while no threshold is approved (the old $50 figure is not an
+    // approved euro value), the card drops out of the strip entirely: no
+    // number, and no freebie, the shop hasn't promised.
+    when: () => shopConfig.freeShippingThreshold != null,
     title: () => `Free delivery over ${money(shopConfig.freeShippingThreshold)}`,
   },
   {
@@ -160,9 +164,11 @@ export default function Home() {
                 Bulk Order
               </Link>
             </div>
-            {/* The shop's four promises — icons, two columns, no ceremony */}
+            {/* The shop's promises — icons, two columns, no ceremony. The
+                free-delivery card hides itself while its figure is pending
+                owner approval as an EUR value. */}
             <div className="mt-10 grid max-w-md grid-cols-1 gap-x-6 gap-y-3.5 sm:grid-cols-2">
-              {PROMISES.map(({ Icon, title }) => (
+              {PROMISES.filter((p) => !p.when || p.when()).map(({ Icon, title }) => (
                 <div key={String(title)} className="flex items-center gap-3">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary/15 text-secondary">
                     <Icon size={17} />

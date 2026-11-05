@@ -820,6 +820,9 @@ def create_coupon(payload: CouponCreateRequest, admin: CurrentAdmin, db: DbSessi
         percent_off=payload.percent_off,
         description=payload.description,
         min_subtotal=payload.min_subtotal or None,
+        # A threshold typed at the desk is chosen in today's currency — the
+        # act of saving it is the approval a pre-cutover numeral never had.
+        min_subtotal_approved=(payload.min_subtotal or 0) > 0,
         once_per_customer=payload.once_per_customer,
     )
     db.add(coupon)
@@ -833,7 +836,14 @@ def update_coupon(coupon_id: int, payload: CouponUpdateRequest, admin: CurrentAd
     coupon = db.get(Coupon, coupon_id)
     if coupon is None:
         raise HTTPException(status_code=404, detail="Coupon not found")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    # Re-saving a minimum from the desk (re)approves it as a euro threshold —
+    # the reviewed escape hatch for coupons carrying pre-cutover USD numerals.
+    # Clearing it to None takes the question away entirely.
+    if "min_subtotal" in updates:
+        coupon.min_subtotal = updates.pop("min_subtotal") or None
+        coupon.min_subtotal_approved = (coupon.min_subtotal or 0) > 0
+    for field, value in updates.items():
         setattr(coupon, field, value)
     db.commit()
     db.refresh(coupon)
@@ -1144,21 +1154,26 @@ def delete_coming_soon(item_id: int, admin: CurrentAdmin, db: DbSession):
 
 # Loyalty, in words the baker can defend to a customer's face: kept orders
 # (cancelled ones never count) and a visit inside the window. Three kept
-# orders earns "loyal"; $150 kept or ten orders earns "vip"; anyone who
-# earned a tier and then went quiet for the window is "lapsed" — exactly
-# who a win-back voucher is for.
+# orders earns "loyal"; ten orders earns "vip"; anyone who earned a tier
+# and then went quiet for the window is "lapsed" — exactly who a win-back
+# voucher is for.
 LOYAL_ORDERS = 3
 VIP_ORDERS = 10
-VIP_SPEND = 150
+# The spend-based VIP route needs an approved EUR threshold (VIP_SPEND_THRESHOLD).
+# The old $150 figure is not an approved EUR value, so until the owner sets
+# one, tiers ride on order counts alone — nobody is silently promoted by a
+# relabelled dollar figure.
 LOYAL_WINDOW_DAYS = 90
 
 
 def _loyalty(order_count: int, spend: float, last_order_at) -> str:
+    vip_spend = get_settings().vip_spend_threshold
     if last_order_at is None:
         return "regular"
     days_since = (utcnow() - last_order_at).days
     fresh = days_since <= LOYAL_WINDOW_DAYS
-    if spend >= VIP_SPEND or order_count >= VIP_ORDERS:
+    spend_is_vip = vip_spend is not None and spend >= float(vip_spend)
+    if spend_is_vip or order_count >= VIP_ORDERS:
         return "vip" if fresh else "lapsed"
     if order_count >= LOYAL_ORDERS:
         return "loyal" if fresh else "lapsed"
@@ -1174,8 +1189,9 @@ def _customer_roll(db: DbSession) -> list[AdminCustomerOut]:
     into one "lifetime" number: the headline lifetime_spend is what the
     customer has spent in the shop's *active* currency, and the full split
     rides in lifetime_spend_by_currency. The loyalty tier judges the active
-    currency's spend too — its thresholds are money, not ratios — while the
-    order count and last visit span everything, being plain facts."""
+    currency's spend too — though the spend-based VIP route stays off until
+    an EUR threshold is approved (VIP_SPEND_THRESHOLD) — while the order
+    count and last visit span everything, being plain facts."""
     active = str(get_settings().stripe_currency or "").strip().lower()
     users = list(db.scalars(select(User).order_by(User.created_at.desc())))
     spend_by_user: dict[int, dict[str, float]] = {}

@@ -32,15 +32,30 @@ class Settings(BaseSettings):
 
     # Business rules
     bakery_name: str = "Djini's Bakehouse"
-    tax_rate: float = 0.0875
-    shipping_fee: float = 5.99
-    free_shipping_threshold: float = 50.0
+    # ── Currency-bound money rules — PENDING OWNER APPROVAL (2026-11-05) ──
+    # The shop now charges euro only. The old figures below were USD values
+    # and are NOT approved EUR values, so none of them ships as a default:
+    # each stays None (checkout paused, fail-closed) until the owner sets an
+    # explicit EUR figure in the environment. Kept here for review only:
+    #   tax_rate              was 0.0875  (US sales tax; German VAT is pending
+    #                         professional tax review — setting a rate here is
+    #                         an exclusive-mode sales-tax knob, not a VAT
+    #                         decision; the VAT-inclusive engine stays off)
+    #   shipping_fee          was 5.99     (USD delivery fee)
+    #   free_shipping_threshold was 50.0   (USD free-delivery threshold)
+    #   vip_spend_threshold   was 150      (USD lifetime-spend VIP threshold)
+    # See docs/operations/EUR_MIGRATION_RUNBOOK.md for what must be confirmed.
+    tax_rate: float | None = None
+    shipping_fee: float | None = None
+    free_shipping_threshold: float | None = None
+    vip_spend_threshold: float | None = None
     # Checkout pricing mode. "exclusive" — today's behaviour: net shelf
-    # prices, tax added at the register (the USD shop as it runs now).
-    # "inclusive" — the German target: gross shelf prices, VAT extracted per
-    # line by the engine in app/vat.py. Flipped only at the EUR cutover,
-    # with the tax-adviser classifications approved; nothing reads it until
-    # then, so setting it changes nothing by itself.
+    # prices, tax added at the register while a rate is approved (no
+    # approved rate, no tax line at all). "inclusive" — the German target:
+    # gross shelf prices, VAT extracted per line by the engine in app/vat.py.
+    # The EUR cutover (2026-11-05) did NOT flip this: inclusive mode waits
+    # for the professional VAT review's classifications, and nothing reads
+    # it until then, so setting it changes nothing by itself.
     tax_mode: str = "exclusive"
 
     # CORS
@@ -73,7 +88,10 @@ class Settings(BaseSettings):
     # dashboard to get one). Keys belong in the environment, never in code.
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
-    stripe_currency: str = "usd"
+    # The shop's one charge currency (2026-11-05 owner decision: EUR only).
+    # Any other value pauses checkout fail-closed rather than charging money
+    # the pipeline hasn't approved — see routers/orders._charge_currency.
+    stripe_currency: str = "eur"
 
     # "Continue with Facebook" — Facebook Login for the web. Set the App ID
     # and secret from the app's dashboard and the button appears on the login

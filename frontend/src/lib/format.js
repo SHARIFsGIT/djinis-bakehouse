@@ -1,16 +1,19 @@
 /** Shared formatting helpers and domain constants. */
 
-/* The shop's money rules. These defaults mirror the server's .env so the
-   storefront renders correctly before (or without) the /store fetch; App.jsx
-   applies the live values at boot. Charged figures no longer live here at
-   all — they come from POST /api/orders/quote — but the tax label and the
-   free-delivery progress bar still read these, so they stay in tune with
-   what the server charges. */
+/* The shop's money rules. EUR-only since the 2026-11-05 cutover: the
+   currency defaults to euro and the old USD figures (8.75% tax, $5.99
+   delivery, $50 free-delivery threshold) are NOT approved euro values, so
+   they ship as null — nothing here may quietly render as one. App.jsx
+   applies the live values from /store at boot; each rule stays null until
+   the owner approves an EUR figure, and the surfaces that read them (tax
+   label, delivery nudge) hide rather than guess, mirroring the server's
+   own fail-closed checkout pause. Charged figures never live here at all
+   — they come from POST /api/orders/quote. */
 export const shopConfig = {
-  currency: "USD",
-  taxRate: 0.0875,
-  shippingFee: 5.99,
-  freeShippingThreshold: 50,
+  currency: "EUR",
+  taxRate: null,
+  shippingFee: null,
+  freeShippingThreshold: null,
 };
 
 export const applyShopConfig = (data = {}) => {
@@ -20,6 +23,13 @@ export const applyShopConfig = (data = {}) => {
     ["shippingFee", data.shipping_fee],
     ["freeShippingThreshold", data.free_shipping_threshold],
   ]) {
+    // null is the server saying "no approved figure", not "zero" — honour
+    // it (clearing any stale value) instead of letting Number(null) === 0
+    // turn a pending rule into a promised freebie.
+    if (value === null || value === undefined) {
+      shopConfig[key] = null;
+      continue;
+    }
     const n = Number(value);
     if (Number.isFinite(n) && n >= 0) shopConfig[key] = n;
   }
@@ -68,7 +78,7 @@ const currencyFormatter = (code) => {
 export const money = (n, currency) => {
   const code =
     currency === undefined || currency === null
-      ? String(shopConfig.currency || "USD").toUpperCase()
+      ? String(shopConfig.currency || "EUR").toUpperCase()
       : String(currency).trim().toUpperCase();
   const value = Number(n ?? 0);
   const formatter = currencyFormatter(code);
@@ -211,10 +221,15 @@ export const PAYMENT_STATUSES = {
   partially_refunded: { label: "Partially refunded", badge: "badge-warning" },
 };
 
-/** "Tax (8.75%)" — the label comes from the same rule the server taxes by
-    (applied to the discounted subtotal). The amount itself is no longer
-    computed here: basket tallies come from POST /api/orders/quote. */
+/** "Tax (5%)" — the label comes from the same rule the server taxes by
+    (applied to the discounted subtotal). With no approved rate (null while
+    VAT treatment is pending review) it names the row plainly, exactly like
+    the server's own Stripe page — and in practice the row is hidden while
+    the quoted tax is zero, so no "Tax €0.00" ever reads as a 0%-VAT
+    decision. The amount itself is never computed here: basket tallies come
+    from POST /api/orders/quote. */
 export const taxLabel = () => {
+  if (shopConfig.taxRate === null || shopConfig.taxRate === undefined) return "Tax";
   const percent = (shopConfig.taxRate * 100).toFixed(2).replace(/\.?0+$/, "");
   return `Tax (${percent}%)`;
 };
