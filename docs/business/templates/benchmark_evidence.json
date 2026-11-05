@@ -1,0 +1,312 @@
+{
+  "meta": {
+    "title": "Djini's Bakehouse — Initial Market Benchmark Evidence Dataset",
+    "version": "1.0",
+    "date_compiled": "2026-11-04",
+    "compiled_for": "Phase 0 — Real Market Pricing Implementation (read-only inspection & research)",
+    "spec_baseline": "DJINIS_BAKEHOUSE_BUSINESS_PRICING_SPEC_V1.1.md (§11 Market benchmarking methodology, §21 benchmark_entries)",
+    "principle": "Never invent prices or treat generic market estimates as official competitor prices. An empty cell is recorded as null; an unverifiable claim is marked in limitations. No recommended prices are derived here.",
+    "evidence_hierarchy": {
+      "High": "Direct page fetch with the price visible on the page (source_url returns the priced page).",
+      "Medium": "Official-domain search snippet, reputable-press price survey, or delivery-platform listing (platform markup caveat applies).",
+      "Low": "Unofficial sources (fan/aggregator price lists, social-media ads), supermarket prospekt aggregators, or bot-gated pages where the price could not be independently fetched.",
+      "excluded": "Generic market estimates; non-comparable geographies (e.g. Lidl US $0.49); anything without a named competitor and source."
+    },
+    "confidence_counts": { "High": 12, "Medium": 9, "Low": 7 },
+    "region_weighting_target": "0.6 x Bremen normalized average + 0.4 x Germany-wide normalized average (spec §11)",
+    "weighted_index_status": "NOT COMPUTABLE YET — Djini product weights/portions are not recorded (Task D blocker W-1), so Djini prices cannot be normalized to per-100g for comparison; additionally Pastries and Desserts have fewer than 3 reliable Bremen-region comparables, so the §11 limited-sample warning would apply to every category today.",
+    "spec_alignment": {
+      "benchmark_entries_fields_covered": ["competitor_name", "region", "location", "product_name", "size_g", "price", "currency", "source_url", "checked_at"],
+      "fields_beyond_current_spec_proposal": ["djini_category", "djini_compared_products", "size_published", "price_basis", "price_per_100g_eur", "source_type", "evidence_confidence", "comparability_limitations"],
+      "phase0_finding": "The spec §21 benchmark_entries proposal lacks provenance fields required by the Phase-0 evidence standard (evidence_confidence, comparability_limitations, price_basis, source_type). Recommend a spec amendment before Phase 3 implementation; nothing implemented in Phase 0."
+    },
+    "vat_note": "All EUR prices are German consumer prices and are presumed VAT-inclusive; entries 21-23 state 'inkl. 7 % MwSt.' explicitly on-page (bakery goods = reduced rate). Djini's current storefront is USD tax-exclusive, so direct price comparison with these figures requires the planned EUR-inclusive cutover context (spec Phase 4).",
+    "excluded_from_dataset": [
+      "Lidl US butter croissant $0.49 — non-comparable geography",
+      "Generic 'bakery market average' estimates — excluded by §11 and by the Phase-0 brief",
+      "Bremen bakeries identified but with no published online prices (Sam urban Baker, Baguetterie Fillo, French Connection) — recorded in the audit report as in-store collection targets, not as price rows"
+    ]
+  },
+  "entries": [
+    {
+      "entry_id": 1, "djini_category": "Breads", "djini_compared_products": ["french-baguette"],
+      "competitor_name": "Effenberger Vollkorn-Bäckerei", "competitor_product_name": "Vollkorn Weizen-Baguette",
+      "region": "bremen", "location": "Bremen (Osterholz-Tenever)",
+      "size_published": "500 g", "size_g": 500, "price_eur": 5.50, "currency": "EUR",
+      "price_basis": "incl. VAT (site shows 1000 g / 11.00 EUR)", "price_per_100g_eur": 1.10,
+      "source_url": "https://www.effenberger-bremen.de/index.php/sortiment/hefebrot-baguette",
+      "source_type": "page_fetch", "date_accessed": "2026-11-04", "evidence_confidence": "High",
+      "comparability_limitations": "Wholegrain specialty baguette; Djini baguette has no published weight so per-kg comparison is blocked until weight is recorded"
+    },
+    {
+      "entry_id": 2, "djini_category": "Breads", "djini_compared_products": ["beef-floss-bread", "blueberry-cheese-bread", "wool-roll-bread"],
+      "competitor_name": "Effenberger Vollkorn-Bäckerei", "competitor_product_name": "Vollkorn Weizen-Hefe-Brot",
+      "region": "bremen", "location": "Bremen (Osterholz-Tenever)",
+      "size_published": "750 g", "size_g": 750, "price_eur": 5.50, "currency": "EUR",
+      "price_basis": "incl. VAT (site states 7.33 EUR/kg)", "price_per_100g_eur": 0.73,
+      "source_url": "https://www.effenberger-bremen.de/index.php/sortiment/hefebrot-baguette",
+      "source_type": "page_fetch", "date_accessed": "2026-11-04", "evidence_confidence": "High",
+      "comparability_limitations": "Plain wholegrain yeast loaf — simpler product than Djini's filled/enriched loaves; lower-bound comparable"
+    },
+    {
+      "entry_id": 3, "djini_category": "Breads", "djini_compared_products": ["triple-cheese-bread", "wool-roll-bread"],
+      "competitor_name": "Effenberger Vollkorn-Bäckerei", "competitor_product_name": "Vollkorn Weizen-Hefe-Sesam-Brot",
+      "region": "bremen", "location": "Bremen (Osterholz-Tenever)",
+      "size_published": "750 g", "size_g": 750, "price_eur": 5.50, "currency": "EUR",
+      "price_basis": "incl. VAT (site states 7.33 EUR/kg)", "price_per_100g_eur": 0.73,
+      "source_url": "https://www.effenberger-bremen.de/index.php/sortiment/hefebrot-baguette",
+      "source_type": "page_fetch", "date_accessed": "2026-11-04", "evidence_confidence": "High",
+      "comparability_limitations": "Sesam variant of the base loaf; same lower-bound caveat as entry 2"
+    },
+    {
+      "entry_id": 4, "djini_category": "Breads", "djini_compared_products": ["wool-roll-bread", "beef-floss-bread"],
+      "competitor_name": "Effenberger Vollkorn-Bäckerei", "competitor_product_name": "Vollkorn Butter-Honig-Brot",
+      "region": "bremen", "location": "Bremen (Osterholz-Tenever)",
+      "size_published": "500 g", "size_g": 500, "price_eur": 6.20, "currency": "EUR",
+      "price_basis": "incl. VAT (site states 12.40 EUR/kg)", "price_per_100g_eur": 1.24,
+      "source_url": "https://www.effenberger-bremen.de/index.php/sortiment/hefebrot-baguette",
+      "source_type": "page_fetch", "date_accessed": "2026-11-04", "evidence_confidence": "High",
+      "comparability_limitations": "Enriched (butter/honey) wholegrain bread — closer analogue to Djini's enriched loaves"
+    },
+    {
+      "entry_id": 5, "djini_category": "Breads", "djini_compared_products": ["christmas-stollen (fruit-bread analogue)"],
+      "competitor_name": "Effenberger Vollkorn-Bäckerei", "competitor_product_name": "Vollkorn Früchtebrot",
+      "region": "bremen", "location": "Bremen (Osterholz-Tenever)",
+      "size_published": "500 g", "size_g": 500, "price_eur": 8.00, "currency": "EUR",
+      "price_basis": "incl. VAT; site prints 15.60 EUR/kg but line-price arithmetic gives 16.00 EUR/kg — line price recorded as authoritative", "price_per_100g_eur": 1.60,
+      "source_url": "https://www.effenberger-bremen.de/index.php/sortiment/hefebrot-baguette",
+      "source_type": "page_fetch", "date_accessed": "2026-11-04", "evidence_confidence": "High",
+      "comparability_limitations": "Site's own per-kg figure contradicts its line price (15.60 vs 16.00 EUR/kg); per-100g here computed from line price"
+    },
+    {
+      "entry_id": 6, "djini_category": "Desserts", "djini_compared_products": ["christmas-stollen"],
+      "competitor_name": "Effenberger Vollkorn-Bäckerei", "competitor_product_name": "Vollkorn Rosinen-Stuten",
+      "region": "bremen", "location": "Bremen (Osterholz-Tenever)",
+      "size_published": "500 g", "size_g": 500, "price_eur": 7.40, "currency": "EUR",
+      "price_basis": "incl. VAT (site states 14.80 EUR/kg)", "price_per_100g_eur": 1.48,
+      "source_url": "https://www.effenberger-bremen.de/index.php/sortiment/hefebrot-baguette",
+      "source_type": "page_fetch", "date_accessed": "2026-11-04", "evidence_confidence": "High",
+      "comparability_limitations": "Sweet raisin stollen-style bread; closest Bremen-verified analogue to Christmas Stollen; seasonal availability not stated"
+    },
+    {
+      "entry_id": 7, "djini_category": "Breads", "djini_compared_products": ["french-baguette", "fresh-bagels", "pretzels-and-bagels"],
+      "competitor_name": "Kamps", "competitor_product_name": "7 Brötchen (Saturday bundle)",
+      "region": "bremen", "location": "Kamps Bremen Hauptbahnhof (Bahnhofsplatz 15)",
+      "size_published": "7 rolls", "size_g": null, "price_eur": 3.95, "currency": "EUR",
+      "price_basis": "incl. VAT (assumed, German retail); approx. 0.56 EUR/roll", "price_per_100g_eur": null,
+      "source_url": "https://www.kamps.de/", "source_type": "official_snippet", "date_accessed": "2026-11-04",
+      "evidence_confidence": "Medium",
+      "comparability_limitations": "Promotional weekend bundle at the station branch, not an everyday unit price; per-roll figure is derived, not published"
+    },
+    {
+      "entry_id": 8, "djini_category": "Pastries", "djini_compared_products": ["butter-croissant"],
+      "competitor_name": "Kamps (Kamps Lieferservice, official delivery arm)", "competitor_product_name": "Französisches Buttercroissant",
+      "region": "germany", "location": "Krefeld delivery zone (kamps-lieferservice.de)",
+      "size_published": "1 piece (size not stated)", "size_g": null, "price_eur": 1.59, "currency": "EUR",
+      "price_basis": "incl. MwSt. (stated on page); plus delivery fees", "price_per_100g_eur": null,
+      "source_url": "https://kamps-lieferservice.de/krefeld/liefermenue/franzoesisches-buttercroissant",
+      "source_type": "page_fetch", "date_accessed": "2026-11-04", "evidence_confidence": "High",
+      "comparability_limitations": "Delivery-menu price: minimum order EUR 80, no weekend delivery, Bremen not in the delivery area; Kamps runs Bremen station/airport stores but in-store prices may differ"
+    },
+    {
+      "entry_id": 9, "djini_category": "Pastries", "djini_compared_products": ["butter-croissant"],
+      "competitor_name": "Kamps (Kamps Lieferservice)", "competitor_product_name": "Französisches Buttercroissant",
+      "region": "germany", "location": "Berlin delivery zone",
+      "size_published": "1 piece (size not stated)", "size_g": null, "price_eur": 2.20, "currency": "EUR",
+      "price_basis": "incl. MwSt. (stated); plus delivery fees", "price_per_100g_eur": null,
+      "source_url": "https://kamps-lieferservice.de/", "source_type": "official_snippet", "date_accessed": "2026-11-04",
+      "evidence_confidence": "Medium",
+      "comparability_limitations": "Snippet-sourced from official domain; same delivery-menu caveats as entry 8; notable Berlin-vs-Krefeld spread (1.59 vs 2.20)"
+    },
+    {
+      "entry_id": 10, "djini_category": "Pastries", "djini_compared_products": ["butter-croissant"],
+      "competitor_name": "Kamps (Kamps Lieferservice)", "competitor_product_name": "Französisches Buttercroissant",
+      "region": "germany", "location": "Düsseldorf delivery zone",
+      "size_published": "1 piece (size not stated)", "size_g": null, "price_eur": 1.59, "currency": "EUR",
+      "price_basis": "incl. MwSt. (stated); plus delivery fees", "price_per_100g_eur": null,
+      "source_url": "https://kamps-lieferservice.de/", "source_type": "official_snippet", "date_accessed": "2026-11-04",
+      "evidence_confidence": "Medium",
+      "comparability_limitations": "Snippet-sourced from official domain; same delivery-menu caveats as entry 8"
+    },
+    {
+      "entry_id": 11, "djini_category": "Pastries", "djini_compared_products": ["butter-croissant"],
+      "competitor_name": "Kamps (via Wolt)", "competitor_product_name": "Buttercroissant",
+      "region": "germany", "location": "Berlin (Wolt listing, Kamps Schultheiss-Quartier)",
+      "size_published": "1 piece (Stk.)", "size_g": null, "price_eur": 2.90, "currency": "EUR",
+      "price_basis": "incl. VAT; app price", "price_per_100g_eur": null,
+      "source_url": "https://wolt.com/de/deu/berlin/venue/kamps-schultheiss-quartier",
+      "source_type": "delivery_platform", "date_accessed": "2026-11-04", "evidence_confidence": "Medium",
+      "comparability_limitations": "Delivery-app price includes platform/delivery markup; snippet-sourced, listing not fetched"
+    },
+    {
+      "entry_id": 12, "djini_category": "Pastries", "djini_compared_products": ["butter-croissant"],
+      "competitor_name": "Kamps (via GoFlink)", "competitor_product_name": "2 Stk. Kamps Französisches Buttercroissant",
+      "region": "germany", "location": "Germany (GoFlink quick-commerce listing)",
+      "size_published": "2 pieces", "size_g": null, "price_eur": 3.39, "currency": "EUR",
+      "price_basis": "approx. 1.70 EUR/piece; incl. VAT; app price", "price_per_100g_eur": null,
+      "source_url": "https://www.goflink.com/shop/en-DE/product/2-stk-kamps-franz-buttercroissant-11016694",
+      "source_type": "delivery_platform", "date_accessed": "2026-11-04", "evidence_confidence": "Low",
+      "comparability_limitations": "Page returns HTTP 403 to automated fetch — price taken from search result, not independently verified; includes delivery markup"
+    },
+    {
+      "entry_id": 13, "djini_category": "Pastries", "djini_compared_products": ["butter-croissant"],
+      "competitor_name": "BackWerk", "competitor_product_name": "Butter-Croissant",
+      "region": "germany", "location": "Germany-wide chain",
+      "size_published": "1 piece", "size_g": null, "price_eur": 1.99, "currency": "EUR",
+      "price_basis": "incl. VAT (assumed, German retail)", "price_per_100g_eur": null,
+      "source_url": "https://sites.google.com/view/backwerk-preise", "source_type": "unofficial", "date_accessed": "2026-11-04",
+      "evidence_confidence": "Low",
+      "comparability_limitations": "UNOFFICIAL price list (Google Sites fan/aggregator page); official back-werk.de product page exists but publishes no price"
+    },
+    {
+      "entry_id": 14, "djini_category": "Pastries", "djini_compared_products": ["apple-strudel"],
+      "competitor_name": "BackWerk", "competitor_product_name": "Apfelstrudel",
+      "region": "germany", "location": "Germany-wide chain",
+      "size_published": "1 piece", "size_g": null, "price_eur": 2.99, "currency": "EUR",
+      "price_basis": "incl. VAT (assumed)", "price_per_100g_eur": null,
+      "source_url": "https://sites.google.com/view/backwerk-preise", "source_type": "unofficial", "date_accessed": "2026-11-04",
+      "evidence_confidence": "Low",
+      "comparability_limitations": "Same unofficial source as entry 13; official page publishes no price"
+    },
+    {
+      "entry_id": 15, "djini_category": "Pastries", "djini_compared_products": ["pretzels-and-bagels", "fresh-bagels"],
+      "competitor_name": "BackWerk", "competitor_product_name": "Laugenstange",
+      "region": "germany", "location": "Germany-wide chain",
+      "size_published": "1 piece", "size_g": null, "price_eur": 1.79, "currency": "EUR",
+      "price_basis": "incl. VAT (assumed)", "price_per_100g_eur": null,
+      "source_url": "https://sites.google.com/view/backwerk-preise", "source_type": "unofficial", "date_accessed": "2026-11-04",
+      "evidence_confidence": "Low",
+      "comparability_limitations": "Laugenstange (lye stick) only loosely comparable to Djini's soft pretzel/bagel box; unofficial source"
+    },
+    {
+      "entry_id": 16, "djini_category": "Pastries", "djini_compared_products": ["apple-strudel"],
+      "competitor_name": "Kamps (Kamps Lieferservice, official delivery arm)", "competitor_product_name": "Apfeltasche",
+      "region": "germany", "location": "Krefeld delivery zone",
+      "size_published": "1 piece (size not stated)", "size_g": null, "price_eur": 2.49, "currency": "EUR",
+      "price_basis": "incl. MwSt. (stated on page)", "price_per_100g_eur": null,
+      "source_url": "https://kamps-lieferservice.de/krefeld/liefermenue/",
+      "source_type": "page_fetch", "date_accessed": "2026-11-04", "evidence_confidence": "High",
+      "comparability_limitations": "Apple pocket rather than strudel — closest chain analogue found; Djini strudel is hand-stretched sheet pastry (different craft tier); delivery-menu caveats as entry 8"
+    },
+    {
+      "entry_id": 17, "djini_category": "Breads", "djini_compared_products": ["beef-floss-bread"],
+      "competitor_name": "Kamps (Kamps Lieferservice, official delivery arm)", "competitor_product_name": "Kürbiskernbrötchen mit Brie",
+      "region": "germany", "location": "Krefeld delivery zone",
+      "size_published": "1 piece (size not stated)", "size_g": null, "price_eur": 3.69, "currency": "EUR",
+      "price_basis": "incl. MwSt. (stated on page)", "price_per_100g_eur": null,
+      "source_url": "https://kamps-lieferservice.de/krefeld/liefermenue/",
+      "source_type": "page_fetch", "date_accessed": "2026-11-04", "evidence_confidence": "High",
+      "comparability_limitations": "Filled savoury roll — loose analogue to Djini's filled breads; delivery-menu caveats as entry 8"
+    },
+    {
+      "entry_id": 18, "djini_category": "Pastries", "djini_compared_products": ["butter-croissant"],
+      "competitor_name": "Lidl", "competitor_product_name": "Butter-Croissant 6er pack (6 x 60 g)",
+      "region": "germany", "location": "Germany (supermarket; price via Prospekt aggregators)",
+      "size_published": "6 pieces / 360 g", "size_g": 360, "price_eur": null, "currency": "EUR",
+      "price_basis": "price not stated on product page; weekly Prospekt only", "price_per_100g_eur": null,
+      "source_url": "https://www.lidl.at/", "source_type": "aggregator", "date_accessed": "2026-11-04",
+      "evidence_confidence": "Low",
+      "comparability_limitations": "Supermarket promotional floor: kaufda.de KW45 prospekt showed ~0.99 EUR deal with ambiguous unit; not an artisan comparable — reference floor only; Lidl US $0.49 listing EXCLUDED as non-comparable"
+    },
+    {
+      "entry_id": 19, "djini_category": "Pastries", "djini_compared_products": ["glazed-doughnuts", "maritozzo"],
+      "competitor_name": "Kamps", "competitor_product_name": "Zimtschnecke mit Frischkäse-Frosting",
+      "region": "germany", "location": "Germany-wide chain",
+      "size_published": "1 piece", "size_g": null, "price_eur": 3.29, "currency": "EUR",
+      "price_basis": "incl. VAT (assumed)", "price_per_100g_eur": null,
+      "source_url": "https://www.instagram.com/", "source_type": "unofficial", "date_accessed": "2026-11-04",
+      "evidence_confidence": "Low",
+      "comparability_limitations": "Price seen in Instagram advertising, not on an official price page; treat as indicative only"
+    },
+    {
+      "entry_id": 20, "djini_category": "Pastries", "djini_compared_products": ["glazed-doughnuts", "maritozzo"],
+      "competitor_name": "Kamps", "competitor_product_name": "Mohnschnecke",
+      "region": "germany", "location": "Germany-wide chain",
+      "size_published": "1 piece", "size_g": null, "price_eur": 2.99, "currency": "EUR",
+      "price_basis": "incl. VAT (assumed)", "price_per_100g_eur": null,
+      "source_url": "https://www.instagram.com/", "source_type": "unofficial", "date_accessed": "2026-11-04",
+      "evidence_confidence": "Low",
+      "comparability_limitations": "Same unofficial social source as entry 19"
+    },
+    {
+      "entry_id": 21, "djini_category": "Desserts", "djini_compared_products": ["christmas-stollen"],
+      "competitor_name": "Bäckerei Konditorei Claus (Dresden)", "competitor_product_name": "Original Dresdner Christstollen (ab / from)",
+      "region": "germany", "location": "Dresden (ships Germany-wide)",
+      "size_published": "size not stated for base price", "size_g": null, "price_eur": 14.00, "currency": "EUR",
+      "price_basis": "inkl. 7 % MwSt. (explicitly stated)", "price_per_100g_eur": null,
+      "source_url": "https://www.baeckerei-claus.de/dresdner-christstollen-shop",
+      "source_type": "page_fetch", "date_accessed": "2026-11-04", "evidence_confidence": "High",
+      "comparability_limitations": "'ab' (from) price — base size unstated in fetched fragment; protected-origin Stollensiegel product; Djini stollen weight unpublished so per-kg comparison blocked"
+    },
+    {
+      "entry_id": 22, "djini_category": "Desserts", "djini_compared_products": ["christmas-stollen"],
+      "competitor_name": "Bäckerei Konditorei Claus (Dresden)", "competitor_product_name": "Original Dresdner Christstollen 1.0 kg in Schmuckdose",
+      "region": "germany", "location": "Dresden (ships Germany-wide)",
+      "size_published": "1.0 kg", "size_g": 1000, "price_eur": 26.50, "currency": "EUR",
+      "price_basis": "inkl. 7 % MwSt. (explicitly stated)", "price_per_100g_eur": 2.65,
+      "source_url": "https://www.baeckerei-claus.de/dresdner-christstollen-shop",
+      "source_type": "page_fetch", "date_accessed": "2026-11-04", "evidence_confidence": "High",
+      "comparability_limitations": "Premium gift packaging (Schmuckdose) — upper bound within the verified source; 750 g sizes sit between entries 21 and 22"
+    },
+    {
+      "entry_id": 23, "djini_category": "Desserts", "djini_compared_products": ["christmas-stollen"],
+      "competitor_name": "Bäckerei Konditorei Claus (Dresden)", "competitor_product_name": "Stollenkonfekt",
+      "region": "germany", "location": "Dresden (ships Germany-wide)",
+      "size_published": "size not stated", "size_g": null, "price_eur": 6.50, "currency": "EUR",
+      "price_basis": "inkl. 7 % MwSt. (explicitly stated)", "price_per_100g_eur": null,
+      "source_url": "https://www.baeckerei-claus.de/dresdner-christstollen-shop",
+      "source_type": "page_fetch", "date_accessed": "2026-11-04", "evidence_confidence": "High",
+      "comparability_limitations": "Bite-size stollen confection, not a full stollen — portion price only"
+    },
+    {
+      "entry_id": 24, "djini_category": "Desserts", "djini_compared_products": ["christmas-stollen"],
+      "competitor_name": "Dr. Quendt (Dresden)", "competitor_product_name": "Christstollen 1000 g",
+      "region": "germany", "location": "Dresden (ships Germany-wide)",
+      "size_published": "1000 g", "size_g": 1000, "price_eur": 9.99, "currency": "EUR",
+      "price_basis": "incl. VAT (assumed; snippet on official domain)", "price_per_100g_eur": 1.00,
+      "source_url": "https://www.dr-quendt.de/produkte/christstollen",
+      "source_type": "official_snippet", "date_accessed": "2026-11-04", "evidence_confidence": "Medium",
+      "comparability_limitations": "Product page is JS-rendered (fetch returns cookie banner only); WP-JSON endpoint unreachable (HTTP 500); price from search snippet on the official domain — verify in a browser before relying on it"
+    },
+    {
+      "entry_id": 25, "djini_category": "Desserts", "djini_compared_products": ["christmas-stollen"],
+      "competitor_name": "Dresden-Christmas (online shop)", "competitor_product_name": "Dresdner Christstollen (ab / from)",
+      "region": "germany", "location": "Dresden (online shop)",
+      "size_published": "size not stated", "size_g": null, "price_eur": 13.90, "currency": "EUR",
+      "price_basis": "incl. VAT (assumed)", "price_per_100g_eur": null,
+      "source_url": "https://dresden-christmas.de/", "source_type": "official_snippet", "date_accessed": "2026-11-04",
+      "evidence_confidence": "Medium",
+      "comparability_limitations": "Snippet-sourced; base size unstated"
+    },
+    {
+      "entry_id": 26, "djini_category": "Desserts", "djini_compared_products": ["christmas-stollen"],
+      "competitor_name": "Sternehaus (Dresden)", "competitor_product_name": "Christstollen (per kg)",
+      "region": "germany", "location": "Dresden",
+      "size_published": "per kg", "size_g": 1000, "price_eur": 20.60, "currency": "EUR",
+      "price_basis": "incl. VAT (assumed)", "price_per_100g_eur": 2.06,
+      "source_url": "https://www.sternehaus.de/", "source_type": "official_snippet", "date_accessed": "2026-11-04",
+      "evidence_confidence": "Medium",
+      "comparability_limitations": "Snippet-sourced per-kg price; product/format details unverified"
+    },
+    {
+      "entry_id": 27, "djini_category": "Desserts", "djini_compared_products": ["christmas-stollen"],
+      "competitor_name": "Bäckerei Eckert", "competitor_product_name": "Christstollen",
+      "region": "germany", "location": "Germany (online)",
+      "size_published": "size not stated", "size_g": null, "price_eur": 41.00, "currency": "EUR",
+      "price_basis": "incl. VAT (assumed)", "price_per_100g_eur": null,
+      "source_url": "https://baeckerei-eckert.de/", "source_type": "official_snippet", "date_accessed": "2026-11-04",
+      "evidence_confidence": "Medium",
+      "comparability_limitations": "High price without stated size — cannot be normalized; possibly a large premium stollen; verify before use"
+    },
+    {
+      "entry_id": 28, "djini_category": "Desserts", "djini_compared_products": ["glazed-doughnuts"],
+      "competitor_name": "mainpost.de (regional press price survey, Feb 2026)", "competitor_product_name": "Krapfen/Berliner (carnival doughnut) — typical price",
+      "region": "germany", "location": "Franconia (Bad Kissingen etc.) — NOT Bremen",
+      "size_published": "1 piece (typical range)", "size_g": null, "price_eur": 1.75, "currency": "EUR",
+      "price_basis": "range 1.50–2.00 EUR/piece; promo 5 for 9.00 EUR (=1.80/piece); regional extremes to 4.90 EUR", "price_per_100g_eur": null,
+      "source_url": "https://www.mainpost.de/", "source_type": "journalism", "date_accessed": "2026-11-04",
+      "evidence_confidence": "Medium",
+      "comparability_limitations": "Citable regional-newspaper survey but Franconia not Bremen; Carnival seasonal item; range midpoint recorded, no single SKU; chains reportedly hold below the 2.00 'pain threshold'"
+    }
+  ]
+}

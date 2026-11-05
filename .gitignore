@@ -25,3 +25,6 @@ backend/static/uploads/
 *.log
 .DS_Store
 Thumbs.db
+
+# --- scratch: audit & staging harness artifacts ---
+Temp/

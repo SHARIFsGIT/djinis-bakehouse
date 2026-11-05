@@ -1,0 +1,26 @@
+product_id,slug,name,category,current_price_usd,sale_price_usd,published,stock,weight_g,portions_per_unit,recipe_defined,ingredient_costs_recorded,packaging_cost_recorded,labour_cost_costed,batch_yield_recorded,wastage_pct_recorded,fixed_overhead_allocated,vat_classification,cost_data_readiness,admin_confirmation_needed
+1,french-baguette,French Baguette,Breads,4.50,,yes,36,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/portion size
+2,fresh-bagels,Fresh Bagels,Breads,6.50,,yes,24,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,"Weight/portion size (4 bagels per box per description — confirm)"
+3,beef-floss-bread,Beef Floss Bread,Breads,7.50,5.95,yes,18,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/portion size
+4,triple-cheese-bread,Triple Cheese Bread,Breads,8.50,,yes,14,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/portion size
+5,blueberry-cheese-bread,Blueberry Cheese Bread,Breads,7.50,5.95,yes,16,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/portion size
+6,wool-roll-bread,Wool Roll Bread,Breads,6.50,,yes,20,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,"Weight/portion size (tray of rolls — confirm count)"
+7,rosemary-focaccia,Rosemary Focaccia,Breads,7.00,,yes,12,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/portion size
+8,garden-focaccia,Garden Focaccia,Breads,8.50,,yes,10,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/portion size
+9,butter-croissant,Butter Croissant,Pastries,3.75,,yes,48,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/piece
+10,croffle,Croffle,Pastries,5.50,,yes,22,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/piece
+11,apple-strudel,Apple Strudel,Pastries,5.25,,yes,15,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/portion size
+12,beef-curry-puff,Beef Curry Puff,Pastries,4.75,,yes,26,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,"Weight/piece (single or pack — confirm)"
+13,chocolate-cream-puff,Chocolate Cream Puff,Pastries,4.25,,yes,30,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,"Weight/piece (single or pack — confirm)"
+14,fruit-cushion-pastry,Fruit Cushion Pastry,Pastries,5.75,,yes,12,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/piece
+15,rhum-horn,Rhum Horn,Pastries,4.95,3.95,yes,18,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/piece
+16,vol-au-vent,Vol-au-Vent,Pastries,5.25,,yes,4,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/piece
+17,pretzels-and-bagels,Pretzels & Bagels,Pastries,6.25,4.95,yes,16,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,"Weight/portion size (2 pretzels + 2 bagels per description — confirm)"
+18,cheese-straws,Cheese Straws,Pastries,4.50,,yes,20,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,"Weight/portion size (dozen per box per description — confirm)"
+19,glazed-doughnuts,Glazed Doughnuts,Desserts,5.95,,yes,28,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,"Weight/portion size (six per box per description — confirm)"
+20,maritozzo,Maritozzo,Desserts,6.25,5.25,yes,16,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/piece
+21,strawberry-maritozzo,Strawberry Maritozzo,Desserts,6.95,,yes,14,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/piece
+22,strawberry-mille-feuille,Strawberry Mille-Feuille,Desserts,7.25,,yes,8,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/portion
+23,strawberry-puff,Strawberry Puff,Desserts,5.95,,yes,11,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/piece
+24,double-chocolate-cream-bun,Double Chocolate Cream Bun,Desserts,5.50,,yes,19,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,Weight/piece
+25,christmas-stollen,Christmas Stollen,Desserts,12.00,9.95,yes,0,,,,No,No,No,No,No,No,No,pending (adviser),Missing — all cost inputs,"Weight (critical: competitor stollen sold by weight, e.g. 500 g/750 g/1000 g); stock currently 0"
