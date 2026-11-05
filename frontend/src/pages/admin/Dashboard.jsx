@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { BadgeDollarSign, ScrollText, TrendingUp, Users } from "lucide-react";
 import client from "../../api/client";
-import { formatDate, money, ORDER_STATUSES, statusBadge, statusLabel } from "../../lib/format";
+import { formatDate, hasNonActiveCurrency, money, ORDER_STATUSES, statusBadge, statusLabel } from "../../lib/format";
 import PhotoTile from "../../components/PhotoTile";
 import { Loading } from "../../components/Loading";
 
@@ -35,12 +35,17 @@ export default function Dashboard() {
   const activeStatuses = ORDER_STATUSES.filter((s) => (stats.orders_by_status[s.value] ?? 0) > 0);
   const maxStatus = Math.max(...activeStatuses.map((s) => stats.orders_by_status[s.value]), 1);
   const maxTop = Math.max(...stats.top_products.map((t) => t.quantity), 1);
+  // Money never mixes: the headline tiles speak the shop's active currency,
+  // and the split rides alongside whenever any money sits in another one —
+  // even a single bucket of history after a cutover must stay visible.
+  const currencies = stats.revenue_by_currency ?? [];
+  const mixed = hasNonActiveCurrency(currencies.map((c) => c.currency));
 
   return (
     <div className="space-y-8">
       {/* Headline stats */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatTile Icon={BadgeDollarSign} label="Paid revenue" value={money(stats.paid_revenue)} sub={`${money(stats.total_revenue)} incl. pending`} />
+        <StatTile Icon={BadgeDollarSign} label="Paid revenue" value={money(stats.paid_revenue)} sub={`${money(stats.total_revenue)} incl. pending${mixed ? " · active currency" : ""}`} />
         <StatTile
           Icon={ScrollText}
           label="Orders"
@@ -52,8 +57,29 @@ export default function Dashboard() {
           }
         />
         <StatTile Icon={Users} label="Customers" value={stats.customer_count} sub="registered regulars" />
-        <StatTile Icon={TrendingUp} label="Avg order" value={money(stats.avg_order_value)} sub="across all orders" />
+        <StatTile Icon={TrendingUp} label="Avg order" value={money(stats.avg_order_value)} sub={mixed ? "active currency only" : "across all orders"} />
       </div>
+
+      {mixed && (
+        <div className="glass rounded-box p-5 shadow-sm ring-1 ring-base-300/60">
+          <h2 className="font-display text-lg font-semibold">Revenue by currency</h2>
+          <p className="mt-1 text-xs opacity-60">
+            Currencies are never combined — each column is its own money.
+          </p>
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {currencies.map((c) => (
+              <div key={c.currency} className="rounded-xl bg-base-200/50 px-4 py-3">
+                <p className="text-xs font-bold tracking-widest uppercase opacity-50">{c.currency}</p>
+                <p className="font-display mt-1 text-xl font-bold">{money(c.paid_revenue, c.currency)} <span className="text-xs font-normal opacity-60">paid</span></p>
+                <p className="text-xs opacity-60">
+                  {money(c.total_revenue, c.currency)} total · {money(c.avg_order_value, c.currency)} avg · {c.order_count} order{c.order_count === 1 ? "" : "s"}
+                  {c.refunded_revenue > 0 && ` · ${money(c.refunded_revenue, c.currency)} refunded`}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         {/* Status breakdown */}
@@ -140,7 +166,7 @@ export default function Dashboard() {
                       <td>
                         <span className={`badge badge-sm ${statusBadge(o.status)} border`}>{statusLabel(o.status)}</span>
                       </td>
-                      <td className="text-right font-bold">{money(o.total)}</td>
+                      <td className="text-right font-bold">{money(o.total, o.currency)}</td>
                       <td className="text-right text-xs opacity-60">{formatDate(o.created_at)}</td>
                     </tr>
                   ))}

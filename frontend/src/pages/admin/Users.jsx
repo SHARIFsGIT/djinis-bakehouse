@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { Copy, Crown, Gift, Heart, Hourglass, ScrollText } from "lucide-react";
 import client, { apiError } from "../../api/client";
-import { money } from "../../lib/format";
+import { hasNonActiveCurrency, money } from "../../lib/format";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { Loading } from "../../components/Loading";
@@ -329,6 +329,14 @@ export default function AdminUsers() {
                   <td className="text-right font-bold">{u.order_count}</td>
                   <td className="text-right font-bold">
                     {u.order_count > 0 ? money(u.lifetime_spend) : "—"}
+                    {u.order_count > 0 &&
+                      hasNonActiveCurrency(Object.keys(u.lifetime_spend_by_currency ?? {})) && (
+                        <span className="block text-[11px] font-normal opacity-60">
+                          {Object.entries(u.lifetime_spend_by_currency)
+                            .map(([code, amount]) => money(amount, code))
+                            .join(" · ")}
+                        </span>
+                      )}
                   </td>
                   <td><TierBadge loyalty={u.loyalty} /></td>
                   <td>

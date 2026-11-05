@@ -10,6 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, func, or_, select, update
 
+from ..config import get_settings
 from ..database import utcnow
 from ..email import bulk_reply_email, send_email
 from ..models import (
@@ -62,12 +63,14 @@ from ..schemas import (
     CouponCreateRequest,
     CouponOut,
     CouponUpdateRequest,
+    CurrencyStatsOut,
     LoyaltyVouchersOut,
     OrderDetailOut,
     OrderListResponse,
     OrderStatusUpdateRequest,
     PaginationOut,
     PaymentStatusUpdateRequest,
+    ProductCostSummaryOut,
     ProductCreateRequest,
     ProductUpdateRequest,
     ReviewModerationRequest,
@@ -107,12 +110,44 @@ def stats(admin: CurrentAdmin, db: DbSession):
     orders = db.scalars(select(Order).where(Order.status != OrderStatus.CANCELLED.value)).all()
     customers = db.scalar(select(func.count(User.id)).where(User.role == UserRole.CUSTOMER.value))
 
-    revenue = sum(float(o.total) for o in orders)
-    paid = sum(
-        float(o.total)
-        for o in orders
-        if o.payment_status in (PaymentStatus.PAID.value, PaymentStatus.REFUNDED.value)
-    )
+    # Money is bucketed by the currency each order was placed in — dollars
+    # never sum with euros. An order with no readable currency keeps its own
+    # bucket rather than being guessed into one.
+    buckets: dict[str, dict] = {}
+    for o in orders:
+        code = str(o.currency or "").strip().lower() or "unknown"
+        bucket = buckets.setdefault(
+            code, {"total": 0.0, "paid": 0.0, "refunded": 0.0, "count": 0}
+        )
+        amount = float(o.total)
+        bucket["total"] += amount
+        if o.payment_status in (PaymentStatus.PAID.value, PaymentStatus.REFUNDED.value):
+            bucket["paid"] += amount
+        if o.payment_status in (
+            PaymentStatus.REFUNDED.value,
+            PaymentStatus.PARTIALLY_REFUNDED.value,
+        ):
+            # What actually went back: the total less whatever slice of a
+            # late cancellation the shop kept.
+            bucket["refunded"] += amount - float(o.cancel_fee or 0)
+        bucket["count"] += 1
+
+    # The headline figures describe the shop's active currency only; every
+    # currency's own slice (active first, rest alphabetical) rides alongside.
+    active = str(get_settings().stripe_currency or "").strip().lower()
+    ordered_codes = sorted(buckets, key=lambda c: (c != active, c))
+    by_currency = [
+        CurrencyStatsOut(
+            currency=code,
+            total_revenue=round(buckets[code]["total"], 2),
+            paid_revenue=round(buckets[code]["paid"], 2),
+            refunded_revenue=round(buckets[code]["refunded"], 2),
+            order_count=buckets[code]["count"],
+            avg_order_value=round(buckets[code]["total"] / buckets[code]["count"], 2),
+        )
+        for code in ordered_codes
+    ]
+    active_bucket = buckets.get(active, {"total": 0.0, "count": 0})
 
     by_status = {s.value: 0 for s in OrderStatus}
     for o in db.scalars(select(Order)):
@@ -135,11 +170,13 @@ def stats(admin: CurrentAdmin, db: DbSession):
     low_ratings = review_summary(db, [p.id for p in low_stock_products])
 
     return AdminStatsOut(
-        total_revenue=round(revenue, 2),
-        paid_revenue=round(paid, 2),
+        total_revenue=round(active_bucket["total"], 2),
+        paid_revenue=round(buckets.get(active, {}).get("paid", 0.0), 2),
         order_count=len(orders),
         customer_count=customers or 0,
-        avg_order_value=round(revenue / len(orders), 2) if orders else 0.0,
+        avg_order_value=round(active_bucket["total"] / active_bucket["count"], 2)
+        if active_bucket["count"]
+        else 0.0,
         pending_orders=by_status.get(OrderStatus.PENDING.value, 0),
         orders_by_status=by_status,
         top_products=[{"name": name, "quantity": int(qty)} for name, qty in top_rows],
@@ -152,6 +189,7 @@ def stats(admin: CurrentAdmin, db: DbSession):
             )
         )
         or 0,
+        revenue_by_currency=by_currency,
     )
 
 
@@ -364,7 +402,8 @@ def export_orders(admin: CurrentAdmin, db: DbSession):
     writer = csv.writer(buffer)
     writer.writerow(
         ["order_number", "date", "customer", "email", "status", "payment_method",
-         "payment_status", "coupon_code", "subtotal", "discount", "tax", "shipping", "total"]
+         "payment_status", "coupon_code", "subtotal", "discount", "tax", "shipping", "total",
+         "currency"]
     )
     for order in db.scalars(select(Order).order_by(Order.created_at.desc())):
         writer.writerow(
@@ -382,6 +421,11 @@ def export_orders(admin: CurrentAdmin, db: DbSession):
                 float(order.tax),
                 float(order.shipping_fee),
                 float(order.total),
+                # Every money column above reads in this code — bookkeeping
+                # must never have to guess which side of a cutover a row is
+                # from. A blank reads "unknown", the same label the stats
+                # buckets use, so a row always reconciles with its totals.
+                (order.currency or "").strip() or "unknown",
             ]
         )
     buffer.seek(0)
@@ -1099,43 +1143,57 @@ def _loyalty(order_count: int, spend: float, last_order_at) -> str:
     return "regular"
 
 
-def _customer_out(user: User, stats_row=None) -> AdminCustomerOut:
-    """A user plus their measured loyalty — `stats_row` from the one
-    aggregate query below, or nothing for a customer with no kept orders."""
-    customer = AdminCustomerOut.model_validate(user)
-    if stats_row is None:
-        return customer
-    order_count = int(stats_row.orders)
-    spend = round(float(stats_row.spend or 0), 2)
-    return customer.model_copy(
-        update={
-            "order_count": order_count,
-            "lifetime_spend": spend,
-            "last_order_at": stats_row.last,
-            "loyalty": _loyalty(order_count, spend, stats_row.last),
-        }
-    )
-
-
 def _customer_roll(db: DbSession) -> list[AdminCustomerOut]:
     """Every customer with their measured loyalty — the full roll, newest
     members first. One aggregate pass for everyone, never a query per row;
-    the page below slices it however it needs."""
+    the page below slices it however it needs.
+
+    Spend is grouped per currency because dollars and euros must never sum
+    into one "lifetime" number: the headline lifetime_spend is what the
+    customer has spent in the shop's *active* currency, and the full split
+    rides in lifetime_spend_by_currency. The loyalty tier judges the active
+    currency's spend too — its thresholds are money, not ratios — while the
+    order count and last visit span everything, being plain facts."""
+    active = str(get_settings().stripe_currency or "").strip().lower()
     users = list(db.scalars(select(User).order_by(User.created_at.desc())))
-    stats = {
-        row.user_id: row
-        for row in db.execute(
-            select(
-                Order.user_id.label("user_id"),
-                func.count(Order.id).label("orders"),
-                func.sum(Order.total).label("spend"),
-                func.max(Order.created_at).label("last"),
-            )
-            .where(Order.status != OrderStatus.CANCELLED.value)
-            .group_by(Order.user_id)
+    spend_by_user: dict[int, dict[str, float]] = {}
+    facts: dict[int, tuple[int, object]] = {}
+    for row in db.execute(
+        select(
+            Order.user_id.label("user_id"),
+            Order.currency.label("currency"),
+            func.count(Order.id).label("orders"),
+            func.sum(Order.total).label("spend"),
+            func.max(Order.created_at).label("last"),
         )
-    }
-    return [_customer_out(u, stats.get(u.id)) for u in users]
+        .where(Order.status != OrderStatus.CANCELLED.value)
+        .group_by(Order.user_id, Order.currency)
+    ):
+        code = str(row.currency or "").strip().lower() or "unknown"
+        spend_by_user.setdefault(row.user_id, {})[code] = round(float(row.spend or 0), 2)
+        count, last = facts.get(row.user_id, (0, None))
+        facts[row.user_id] = (
+            count + int(row.orders),
+            row.last if last is None else max(last, row.last),
+        )
+
+    roll = []
+    for user in users:
+        customer = AdminCustomerOut.model_validate(user)
+        if user.id in spend_by_user:
+            split = spend_by_user[user.id]
+            count, last = facts[user.id]
+            customer = customer.model_copy(
+                update={
+                    "order_count": count,
+                    "lifetime_spend": split.get(active, 0.0),
+                    "lifetime_spend_by_currency": dict(sorted(split.items())),
+                    "last_order_at": last,
+                    "loyalty": _loyalty(count, split.get(active, 0.0), last),
+                }
+            )
+        roll.append(customer)
+    return roll
 
 
 # How the roll can be ordered — heaviest/newest first. The "last" key pairs

@@ -26,19 +26,69 @@ export const applyShopConfig = (data = {}) => {
 };
 
 const formatters = new Map();
-const formatterFor = (currency) => {
-  const code = (currency || shopConfig.currency || "USD").toUpperCase();
+
+/* Only real ISO 4217 codes reach Intl — it accepts any well-formed
+   three-letter code and throws RangeError on everything else, so validity
+   comes from the runtime's own currency list, never from shape-matching
+   a regex. The backend parks unreadable codes in an "unknown" bucket;
+   that money must render as what it is, never dressed as $ or €. */
+const runtimeCurrencyCodes =
+  typeof Intl.supportedValuesOf === "function"
+    ? new Set(Intl.supportedValuesOf("currency"))
+    : null;
+
+const plainFormatter = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+const currencyFormatter = (code) => {
+  if (runtimeCurrencyCodes ? !runtimeCurrencyCodes.has(code) : !code) {
+    return null;
+  }
   if (!formatters.has(code)) {
-    formatters.set(
-      code,
-      new Intl.NumberFormat("en-US", { style: "currency", currency: code })
-    );
+    try {
+      formatters.set(
+        code,
+        new Intl.NumberFormat("en-US", { style: "currency", currency: code })
+      );
+    } catch {
+      // A runtime without the code list still gets the constructor's own
+      // well-formedness check — a bad code can never reach format().
+      return null;
+    }
   }
   return formatters.get(code);
 };
 
-/** Money in the order's own currency when one is known, else the shop's. */
-export const money = (n, currency) => formatterFor(currency).format(Number(n ?? 0));
+/** Money in the order's own currency when one is known, else the shop's.
+    An unusable code ("unknown", a corrupted row) renders as a plain
+    two-decimal figure with the raw code beside it — shown honestly, never
+    as USD or EUR, and never a crash. */
+export const money = (n, currency) => {
+  const code =
+    currency === undefined || currency === null
+      ? String(shopConfig.currency || "USD").toUpperCase()
+      : String(currency).trim().toUpperCase();
+  const value = Number(n ?? 0);
+  const formatter = currencyFormatter(code);
+  if (formatter) return formatter.format(value);
+  const plain = plainFormatter.format(value);
+  return code ? `${plain} ${code}` : plain;
+};
+
+/** True when any listed currency code isn't the shop's active one — the
+    signal that history's money needs its own visible split (dashboard
+    revenue buckets, a customer's lifetime spend). One bucket is enough:
+    after a cutover, the old currency's book must not disappear behind a
+    zero headline. Case-insensitive — the API speaks lowercase, the store
+    config upper. */
+export const hasNonActiveCurrency = (codes, active = shopConfig.currency) => {
+  const activeCode = String(active ?? "").trim().toLowerCase();
+  return (Array.isArray(codes) ? codes : []).some(
+    (code) => String(code ?? "").trim().toLowerCase() !== activeCode
+  );
+};
 
 export const formatDate = (value) => {
   if (!value) return "—";

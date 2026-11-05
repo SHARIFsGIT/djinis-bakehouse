@@ -594,27 +594,69 @@ class UserAdminUpdateRequest(BaseModel):
     role: UserRole | None = None
 
 
-class AdminStatsOut(BaseModel):
+class CurrencyStatsOut(BaseModel):
+    """One currency's slice of the order book. Dollars and euros are never
+    summed into one number — each keeps its own revenue, refunds and average,
+    so the dashboard can't manufacture a total that never existed."""
+
+    currency: str
     total_revenue: float
     paid_revenue: float
+    refunded_revenue: float
+    order_count: int
+    avg_order_value: float
+
+
+class AdminStatsOut(BaseModel):
+    """The desk's morning page. The headline money figures describe the
+    shop's *active* currency (settings.stripe_currency) only — for an
+    all-USD book, exactly today's numbers. Every currency's own figures
+    ride in revenue_by_currency; no field anywhere converts or combines
+    currencies."""
+
+    total_revenue: float = Field(
+        description="All-time order value in the active currency only — never a cross-currency sum."
+    )
+    paid_revenue: float = Field(
+        description="Value of paid and since-refunded orders in the active currency only."
+    )
     order_count: int
     customer_count: int
-    avg_order_value: float
+    avg_order_value: float = Field(
+        description="Active-currency revenue ÷ active-currency order count — "
+        "per-currency arithmetic, never a mixed mean."
+    )
     pending_orders: int
     orders_by_status: dict[str, int]
     top_products: list[dict]
     recent_orders: list[OrderOut]
     low_stock: list[ProductCard]
     new_enquiries: int = 0
+    revenue_by_currency: list[CurrencyStatsOut] = Field(
+        default=[],
+        description="The complete currency-separated breakdown, one entry per "
+        "currency in the book (active first, then alphabetical; unreadable "
+        "codes keep their own 'unknown' bucket).",
+    )
 
 
 class AdminCustomerOut(UserOut):
     """A customer as the desk sees them: who they are, plus what the shop can
     measure — kept orders (cancelled never count), lifetime spend, the last
-    visit, and the loyalty tier those earn."""
+    visit, and the loyalty tier those earn. Spend never mixes currencies:
+    lifetime_spend is the shop's active currency only, and the full split
+    rides in lifetime_spend_by_currency."""
 
     order_count: int = 0
-    lifetime_spend: float = 0
+    lifetime_spend: float = Field(
+        default=0,
+        description="Kept-order spend in the shop's active currency only — never a cross-currency sum.",
+    )
+    lifetime_spend_by_currency: dict[str, float] = Field(
+        default={},
+        description="The complete per-currency split of that spend; keys are "
+        "currency codes, values are each currency's own total.",
+    )
     last_order_at: datetime | None = None
     loyalty: str = "regular"
 

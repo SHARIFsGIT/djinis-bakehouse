@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 
 import {
   applyShopConfig,
+  hasNonActiveCurrency,
   money,
   shopConfig,
   taxLabel,
@@ -25,6 +26,37 @@ test("money renders each currency with its own symbol", () => {
 
 test("money falls back to the shop's currency when an order carries none", () => {
   assert.equal(money(3.75), "$3.75"); // shopConfig default: USD
+});
+
+test("money never crashes or invents a currency for unusable codes", () => {
+  // The backend's "unknown" bucket and any corrupted row render as what
+  // they are: a plain figure with the raw code — never $, never €, never
+  // a RangeError taking the page down.
+  assert.equal(money(12.5, "unknown"), "12.50 UNKNOWN");
+  assert.equal(money(12.5, "bitcoin"), "12.50 BITCOIN");
+  assert.equal(money(12.5, "US$"), "12.50 US$"); // malformed
+  assert.equal(money(12.5, ""), "12.50"); // blank — nothing useful to name
+  assert.equal(money(12.5, null), "$12.50"); // absent → the shop's own
+  assert.equal(money(12.5, undefined), "$12.50");
+  // A padded code is still its currency, not a mystery bucket.
+  assert.equal(money(12.5, " gbp "), "£12.50");
+  // Whatever a broken row throws at it, money() returns a string.
+  for (const bad of ["unknown", "", "bitcoin", "US$", "e", 7]) {
+    assert.equal(typeof money(1, bad), "string");
+  }
+});
+
+test("the split appears exactly when money sits outside the active currency", () => {
+  // One non-active bucket is enough — after a cutover the old currency's
+  // book must stay visible even when it's the only one there is.
+  assert.equal(hasNonActiveCurrency(["usd"]), false); // all-active book
+  assert.equal(hasNonActiveCurrency([]), false); // no orders at all
+  assert.equal(hasNonActiveCurrency(["eur"]), true); // history-only
+  assert.equal(hasNonActiveCurrency(["usd", "eur"]), true);
+  assert.equal(hasNonActiveCurrency(["unknown"]), true); // stays visible
+  // Case-insensitive in both directions: API lowercase, config upper.
+  assert.equal(hasNonActiveCurrency(["USD"], "usd"), false);
+  assert.equal(hasNonActiveCurrency(["USD"], "EUR"), true);
 });
 
 test("applyShopConfig retunes the labels and the currency", () => {
