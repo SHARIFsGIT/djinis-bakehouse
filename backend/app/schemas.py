@@ -452,7 +452,10 @@ class StorefrontOut(BaseModel):
     # their EUR values await owner approval (checkout is paused then — see
     # routers/orders._approved_money_rules); a None tax rate means no tax line
     # (VAT treatment pending professional review), never a 0%-VAT claim.
-    currency: str = "eur"
+    # currency is None when the configured value isn't one the gateway can
+    # charge (checkout is 503-paused then) — the storefront keeps its own
+    # euro default rather than labelling prices in an unchargeable symbol.
+    currency: str | None = "eur"
     tax_rate: float | None = None
     shipping_fee: float | None = None
     free_shipping_threshold: float | None = None

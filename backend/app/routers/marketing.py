@@ -55,6 +55,16 @@ def storefront(db: DbSession):
     has no 'hidden' state, so empty and NULL both fall back to the shipped
     picture."""
     settings = get_store_setting(db)
+    # The currency label is published only when it is one the gateway can
+    # actually charge (the same test routers/orders._charge_currency applies
+    # before taking an order). A misconfigured value already 503s checkout;
+    # letting it through here would retune every storefront price tag to a
+    # symbol nothing can buy. None keeps the frontend on its own euro
+    # default — the same fail-closed posture as the unset delivery figures.
+    configured_currency = str(get_settings().stripe_currency or "").strip().lower()
+    chargeable_currency = (
+        configured_currency if configured_currency in stripe_gateway.SUPPORTED_CURRENCIES else None
+    )
     return StorefrontOut(
         announcement=(
             settings.announcement if settings.announcement is not None else DEFAULT_ANNOUNCEMENT
@@ -73,7 +83,7 @@ def storefront(db: DbSession):
         contact_email=settings.contact_email,
         opening_hours=settings.opening_hours,
         # The money rules behind every basket estimate the storefront quotes.
-        currency=get_settings().stripe_currency,
+        currency=chargeable_currency,
         tax_rate=get_settings().tax_rate,
         shipping_fee=get_settings().shipping_fee,
         free_shipping_threshold=get_settings().free_shipping_threshold,

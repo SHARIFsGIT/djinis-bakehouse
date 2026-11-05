@@ -6,9 +6,10 @@ miniature bakery: an admin, two customers, four orders (paid euro with a
 Stripe intent, pending dollar history, paid cash, paid card with no intent)
 with their children, protected rows across the shop tables, and one
 notification of every kind. Nothing here ever touches the
-suite's shared database, the dev database, or any production system — and
-the script's --execute flag is never run through main(); run_reset() is
-called directly with an engine bound to a file pytest throws away.
+suite's shared database, the dev database, or any production system —
+run_reset() is called directly with an engine bound to a file pytest throws
+away, and the main()/argv tests stub run_reset out entirely so the flag
+parsing is exercised without an engine at all.
 """
 
 import importlib.util
@@ -506,6 +507,24 @@ def test_a_classified_table_vanishing_is_also_drift():
         reset_script._classify(md)
 
 
+def test_buckets_that_overlap_abort_the_run(monkeypatch):
+    """The three buckets must be mutually exclusive — every rule downstream
+    ("kept tables may not reference fully-deleted ones", the predicate
+    deletes, the after-count checks) assumes exclusive membership. A future
+    edit that puts one table in two buckets must abort before anything real
+    is classified."""
+    monkeypatch.setattr(reset_script, "DELETE_BY_PREDICATE",
+                        reset_script.DELETE_BY_PREDICATE | frozenset({"orders"}))
+    with pytest.raises(reset_script.ResetAborted, match="overlap") as excinfo:
+        reset_script._classify(synthetic_metadata())
+    assert "orders" in str(excinfo.value)
+
+    monkeypatch.setattr(reset_script, "KEEP",
+                        reset_script.KEEP | frozenset({"favorites"}))
+    with pytest.raises(reset_script.ResetAborted, match="overlap"):
+        reset_script._classify(synthetic_metadata())
+
+
 def test_a_kept_table_may_not_reference_a_deleted_table():
     md = synthetic_metadata()
     Table(
@@ -561,12 +580,75 @@ def test_deletion_order_puts_children_first_and_spots_cycles():
 
 
 def test_the_application_never_imports_the_reset_script():
-    # The reset must be a human decision every time — nothing under app/
-    # may so much as mention the script, or startup could grow a reset.
-    app_dir = SCRIPT_PATH.parents[1] / "app"
+    # The reset must be a human decision every time — nothing the app or the
+    # test harness loads (app/, run.py, the root conftest, the tests) may so
+    # much as mention the script, or startup could grow a reset.
+    backend_dir = SCRIPT_PATH.parents[1]
+    candidates = [
+        *(backend_dir / "app").rglob("*.py"),
+        *filter(lambda p: p.parent == backend_dir, backend_dir.glob("*.py")),
+        *(backend_dir / "tests").glob("*.py"),
+    ]
     offenders = [
-        path.name
-        for path in app_dir.rglob("*.py")
-        if "reset_customer_order_data" in path.read_text(encoding="utf-8")
+        str(path.relative_to(backend_dir))
+        for path in candidates
+        if path != Path(__file__).resolve()  # this file is the one legitimate mentioner
+        and "reset_customer_order_data" in path.read_text(encoding="utf-8")
     ]
     assert offenders == []
+
+
+def test_main_defaults_to_a_dry_run_and_exits_zero(monkeypatch, capsys):
+    """The dry-run default is the script's most important property; it is
+    pinned at the run_reset() signature elsewhere, and here at the seam a
+    human actually touches: argv. No argv, no flags — nothing deleted."""
+    captured = {}
+
+    def fake_run_reset(**kwargs):
+        captured.update(kwargs)
+        return {"status": "dry-run"}
+
+    monkeypatch.setattr(reset_script, "run_reset", fake_run_reset)
+    monkeypatch.setattr(reset_script, "_render", lambda report: "rendered dry-run")
+
+    assert reset_script.main([]) == 0
+    assert captured == {"execute": False, "confirmed_identity": None}
+    assert "rendered dry-run" in capsys.readouterr().out
+
+
+def test_main_passes_execute_and_confirmation_through(monkeypatch, capsys):
+    captured = {}
+
+    def fake_run_reset(**kwargs):
+        captured.update(kwargs)
+        return {"status": "executed"}
+
+    monkeypatch.setattr(reset_script, "run_reset", fake_run_reset)
+    monkeypatch.setattr(reset_script, "_render", lambda report: "rendered executed")
+
+    identity = "postgresql+psycopg://bakery:***@db.example.com:5432/bakery_prod"
+    assert reset_script.main(["--execute", "--confirm-database", identity]) == 0
+    assert captured == {"execute": True, "confirmed_identity": identity}
+
+
+def test_main_exits_one_when_the_run_aborts(monkeypatch, capsys):
+    """A refused pre-flight check must read as failure on the terminal —
+    an operator scripting this relies on the exit code, not the prose."""
+
+    def refuse(**kwargs):
+        raise reset_script.ResetAborted("unrecognised table(s) ['future_table']")
+
+    monkeypatch.setattr(reset_script, "run_reset", refuse)
+    assert reset_script.main([]) == 1
+    err = capsys.readouterr().err
+    assert "ABORTED" in err and "future_table" in err
+
+
+def test_main_exits_one_on_an_unexpected_report_status(monkeypatch):
+    """Dry-run and executed are the only statuses that mean success; a
+    report carrying problems (e.g. after-count mismatches) must not exit 0."""
+    monkeypatch.setattr(
+        reset_script, "run_reset", lambda **kwargs: {"status": "executed-with-problems"}
+    )
+    monkeypatch.setattr(reset_script, "_render", lambda report: "rendered")
+    assert reset_script.main(["--execute"]) == 1

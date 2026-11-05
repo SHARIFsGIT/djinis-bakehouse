@@ -2884,6 +2884,20 @@ def test_the_public_store_carries_the_shop_money_rules():
     assert store["free_shipping_threshold"] == settings.free_shipping_threshold
 
 
+def test_a_misconfigured_charge_currency_is_not_published_to_the_storefront(monkeypatch):
+    """Checkout refuses an unchargeable currency with a 503 (routers/orders.
+    _charge_currency) — the storefront must not go on labelling every price
+    with the same broken symbol while nothing can be bought. /api/store
+    answers None and the frontend keeps its own euro default."""
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "stripe_currency", "usd", raising=True)
+    assert client.get("/api/store").json()["currency"] is None
+
+    monkeypatch.setattr(get_settings(), "stripe_currency", " eur ", raising=True)
+    assert client.get("/api/store").json()["currency"] == "eur"
+
+
 def test_refunding_a_historical_dollar_order_keeps_its_cents():
     """Refunds are minor units of the order's own currency: a dollar order
     paid before the euro cutover is refunded in exactly the dollars it was
@@ -3319,6 +3333,37 @@ def test_checkout_stays_paused_until_delivery_pricing_is_approved(monkeypatch):
 
     orders_after = client.get("/api/orders", headers=headers).json()["pagination"]["total_items"]
     assert orders_after == orders_before  # nothing was written
+
+
+def test_a_paused_checkout_leaves_no_address_behind(monkeypatch):
+    """The delivery-pricing 503 fires after the order's new address has
+    already been flushed (the order row needs its id) — the session teardown
+    is what keeps that address from persisting behind a paused shop. Pinned
+    here so a future reorder of the flush and the price check can't start
+    orphaning addresses on every refused checkout."""
+    from sqlalchemy import func, select
+    from app.database import SessionLocal
+    from app.models import Address as AddressRow
+    from app.routers import orders as orders_router
+
+    _top_up_stock("butter-croissant")
+    headers = auth_header(login_customer())
+
+    def address_rows():
+        db = SessionLocal()
+        try:
+            return db.scalar(select(func.count()).select_from(AddressRow))
+        finally:
+            db.close()
+
+    before = address_rows()
+
+    monkeypatch.setattr(orders_router.settings, "free_shipping_threshold", None, raising=True)
+    refused = client.post(
+        "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
+    )
+    assert refused.status_code == 503
+    assert address_rows() == before  # the flushed address rolled back with the order
 
 
 def test_no_tax_is_charged_or_shown_while_no_rate_is_approved(monkeypatch):

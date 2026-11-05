@@ -32,6 +32,13 @@ and any surprise aborts the run BEFORE anything is deleted):
     halfway leaves the database exactly as it was.
   * Verifies afterwards: deleted sets are empty, the admin account(s)
     survived, protected tables still hold their rows.
+  * The pre-flight counts and the after-verification read OUTSIDE the
+    delete transaction (the report is written for humans to read, not to
+    lock the database). Concurrent writes during a run can therefore
+    surface as PROBLEMS in the after-report even though the deletion
+    itself was sound — this is why the runbook's first step is a
+    maintenance window, and any such report means "investigate", not
+    "trust the count".
   * NEVER touches products, Stripe, or the network. It does not refund or
     cancel anything at Stripe — historical payment intents simply stop
     being referenced. It is never imported at application startup; it only
@@ -133,6 +140,19 @@ class ResetAborted(Exception):
 
 def _classify(metadata) -> None:
     """Abort unless every live table is classified exactly once."""
+    # The three buckets are literals, but a future edit can make two of them
+    # overlap — and everything downstream ("kept tables may not reference
+    # fully-deleted ones", the predicate deletes, the after-count checks)
+    # silently assumes exclusive membership. Check the pairs directly.
+    overlap = sorted(
+        (DELETE_ALL & DELETE_BY_PREDICATE) | (DELETE_ALL & KEEP) | (DELETE_BY_PREDICATE & KEEP)
+    )
+    if overlap:
+        raise ResetAborted(
+            f"internal classification overlap: {overlap} sits in more than one "
+            "bucket — the script's own sets are inconsistent and need fixing "
+            "before it classifies a real database."
+        )
     tables = set(metadata.tables)
     classified = DELETE_ALL | DELETE_BY_PREDICATE | KEEP
     unknown = sorted(tables - classified)
@@ -148,8 +168,6 @@ def _classify(metadata) -> None:
             f"classified table(s) {missing} no longer exist — the schema has "
             "drifted. Update the script deliberately."
         )
-    if not tables.isdisjoint(DELETE_ALL & DELETE_BY_PREDICATE):
-        raise ResetAborted("internal classification overlap")  # unreachable
 
 
 def _check_fk_graph(metadata) -> list[str]:

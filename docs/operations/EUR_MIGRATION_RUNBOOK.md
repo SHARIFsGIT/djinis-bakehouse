@@ -158,13 +158,20 @@ point 3. What the scripted procedure covers today is any non-production
 environment:
 
 1. Put the shop in maintenance mode / take it offline for the window.
+   This is not just caution: the script's pre-flight counts and its
+   after-verification read **outside** the delete transaction (the report
+   is written for humans, not as a lock). A write landing mid-run — a
+   customer placing an order between the delete and the after-count —
+   shows up as a PROBLEM in the after-report even though the deletion
+   itself was sound. A quiet window is what keeps the report readable.
 2. Take and verify the backup (points 1–2).
 3. Run the dry run (point 3); read every count.
 4. Run `--execute` (plus `--confirm-database` on a non-SQLite target).
    Everything happens in **one transaction** — children before parents — so
    a failure partway rolls back completely and leaves the database untouched.
 5. Read the after-report: deleted tables at zero, admin count unchanged,
-   protected tables unchanged, problems list empty.
+   protected tables unchanged, problems list empty. (A non-empty problems
+   list after a run in a quiet window means investigate — see point 1.)
 
 ## 7. Post-reset database verification
 
