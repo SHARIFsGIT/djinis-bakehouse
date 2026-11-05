@@ -46,8 +46,36 @@ class GatewayUnavailable(Exception):
     """Stripe could not be reached or refused the call — no money moved."""
 
 
+class InvalidOrderCurrency(Exception):
+    """The order's stored currency can't be charged, so the gateway refuses
+    to touch it. Relabelling historical money — charging an order in the
+    shop's *current* currency because its own is missing or unsupported —
+    is exactly the accident this exception exists to stop."""
+
+
 class BadSignature(Exception):
     """The webhook payload failed signature verification."""
+
+
+# What the gateway will actually bill in. Stripe supports many more, but the
+# shop's money pipeline (minor units, receipts, reporting) is proven for these
+# two only — a third currency joins this set when the shop decides to charge
+# it, not by accident of configuration.
+SUPPORTED_CURRENCIES = ("usd", "eur")
+
+
+def order_currency(order) -> str:
+    """The currency this order's money moves in — read off the order, never
+    off the settings. A missing or unknown code is refused, not guessed: the
+    whole point of order.currency is that a dollar order stays a dollar order
+    even after the shop starts charging euro."""
+    code = str(getattr(order, "currency", "") or "").strip().lower()
+    if code not in SUPPORTED_CURRENCIES:
+        raise InvalidOrderCurrency(
+            f"order {getattr(order, 'order_number', '?')} has an unchargeable currency "
+            f"({code or 'none'}); refusing to guess one"
+        )
+    return code
 
 
 def configured() -> bool:
@@ -85,12 +113,13 @@ def _item_photo(item, base_url: str) -> str | None:
     return base_url.rstrip("/") + url
 
 
-def _line_items(order, base_url: str, settings) -> list[dict]:
+def _line_items(order, base_url: str, settings, currency: str) -> list[dict]:
     """The hosted page's order summary: one line per product, then delivery
     and tax — the same rows the shop's own checkout shows, so the customer
     meets no surprises on the payment page. Delivery is sent even at 0
     (Stripe renders a zero line as free, like the storefront's FREE row);
-    tax only when there is any."""
+    tax only when there is any. Every line speaks the order's own currency,
+    so the page can never relabel an order's money."""
     lines = []
     for item in order.items:
         product_data = {"name": item.product_name}
@@ -100,7 +129,7 @@ def _line_items(order, base_url: str, settings) -> list[dict]:
         lines.append(
             {
                 "price_data": {
-                    "currency": settings.stripe_currency,
+                    "currency": currency,
                     "product_data": product_data,
                     "unit_amount": cents(float(item.unit_price)),
                 },
@@ -110,7 +139,7 @@ def _line_items(order, base_url: str, settings) -> list[dict]:
     lines.append(
         {
             "price_data": {
-                "currency": settings.stripe_currency,
+                "currency": currency,
                 "product_data": {"name": "Delivery"},
                 "unit_amount": cents(float(order.shipping_fee)),
             },
@@ -121,7 +150,7 @@ def _line_items(order, base_url: str, settings) -> list[dict]:
         lines.append(
             {
                 "price_data": {
-                    "currency": settings.stripe_currency,
+                    "currency": currency,
                     "product_data": {"name": _tax_label(settings)},
                     "unit_amount": cents(float(order.tax)),
                 },
@@ -147,16 +176,21 @@ def create_checkout_session(order, base_url: str) -> dict:
     """
     settings = get_settings()
     stripe.api_key = settings.stripe_secret_key
+    # Validated before anything touches Stripe: the currency every line, the
+    # coupon and (through the payment intent it creates) any later refund
+    # moves in is the order's own, whatever the shop charges today.
+    currency = order_currency(order)
     discount_amount = float(order.discount_amount or 0)
     try:
         discounts = None
         if discount_amount > 0:
             # Stripe has no negative line items, so a coupon discount rides
             # as a one-off Coupon object — the hosted page then shows
-            # "CODE −$x.xx" in Stripe's own dressing.
+            # "CODE −$x.xx" in Stripe's own dressing. Same currency as the
+            # lines it discounts, or Stripe would refuse the mismatch anyway.
             coupon = stripe.Coupon.create(
                 amount_off=cents(discount_amount),
-                currency=settings.stripe_currency,
+                currency=currency,
                 duration="once",
                 name=order.coupon_code or "Discount",
                 metadata={"order_number": order.order_number},
@@ -170,7 +204,7 @@ def create_checkout_session(order, base_url: str) -> dict:
             "client_reference_id": order.order_number,
             "customer_email": order.user.email,
             "expires_at": int(time.time()) + SESSION_LIFETIME_SECONDS,
-            "line_items": _line_items(order, base_url, settings),
+            "line_items": _line_items(order, base_url, settings, currency),
             "branding_settings": {
                 "background_color": BRAND_BACKGROUND_COLOR,
                 "button_color": BRAND_BUTTON_COLOR,
@@ -220,6 +254,13 @@ def retrieve_session(session_id: str) -> dict:
 
 def refund(payment_intent: str, amount_cents: int) -> None:
     """Send money back to the card, less any amount the shop keeps.
+
+    Refunds follow their payment intent's currency by Stripe's own rule —
+    no currency is passed here, none could disagree — and every payment
+    intent this gateway creates was built from its order's validated
+    currency (see create_checkout_session), so money always returns in the
+    currency it arrived in. The amount is the caller's to get right: it is
+    the order's own minor units, never converted.
 
     The idempotency key is deterministic — the same refund attempted again
     (a repeated cancel click racing the lock, a retry after an uncertain

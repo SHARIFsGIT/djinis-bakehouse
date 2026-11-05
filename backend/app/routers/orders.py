@@ -55,6 +55,23 @@ def _generate_order_number(db) -> str:
             return number
 
 
+def _charge_currency() -> str:
+    """The currency new orders are placed in — the configured charge
+    currency, validated and normalized before anything is written. An
+    unusable setting (typo, unset, a currency the payment pipeline doesn't
+    speak) pauses checkout entirely, cash included: an order stamped with a
+    currency nothing can charge or report would poison the book, and every
+    fail-closed door downstream refuses to guess one."""
+    code = str(settings.stripe_currency or "").strip().lower()
+    if code not in stripe_gateway.SUPPORTED_CURRENCIES:
+        raise HTTPException(
+            status_code=503,
+            detail="The shop's payment currency isn't configured correctly — "
+            "checkout is paused. Please try again soon.",
+        )
+    return code
+
+
 def _coupon_used_by(db, code: str, user_id: int) -> bool:
     """A once-per-customer code counts as used while the customer has any
     standing order that carried it — cancelling that order hands the code
@@ -286,6 +303,11 @@ def checkout(
             detail="Online payments aren't set up yet — please choose cash on delivery",
         )
 
+    # The charge currency every figure this order stores will be read in —
+    # validated up front so no row is ever written with money the pipeline
+    # can't charge or report.
+    charge_currency = _charge_currency()
+
     # Resolve delivery address (existing id or a new one created on the fly)
     if payload.address_id:
         address = db.scalar(
@@ -331,8 +353,8 @@ def checkout(
         payment_method=payload.payment_method.value,
         payment_status=payment_status,
         # The charge currency in force when the order is placed — the same
-        # setting every Stripe session for it will be created with.
-        currency=settings.stripe_currency,
+        # validated code every Stripe session for it will be created with.
+        currency=charge_currency,
         subtotal=round(subtotal, 2),
         discount_amount=discount,
         coupon_code=coupon.code if coupon else None,
@@ -398,14 +420,16 @@ def checkout(
 
     # Card orders now need a hosted Stripe page to pay at. If Stripe can't
     # be reached, the order is cancelled on the spot — no order may sit in
-    # the book with no way to pay it.
+    # the book with no way to pay it. An unchargeable currency is the same
+    # dead end for a card order (the gateway refuses to guess one), and the
+    # freshly-placed order is rolled back the same way.
     payment_url = None
     if payload.payment_method == PaymentMethod.CARD:
         try:
             session = stripe_gateway.create_checkout_session(
                 order, str(request.base_url).rstrip("/")
             )
-        except stripe_gateway.GatewayUnavailable:
+        except (stripe_gateway.GatewayUnavailable, stripe_gateway.InvalidOrderCurrency):
             _cancel_order(
                 order,
                 db,
@@ -485,8 +509,9 @@ def basket_quote(
         shipping_fee=totals.shipping,
         total=totals.total,
         # The currency the eventual order will be charged in — checkout
-        # records this same setting on every order it writes.
-        currency=settings.stripe_currency,
+        # records this same validated code on every order it writes, so a
+        # quote never promises a currency placement would refuse.
+        currency=_charge_currency(),
     )
 
 

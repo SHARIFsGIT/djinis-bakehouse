@@ -2798,6 +2798,230 @@ def test_refunding_a_historical_dollar_order_keeps_its_cents(monkeypatch):
     assert refunds[0][2] == round(float(order["total"]) * 100)  # the original usd cents
 
 
+def test_stats_split_money_by_currency_never_summing_it(monkeypatch):
+    """A dollar book and a euro book side by side: the headline tiles
+    describe the active currency only, and every currency's own revenue,
+    average and order count ride in revenue_by_currency. No total anywhere
+    adds dollars to euros."""
+    from app.routers import orders as orders_router
+
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    headers = auth_header(login_customer())
+
+    def bucket(code):
+        stats = client.get("/api/admin/stats", headers=admin_headers()).json()
+        return next((c for c in stats["revenue_by_currency"] if c["currency"] == code), None)
+
+    usd_before = bucket("usd") or {
+        "total_revenue": 0.0, "order_count": 0, "refunded_revenue": 0.0
+    }
+    eur_before = bucket("eur") or {
+        "total_revenue": 0.0, "order_count": 0, "refunded_revenue": 0.0
+    }
+
+    dollar = client.post(
+        "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
+    ).json()
+    assert dollar["currency"] == "usd"
+
+    monkeypatch.setattr(orders_router.settings, "stripe_currency", "eur", raising=True)
+    euro = client.post(
+        "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
+    ).json()
+    assert euro["currency"] == "eur"
+    monkeypatch.setattr(orders_router.settings, "stripe_currency", "usd", raising=True)
+
+    stats = client.get("/api/admin/stats", headers=admin_headers()).json()
+    by_code = {c["currency"]: c for c in stats["revenue_by_currency"]}
+
+    # Each currency's bucket grew by exactly its own new order.
+    assert by_code["usd"]["total_revenue"] == round(
+        usd_before["total_revenue"] + dollar["total"], 2
+    )
+    assert by_code["usd"]["order_count"] == usd_before["order_count"] + 1
+    assert by_code["eur"]["total_revenue"] == round(
+        eur_before["total_revenue"] + euro["total"], 2
+    )
+    assert by_code["eur"]["order_count"] == eur_before["order_count"] + 1
+    assert by_code["eur"]["total_revenue"] != by_code["usd"]["total_revenue"]
+
+    # The headline money is the active currency's slice alone, and the
+    # average is per-currency arithmetic, never a mixed mean.
+    assert stats["total_revenue"] == by_code["usd"]["total_revenue"]
+    assert stats["avg_order_value"] == by_code["usd"]["avg_order_value"]
+    assert by_code["usd"]["avg_order_value"] == round(
+        by_code["usd"]["total_revenue"] / by_code["usd"]["order_count"], 2
+    )
+
+    # Counts are facts, not money — they may span currencies.
+    assert stats["order_count"] >= by_code["usd"]["order_count"] + by_code["eur"]["order_count"]
+
+
+def test_lifetime_spend_never_mixes_currencies(monkeypatch):
+    """A customer who shopped before and after a cutover keeps two honest
+    numbers, not one invented sum: lifetime_spend is the active currency's
+    spend, and the full split rides alongside. The order count and last
+    visit span everything — they're facts, not money."""
+    from app.routers import orders as orders_router
+
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    headers = _register_and_login("mixed-wallet@example.com", "MixedWallet1!")
+
+    dollar = client.post(
+        "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
+    ).json()
+    monkeypatch.setattr(orders_router.settings, "stripe_currency", "eur", raising=True)
+    euro = client.post(
+        "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
+    ).json()
+    monkeypatch.setattr(orders_router.settings, "stripe_currency", "usd", raising=True)
+
+    page = client.get(
+        "/api/admin/users",
+        params={"search": "mixed-wallet@example.com"},
+        headers=admin_headers(),
+    ).json()
+    (customer,) = page["items"]
+    assert customer["order_count"] == 2
+    assert customer["lifetime_spend"] == dollar["total"]
+    assert customer["lifetime_spend_by_currency"] == {
+        "usd": dollar["total"],
+        "eur": euro["total"],
+    }
+
+
+def test_checkout_pauses_when_the_charge_currency_is_unusable(monkeypatch):
+    """A misconfigured charge currency (typo, unset, unchargeable code)
+    pauses checkout entirely — cash included — rather than stamping orders
+    with money nothing can charge or report. The quote promises nothing
+    either: it prices exactly what placement would refuse."""
+    from app.routers import orders as orders_router
+
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    headers = auth_header(login_customer())
+    orders_before = client.get("/api/orders", headers=headers).json()["pagination"]["total_items"]
+
+    monkeypatch.setattr(orders_router.settings, "stripe_currency", "gbp", raising=True)
+
+    refused = client.post(
+        "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
+    )
+    assert refused.status_code == 503
+    assert "paused" in refused.json()["detail"]
+
+    quote = client.post("/api/orders/quote", json={"items": checkout_payload()["items"]})
+    assert quote.status_code == 503
+
+    orders_after = client.get("/api/orders", headers=headers).json()["pagination"]["total_items"]
+    assert orders_after == orders_before  # nothing was written
+
+
+def test_a_new_pay_link_refuses_an_unchargeable_order_currency(monkeypatch):
+    """A historical order whose stored currency can't be charged is refused
+    untouched — not cancelled, not relabelled, never charged in a currency
+    it wasn't placed in. This path runs the real gateway's validation (the
+    suite's fake wouldn't refuse anything)."""
+    import importlib.util
+    from pathlib import Path
+
+    from app.database import SessionLocal
+    from app.models import Order as OrderRow
+
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    headers = auth_header(login_customer())
+    order = client.post("/api/orders", json=checkout_payload(), headers=headers).json()
+    sessions_before = len(fake_sessions)
+
+    # The order's stored currency goes bad — a currency the pipeline never
+    # supported, exactly the shape a botched cutover would leave behind.
+    db = SessionLocal()
+    try:
+        db.query(OrderRow).filter_by(id=order["id"]).one().currency = "gbp"
+        db.commit()
+    finally:
+        db.close()
+
+    # The real gateway (fresh module, like the signed-webhook test loads it)
+    # validates before Stripe is touched; its exception class is patched in
+    # so the endpoint's except-clause catches the very class it raises.
+    spec = importlib.util.spec_from_file_location(
+        "app._stripe_gateway_currency",
+        Path(__file__).resolve().parents[1] / "app" / "stripe_gateway.py",
+    )
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    monkeypatch.setattr(stripe_gateway, "create_checkout_session", fresh.create_checkout_session)
+    monkeypatch.setattr(stripe_gateway, "InvalidOrderCurrency", fresh.InvalidOrderCurrency)
+
+    refused = client.post(f"/api/payments/{order['id']}/session", headers=headers)
+    assert refused.status_code == 400
+    assert "can no longer be charged" in refused.json()["detail"]
+
+    detail = client.get(f"/api/orders/{order['id']}", headers=headers).json()
+    assert detail["status"] == "pending"  # refused, not cancelled
+    assert detail["currency"] == "gbp"  # history isn't rewritten
+    assert len(fake_sessions) == sessions_before  # and no session was minted
+
+
+def test_the_orders_export_names_each_rows_currency():
+    """The bookkeeping CSV says which money each row's figures read in —
+    after any cutover, no spreadsheet ever has to guess."""
+    import csv
+    import io as _io
+
+    response = client.get("/api/admin/orders/export", headers=admin_headers())
+    assert response.status_code == 200
+    rows = list(csv.reader(_io.StringIO(response.text)))
+    header, data = rows[0], rows[1:]
+    assert header[-1] == "currency"
+    assert data  # the suite has placed orders by now
+    currency_column = header.index("currency")
+    # Every row names its money — never blank, and honest about what's
+    # stored: the deliberately corrupted 'gbp' order from the pay-link test
+    # above reports as gbp, visibly not summed with its neighbours.
+    codes = {row[currency_column] for row in data}
+    assert all(code and code == code.strip() for code in codes)
+    assert "usd" in codes
+    assert "gbp" in codes
+
+
+def test_the_orders_export_blanks_read_as_unknown():
+    """A blank stored currency — the corrupted-row shape — exports as
+    "unknown", the same honest label the stats buckets use, never an
+    empty cell a spreadsheet would have to guess about."""
+    import csv
+    import io as _io
+
+    from app.database import SessionLocal
+    from app.models import Order as OrderRow
+
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    headers = auth_header(login_customer())
+    order = client.post(
+        "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
+    ).json()
+
+    db = SessionLocal()
+    try:
+        db.query(OrderRow).filter_by(id=order["id"]).one().currency = ""
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get("/api/admin/orders/export", headers=admin_headers())
+    assert response.status_code == 200
+    rows = list(csv.reader(_io.StringIO(response.text)))
+    header, data = rows[0], rows[1:]
+    column = header.index("currency")
+    row = next(r for r in data if r[0] == order["order_number"])
+    assert row[column] == "unknown"  # named, not blank — and never usd/eur
+
+
 def test_the_currency_column_migrates_a_legacy_sqlite_database(tmp_path, monkeypatch):
     """A database from before the currency column boots through the additive
     migration: the column lands and every existing row reads as the dollars

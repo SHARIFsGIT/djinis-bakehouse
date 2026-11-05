@@ -268,6 +268,14 @@ def new_payment_session(order_id: int, user: CurrentUser, db: DbSession, request
         session = stripe_gateway.create_checkout_session(
             order, str(request.base_url).rstrip("/")
         )
+    except stripe_gateway.InvalidOrderCurrency:
+        # A historical order whose stored currency can't be charged must be
+        # refused untouched — never cancelled, never relabelled. The desk
+        # settles it by hand; the customer is told honestly.
+        raise HTTPException(
+            status_code=400,
+            detail="This order's currency can no longer be charged — we'll contact you to settle it",
+        )
     except stripe_gateway.GatewayUnavailable:
         raise HTTPException(
             status_code=503,

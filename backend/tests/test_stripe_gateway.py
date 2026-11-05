@@ -115,6 +115,7 @@ def make_order(
     shipping=5.99,
     tax=1.23,
     photo="/static/products/croissant.jpg",
+    currency="usd",
 ):
     """An order shaped like the API's own output (croissants by default),
     totals pre-computed with the shop's money math."""
@@ -139,6 +140,7 @@ def make_order(
         shipping_fee=shipping,
         total=round(taxable + tax + shipping, 2),
         user=SimpleNamespace(email="taster@example.com"),
+        currency=currency,
     )
 
 
@@ -279,6 +281,100 @@ def test_a_silent_stripe_becomes_gateway_unavailable() -> None:
     with pytest.raises(gateway.GatewayUnavailable):
         gateway.create_checkout_session(make_order(), BASE_URL)
     assert stub.sessions == []
+
+
+# ── Currency safety: the order's money, not the setting's ─────────────────
+
+
+def test_every_line_speaks_the_currency_the_order_was_placed_in() -> None:
+    """Phase 1's core seam: a euro order builds an euro hosted page, a
+    dollar order a dollar one — the currency rides on the order itself."""
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+
+    gateway.create_checkout_session(make_order(), BASE_URL)  # usd
+    gateway.create_checkout_session(make_order(currency="eur"), BASE_URL)
+
+    currencies = [
+        {line["price_data"]["currency"] for line in kwargs["line_items"]}
+        for kwargs in stub.sessions
+    ]
+    assert currencies == [{"usd"}, {"eur"}]
+
+
+def test_an_orders_currency_beats_the_global_setting(monkeypatch) -> None:
+    """A dollar order stays a dollar order after the shop cuts over to
+    euro: flipping the configured currency must not relabel history's
+    money on the payment page."""
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+    monkeypatch.setattr(gateway.get_settings(), "stripe_currency", "eur", raising=True)
+
+    gateway.create_checkout_session(make_order(), BASE_URL)  # placed as usd
+
+    assert {line["price_data"]["currency"] for line in stub.sessions[0]["line_items"]} == {"usd"}
+
+
+def test_coupon_discounts_ride_in_the_orders_currency() -> None:
+    """The discount is money in the same currency as the lines it comes off
+    — a euro order's coupon is a euro coupon, to the cent."""
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+    order = make_order(
+        unit_price=15.0,
+        discount=6.0,
+        coupon_code="WELCOME10",
+        shipping=0.0,
+        tax=4.73,
+        currency="eur",
+    )
+
+    gateway.create_checkout_session(order, BASE_URL)
+
+    assert stub.coupons[0]["currency"] == "eur"
+    assert stub.coupons[0]["amount_off"] == 600
+    assert {line["price_data"]["currency"] for line in stub.sessions[0]["line_items"]} == {"eur"}
+
+
+def test_an_order_without_a_chargeable_currency_is_refused_not_guessed() -> None:
+    """Missing, blank and unsupported codes all refuse before Stripe is
+    touched. The gateway never falls back to the shop's current currency:
+    guessing would charge an order in money it wasn't placed in."""
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+
+    for bad in (None, "", "   ", "gbp", "bitcoin"):
+        with pytest.raises(gateway.InvalidOrderCurrency):
+            gateway.create_checkout_session(make_order(currency=bad), BASE_URL)
+
+    assert stub.sessions == []
+    assert stub.coupons == []
+
+
+def test_upper_case_currency_codes_normalize() -> None:
+    """ISO codes are case-insensitive — " EUR " stored on an order is still
+    a euro order, normalized rather than refused."""
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+
+    gateway.create_checkout_session(make_order(currency=" EUR "), BASE_URL)
+
+    assert {line["price_data"]["currency"] for line in stub.sessions[0]["line_items"]} == {"eur"}
+
+
+def test_refunds_carry_no_currency_they_follow_their_payment_intent() -> None:
+    """Stripe refunds follow the payment intent's currency by its own rule;
+    the gateway passes none, so nothing can ever disagree with the currency
+    the intent — built from its order's validated currency — was charged in."""
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+
+    gateway.refund("pi_test_1", 500)
+
+    (call,) = stub.refunds
+    assert "currency" not in call
+    assert call["payment_intent"] == "pi_test_1"
+    assert call["amount"] == 500
 
 
 def test_refund_carries_a_deterministic_idempotency_key() -> None:
