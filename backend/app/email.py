@@ -477,3 +477,46 @@ def send_admin_notification(to: str, title: str, body: str | None, link: str | N
         send_email(to, subject, html, text)
     except Exception:
         logger.exception("building the admin notification email failed")
+
+
+def campaign_email(content: dict) -> tuple[str, str, str]:
+    """A marketing email — the baker's words in the same card the shop's
+    transactional mail wears, plus the two lines German e-marketing and
+    this shop's own rules require in every single copy: why the customer
+    hears from us, and a working one-click unsubscribe link.
+
+    `content` carries plain values only (first_name, subject, body — the
+    free text, already personalised — plus `why` and `unsubscribe_url`),
+    so the background task never has to touch a database session. This is
+    the only template senders in routers/marketing use; transactional mail
+    (receipts, status notes, resets) is built by the functions above and
+    never travels with an unsubscribe footer, because it isn't marketing."""
+    shop = get_settings().bakery_name
+    subject = content["subject"]
+    body_html = escape(content["body"]).replace("\n", "<br>")
+    why = content["why"]
+    link = content["unsubscribe_url"]
+    text = (
+        f"Hi {content['first_name']},\n\n"
+        f"{content['body']}\n\n"
+        f"—\n"
+        f"{why}\n"
+        f"Unsubscribe in one click: {link}\n"
+    )
+    html = f"""\
+<div style="margin:0;padding:24px;background:#f6f1ee;font-family:Georgia,'Times New Roman',serif;color:#33322e;">
+  <div style="max-width:480px;margin:0 auto;background:#fffdf9;border-radius:14px;padding:32px;
+              border:1px solid #e7ddd6;">
+    <p style="margin:0 0 4px;font-size:15px;color:{_BRAND};font-weight:bold;">{shop}</p>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;">
+      {body_html}
+    </p>
+    <p style="margin:24px 0 4px;padding-top:12px;border-top:1px solid #e7ddd6;
+              font-size:12px;line-height:1.6;color:#8a837a;">
+      {escape(why)}.<br>
+      <a href="{link}" style="color:{_BRAND};">Unsubscribe</a> — one click, done for good.
+    </p>
+  </div>
+</div>
+"""
+    return subject, html, text

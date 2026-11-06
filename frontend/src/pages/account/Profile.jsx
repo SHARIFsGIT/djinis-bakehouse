@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { Camera, Download, ShieldAlert, Trash2 } from "lucide-react";
-import client, { apiError } from "../../api/client";
+import client, { apiError, tokens } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { formatDate, todayISO } from "../../lib/format";
@@ -117,7 +117,7 @@ export default function Profile() {
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-      {/* Details */}
+      {/* Left column: who you are */}
       <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
         <h2 className="font-display text-2xl font-semibold">Your profile</h2>
         <p className="mt-1 text-sm opacity-60">
@@ -205,7 +205,8 @@ export default function Profile() {
         </form>
       </section>
 
-      {/* Password */}
+      {/* Right column: your sign-in, then your data directly below it */}
+      <div className="flex flex-col gap-6">
       <section className="h-fit rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
         <h2 className="font-display text-2xl font-semibold">Change password</h2>
         <form onSubmit={changePassword} className="mt-5 space-y-4">
@@ -242,7 +243,7 @@ export default function Profile() {
       </section>
 
       {/* Your data — see it whole, or take it back */}
-      <section className="h-fit rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60 lg:col-span-2">
+      <section className="h-fit rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
         <h2 className="font-display text-2xl font-semibold">Your data</h2>
         <p className="mt-1 text-sm opacity-60">
           Everything this shop holds on you — profile, addresses, orders,
@@ -305,6 +306,7 @@ export default function Profile() {
           </form>
         )}
       </section>
+      </div>
     </div>
   );
 }

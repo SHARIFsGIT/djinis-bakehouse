@@ -17,6 +17,7 @@ import Register from "./pages/Register";
 import SocialCallback from "./pages/SocialCallback";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
+import Unsubscribe from "./pages/Unsubscribe";
 import NotFound from "./pages/NotFound";
 import { PrivacyPolicy, RefundPolicy, TermsOfService } from "./pages/Legal";
 import AccountLayout from "./pages/account/AccountLayout";
@@ -34,6 +35,7 @@ import Costing from "./pages/admin/Costing";
 import AdminReviews from "./pages/admin/Reviews";
 import Promotions from "./pages/admin/Promotions";
 import AdminUsers from "./pages/admin/Users";
+import Marketing from "./pages/admin/Marketing";
 import Settings from "./pages/admin/Settings";
 
 function ScrollToTop() {
@@ -84,6 +86,7 @@ export default function App() {
           <Route path="auth/callback" element={<SocialCallback />} />
           <Route path="forgot-password" element={<ForgotPassword />} />
           <Route path="reset-password" element={<ResetPassword />} />
+          <Route path="unsubscribe" element={<Unsubscribe />} />
           <Route path="privacy" element={<PrivacyPolicy />} />
           <Route path="terms" element={<TermsOfService />} />
           <Route path="refunds" element={<RefundPolicy />} />
@@ -115,6 +118,7 @@ export default function App() {
               <Route path="reviews" element={<AdminReviews />} />
               <Route path="promotions" element={<Promotions />} />
               <Route path="users" element={<AdminUsers />} />
+              <Route path="marketing" element={<Marketing />} />
               <Route path="settings" element={<Settings />} />
             </Route>
           </Route>

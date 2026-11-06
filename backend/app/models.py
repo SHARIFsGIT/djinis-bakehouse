@@ -81,6 +81,24 @@ class User(Base):
     # use, digest only) — real tokens never ride in a URL.
     login_code_hash: Mapped[str | None] = mapped_column(String(64))
     login_code_expires: Mapped[datetime | None] = mapped_column(DateTime)
+    # The baker's own word for a customer — vip | loyal | lapsed | regular,
+    # or NULL for "no special classification". Strictly manual and strictly
+    # separate from the measured loyalty tier (app/loyalty.py): one is the
+    # desk's judgement, the other the order book's arithmetic, and neither
+    # ever feeds the other. Every change lands in classification_events.
+    classification: Mapped[str | None] = mapped_column(String(12))
+    # Marketing permission (GDPR / German e-marketing): consent is explicit,
+    # demonstrated, and recorded separately from anything transactional.
+    # marketing_consent_at is the whole switch — an account, a purchase or a
+    # newsletter signup never sets it. Source says where consent was given
+    # (counter form, email reply, …); evidence is what the owner could show
+    # a regulator. Cleared the moment the customer unsubscribes.
+    marketing_consent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    marketing_consent_source: Mapped[str | None] = mapped_column(String(50))
+    marketing_consent_evidence: Mapped[str | None] = mapped_column(Text)
+    # The per-customer key behind the unsubscribe link in marketing emails.
+    # Random, revocable, and only ever handed out inside those emails.
+    marketing_token: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     addresses: Mapped[list["Address"]] = relationship(
@@ -198,17 +216,39 @@ class Product(Base):
 
 
 class Coupon(Base):
-    """Percent-off promotion code applied once per checkout."""
+    """A promotion code applied once per checkout — percent-off by origin,
+    or a fixed euro amount for the personalised vouchers the marketing desk
+    mints (fixed_amount_off set ⇔ percent_off reads 0)."""
 
     __tablename__ = "coupons"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
-    percent_off: Mapped[int] = mapped_column(Integer)  # 1..100
+    percent_off: Mapped[int] = mapped_column(Integer)  # 1..100 (0 on fixed-value rows)
     description: Mapped[str | None] = mapped_column(String(255))
     # Minimum basket subtotal the code applies to (None/0 = no minimum).
     # Powers the "add €X more to unlock" nudge on the basket page.
     min_subtotal: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    # Fixed-value discount in the shop's active currency. Set only on
+    # personalised vouchers minted from the marketing desk; None on every
+    # percent-off code (the historic kind and the default).
+    fixed_amount_off: Mapped[float | None] = mapped_column(Numeric(10, 2))
+    # Customer restriction for personalised vouchers: the code works for
+    # this account alone and never appears on the public voucher board.
+    # None = a shop-wide code anyone may use.
+    restricted_to_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    # When the code stops working (None = no expiry). Enforced wherever a
+    # coupon is loaded, so an expired voucher is simply gone.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Total redemptions allowed across all customers (None = unlimited).
+    # once_per_customer below still applies per account.
+    max_redemptions: Mapped[int | None] = mapped_column(Integer)
+    # Who minted a personalised voucher (None on shop-wide codes).
+    created_by_admin_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
     # A minimum recorded before the 2026-11-05 EUR cutover is a USD numeral;
     # the application cannot tell it from a deliberately chosen euro figure,
     # so it stays False (the coupon's minimum unshown, the code unappliable)
@@ -291,13 +331,104 @@ class RestockAlert(Base):
 
 
 class Subscriber(Base):
-    """Newsletter signup — one row per email address, however many times sent."""
+    """Newsletter signup — one row per email address, however many times sent.
+
+    A signup alone is NOT marketing consent (the GDPR rule the marketing
+    desk works under): consent is recorded on the customer's account, with
+    source and evidence, before any campaign may include them."""
 
     __tablename__ = "subscribers"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     source: Mapped[str | None] = mapped_column(String(50))  # footer, checkout, …
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ClassificationEvent(Base):
+    """The classification ledger: every manual classification change, who
+    made it, and what it changed from and to. Append-only — the history is
+    the proof of who decided what, exactly like ProductVatEvent."""
+
+    __tablename__ = "classification_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    # The admin's id survives account deletion as NULL; the name is the
+    # snapshot the ledger keeps.
+    admin_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    admin_name: Mapped[str] = mapped_column(String(150))
+    from_classification: Mapped[str | None] = mapped_column(String(12))
+    to_classification: Mapped[str | None] = mapped_column(String(12))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Suppression(Base):
+    """Addresses no marketing email may ever be sent to — unsubscribes,
+    withdrawn consent, bounces, complaints. Consulted by every campaign
+    send alongside the consent flag, so removal needs a fresh recorded
+    consent, never a quiet delete."""
+
+    __tablename__ = "suppression_list"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    # unsubscribed | withdrawn | manual | bounced | complained
+    reason: Mapped[str] = mapped_column(String(20))
+    note: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class MarketingCampaign(Base):
+    """One admin-authored marketing email: a campaign to a segment, or a
+    message to a single customer (recipient_user_id set, segment empty).
+    Draft → sent; the per-recipient truth lands in campaign_deliveries."""
+
+    __tablename__ = "marketing_campaigns"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100))
+    subject: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    # {"classifications": ["vip", …] | None, "loyalty": ["lapsed", …] | None}
+    # None fields read as "any"; an entirely null segment = everyone with
+    # valid consent (consent is always required, whatever the segment).
+    segment: Mapped[dict | None] = mapped_column(JSON)
+    # A single-customer message: set means exactly this account is mailed.
+    recipient_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    # draft | sending | sent
+    status: Mapped[str] = mapped_column(String(10), default="draft")
+    created_by_admin_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_by_name: Mapped[str] = mapped_column(String(150))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Counts frozen at send time so the list view needs no joins.
+    recipient_count: Mapped[int] = mapped_column(Integer, default=0)
+    sent_count: Mapped[int] = mapped_column(Integer, default=0)
+    suppressed_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class CampaignDelivery(Base):
+    """What actually happened for one recipient of one campaign — sent,
+    suppressed (with the reason: no consent, unsubscribed, …) or failed.
+    The owner's proof of exactly who was emailed and who was held back."""
+
+    __tablename__ = "campaign_deliveries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    campaign_id: Mapped[int] = mapped_column(
+        ForeignKey("marketing_campaigns.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    # The address as it stood at send time — campaigns never email a list,
+    # each copy carries exactly one address (no cross-customer exposure).
+    email: Mapped[str] = mapped_column(String(255))
+    # sent | suppressed | failed
+    status: Mapped[str] = mapped_column(String(12))
+    reason: Mapped[str | None] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

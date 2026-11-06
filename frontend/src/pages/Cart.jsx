@@ -18,7 +18,12 @@ function VoucherCard({ voucher, subtotal, applied, onApply, onRemove }) {
   const min = voucher.min_subtotal || 0;
   const unlocked = subtotal >= min;
   const away = Math.max(0, min - subtotal);
-  const saving = (subtotal * voucher.percent_off) / 100;
+  // Codes come in two kinds — a percent of the basket or a whole euro
+  // amount (never past the basket's value, like the pricing service).
+  const saving =
+    voucher.fixed_amount_off != null
+      ? Math.min(voucher.fixed_amount_off, subtotal)
+      : (subtotal * voucher.percent_off) / 100;
 
   return (
     <div
@@ -354,7 +359,11 @@ export default function Cart() {
               {quote.coupon_code && (
                 <div className="flex justify-between font-semibold text-success">
                   <span>
-                    {quote.coupon_code} ({quote.coupon_percent_off}% off)
+                    {quote.coupon_code} (
+                    {quote.coupon_percent_off != null
+                      ? `${quote.coupon_percent_off}% off`
+                      : `${money(quote.coupon_fixed_amount)} off`}
+                    )
                   </span>
                   <span>−{money(quote.discount_amount)}</span>
                 </div>

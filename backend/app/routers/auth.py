@@ -15,6 +15,7 @@ from ..email import reset_password_email, send_email
 from ..facebook_gateway import FacebookError
 from ..models import (
     Address,
+    ClassificationEvent,
     Favorite,
     Order,
     RestockAlert,
@@ -605,12 +606,21 @@ def delete_my_account(
     db.execute(delete(Favorite).where(Favorite.user_id == user_id))
     db.execute(delete(RestockAlert).where(RestockAlert.email == old_email))
     db.execute(delete(Subscriber).where(Subscriber.email == old_email))
+    # The marketing person goes with the rest: the classification ledger
+    # (it names the person) and the consent record itself. The suppression
+    # row STAYS — deleting the account is not a licence to start mailing
+    # the address again should it ever return.
+    db.execute(delete(ClassificationEvent).where(ClassificationEvent.user_id == user_id))
 
     delete_photo(user.avatar_url)
     # The account row stays — orders point at it — but it is a shell: no
     # name, no contact details, no linked logins, no way to sign in, and
-    # every token already issued dies with the version bump.
-    user.email = f"deleted-account-{user_id}@customers.invalid"
+    # every token already issued dies with the version bump. The placeholder
+    # address is unique per account and lives under a non-mail subdomain of
+    # the shop's own domain — syntactically valid on purpose: an `.invalid`
+    # style suffix is rejected by the email schema, and one deleted account
+    # would then 500 the whole Users roll.
+    user.email = f"deleted-account-{user_id}@deleted.djinisbakehouse.com"
     user.first_name = "Deleted"
     user.last_name = "customer"
     user.phone = None
@@ -623,6 +633,11 @@ def delete_my_account(
     user.phone_otp_created_at = None
     user.login_code_hash = None
     user.login_code_expires = None
+    user.classification = None
+    user.marketing_consent_at = None
+    user.marketing_consent_source = None
+    user.marketing_consent_evidence = None
+    user.marketing_token = None
     user.password_hash = hash_password(secrets.token_urlsafe(32))
     user.token_version += 1
     user.is_active = False

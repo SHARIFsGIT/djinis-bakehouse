@@ -14,6 +14,7 @@ from sqlalchemy import func, select, update
 
 from .. import stripe_gateway, pricing
 from ..config import get_settings
+from ..database import utcnow
 from ..email import send_order_receipt, send_order_status_email
 from ..money import money
 from ..loyalty import loyalty_tier
@@ -100,6 +101,35 @@ def _load_coupon(db, code: str, user: User | None = None) -> Coupon:
             status_code=404,
             detail=f"{coupon.code} is a one-per-customer code and has already been used",
         )
+    # A voucher minted for one customer works for that account alone — for
+    # anyone else (or a guest) it simply does not exist. Preview, quote and
+    # placement all funnel through here, so one gate covers all.
+    if coupon.restricted_to_user_id is not None and (
+        user is None or user.id != coupon.restricted_to_user_id
+    ):
+        raise HTTPException(status_code=404, detail="This coupon code is not valid")
+    # Personalised vouchers expire; an expired code is spent, whoever asks.
+    if coupon.expires_at is not None and coupon.expires_at <= utcnow():
+        raise HTTPException(
+            status_code=404,
+            detail=f"{coupon.code} has expired and is no longer valid",
+        )
+    # A total-redemption cap across all customers (None = unlimited).
+    if coupon.max_redemptions is not None:
+        redeemed = (
+            db.scalar(
+                select(func.count(Order.id)).where(
+                    Order.coupon_code == coupon.code,
+                    Order.status != OrderStatus.CANCELLED.value,
+                )
+            )
+            or 0
+        )
+        if redeemed >= coupon.max_redemptions:
+            raise HTTPException(
+                status_code=404,
+                detail=f"{coupon.code} has been fully redeemed",
+            )
     # A minimum recorded before the 2026-11-05 EUR cutover is a USD numeral
     # the app cannot re-read as euros, so it must not be spent (nor nudged
     # toward) until an administrator re-saves the coupon from the Promotions
@@ -631,7 +661,12 @@ def basket_quote(
         subtotal=subtotal,
         discount_amount=totals.discount,
         coupon_code=coupon.code if coupon else None,
-        coupon_percent_off=coupon.percent_off if coupon else None,
+        coupon_percent_off=(
+            coupon.percent_off if coupon and coupon.fixed_amount_off is None else None
+        ),
+        coupon_fixed_amount=(
+            float(coupon.fixed_amount_off) if coupon and coupon.fixed_amount_off is not None else None
+        ),
         tax=totals.tax,
         shipping_fee=totals.shipping,
         total=totals.total,
@@ -660,6 +695,9 @@ def check_coupon(code: str, user: CurrentUser, db: DbSession):
         description=coupon.description,
         min_subtotal=float(coupon.min_subtotal) if coupon.min_subtotal else None,
         min_subtotal_approved=coupon.min_subtotal_approved,
+        fixed_amount_off=(
+            float(coupon.fixed_amount_off) if coupon.fixed_amount_off is not None else None
+        ),
     )
 
 

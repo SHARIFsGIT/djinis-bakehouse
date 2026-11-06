@@ -345,6 +345,9 @@ class QuoteOut(BaseModel):
     discount_amount: float = 0
     coupon_code: str | None = None
     coupon_percent_off: int | None = None
+    # Set (with coupon_percent_off null) when the applied code is a
+    # fixed-value voucher — the saving is a euro amount, not a percent.
+    coupon_fixed_amount: float | None = None
     tax: float
     shipping_fee: float
     total: float
@@ -643,6 +646,15 @@ class CouponOut(ORMModel):
     is_active: bool
     once_per_customer: bool
     created_at: datetime
+    # Fixed-value voucher fields (marketing desk). fixed_amount_off set ⇒
+    # percent_off reads 0; the two kinds never mix on one code.
+    fixed_amount_off: float | None = None
+    # The account a personalised voucher belongs to (name for the desk);
+    # None on shop-wide codes.
+    restricted_to_user_id: int | None = None
+    restricted_to_name: str | None = None
+    expires_at: datetime | None = None
+    max_redemptions: int | None = None
     # Kept orders that carried the code — the desk's honest usage count,
     # derived at read time (never stored, never stale).
     redemptions: int = 0
@@ -660,6 +672,8 @@ class CouponPreviewOut(BaseModel):
     # Shopper-facing responses never carry the approval flag itself — the
     # validator below simply withdraws an unapproved minimum from view.
     min_subtotal_approved: bool = False
+    # A fixed-value voucher says what it takes off in money, not percent.
+    fixed_amount_off: float | None = None
 
     @model_validator(mode="after")
     def _hide_unapproved_minimum(self):
@@ -767,15 +781,20 @@ class AdminCustomerOut(UserOut):
     )
     last_order_at: datetime | None = None
     loyalty: str = "regular"
+    # The desk's manual word for the customer — read straight off the
+    # account, never derived from `loyalty` and never feeding it.
+    classification: str | None = None
+    marketing_consent_at: datetime | None = None
 
 
 class AdminUserPage(BaseModel):
-    """One shelf of the roll: the page itself, the whole roll's tier counts
-    (so the filter chips stay honest from any page), and where this page
-    sits in it."""
+    """One shelf of the roll: the page itself, the whole roll's tier and
+    classification counts (so the filter chips stay honest from any page),
+    and where this page sits in it."""
 
     items: list[AdminCustomerOut]
     tier_counts: dict[str, int]
+    classification_counts: dict[str, int] = {}
     pagination: PaginationOut
 
 
@@ -791,6 +810,182 @@ class LoyaltyVouchersOut(BaseModel):
 
     vip: CouponOut | None = None
     loyal: CouponOut | None = None
+
+
+# --------------------------------------------------------------------------
+# Manual customer classification + marketing (consent, campaigns, vouchers)
+# --------------------------------------------------------------------------
+
+# The desk's own vocabulary — deliberately the same words the measured
+# loyalty tiers use, but a *different* field on the customer: manual
+# classification is the baker's judgement, loyalty is the order book's
+# arithmetic, and neither ever feeds the other.
+CLASSIFICATIONS = ("vip", "loyal", "lapsed", "regular")
+
+
+class ClassificationUpdateRequest(BaseModel):
+    """One manual classification write — or None to clear it."""
+
+    classification: str | None
+
+    @field_validator("classification")
+    @classmethod
+    def known(cls, value: str | None) -> str | None:
+        if value is not None and value not in CLASSIFICATIONS:
+            known = ", ".join(CLASSIFICATIONS)
+            raise ValueError(
+                f"unknown classification '{value}' — use one of: {known}, or null to clear"
+            )
+        return value
+
+
+class ClassificationEventOut(ORMModel):
+    """One line of the classification ledger."""
+
+    id: int
+    user_id: int
+    admin_name: str
+    from_classification: str | None = None
+    to_classification: str | None = None
+    created_at: datetime
+
+
+class ConsentUpdateRequest(BaseModel):
+    """Record or withdraw marketing consent. A grant must say where consent
+    was given and carry evidence the owner could show a regulator (GDPR
+    Art. 7's demonstrability) — an account, an order or a newsletter
+    signup is never consent by itself."""
+
+    granted: bool
+    source: str | None = Field(default=None, max_length=50)
+    evidence: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def _grant_needs_proof(self):
+        if self.granted and (not (self.source or "").strip() or not (self.evidence or "").strip()):
+            raise ValueError(
+                "recording consent needs a source (where it was given) and evidence "
+                "(what you could show a regulator) — consent is never assumed"
+            )
+        return self
+
+
+class MarketingStateOut(ORMModel):
+    """A customer's marketing permission as the desk reads it."""
+
+    marketing_consent_at: datetime | None = None
+    marketing_consent_source: str | None = None
+    marketing_consent_evidence: str | None = None
+    suppressed: bool = False
+    suppression_reason: str | None = None
+
+
+class CampaignSegmentIn(BaseModel):
+    """Who a campaign addresses. A missing list means "any"; consent is
+    required no matter how narrow the segment."""
+
+    classifications: list[str] | None = None
+    loyalty: list[str] | None = None
+
+
+class CampaignCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    subject: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=10000)
+    segment: CampaignSegmentIn | None = None
+    # A message to exactly one customer — set means segment is ignored.
+    recipient_user_id: int | None = None
+
+
+class CampaignDeliveryOut(ORMModel):
+    """What happened for one recipient of one campaign."""
+
+    id: int
+    user_id: int | None = None
+    customer_name: str | None = None
+    email: str
+    status: str
+    reason: str | None = None
+    created_at: datetime
+
+
+class CampaignOut(ORMModel):
+    """A campaign as the list shows it — counts frozen at send time."""
+
+    id: int
+    name: str
+    subject: str
+    status: str
+    segment: dict | None = None
+    recipient_user_id: int | None = None
+    recipient_name: str | None = None
+    created_by_name: str
+    created_at: datetime
+    sent_at: datetime | None = None
+    recipient_count: int = 0
+    sent_count: int = 0
+    suppressed_count: int = 0
+    failed_count: int = 0
+
+
+class CampaignDetailOut(CampaignOut):
+    body: str = ""
+    deliveries: list[CampaignDeliveryOut] = []
+
+
+class VoucherCreateRequest(BaseModel):
+    """Mint a personalised voucher for one customer. Exactly one discount
+    kind — a percent or a fixed euro amount. One-per-customer and the
+    customer restriction are always on; expiry and total cap optional."""
+
+    user_id: int
+    percent_off: int | None = Field(default=None, ge=1, le=100)
+    amount_off: float | None = Field(default=None, gt=0)
+    expires_at: datetime | None = None
+    max_redemptions: int | None = Field(default=None, ge=1)
+    note: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def _one_kind(self):
+        if (self.percent_off is None) == (self.amount_off is None):
+            raise ValueError(
+                "choose exactly one discount: percent_off (a percent) or "
+                "amount_off (a euro amount)"
+            )
+        return self
+
+
+class SuppressionOut(ORMModel):
+    """One address no marketing email may be sent to."""
+
+    id: int
+    email: str
+    reason: str
+    note: str | None = None
+    created_at: datetime
+
+
+class UnsubscribeRequest(BaseModel):
+    """The one-click opt-out from an email footer — just the customer's
+    private token, nothing else."""
+
+    token: str = Field(min_length=10, max_length=128)
+
+
+class MarketingOverviewOut(BaseModel):
+    """The marketing desk's headline numbers."""
+
+    customers: int
+    consenting: int
+    suppressed: int
+    classification_counts: dict[str, int]
+    campaigns_sent: int
+    # The 40 % margin-floor brake on voucher discounts (from the costing
+    # book): the most any voucher may take off, or null when no product has
+    # usable costing data yet (vouchers then refuse — fail-closed).
+    voucher_percent_cap: int | None
+    voucher_fixed_cap: float | None
+    costed_products: int
 
 
 # --------------------------------------------------------------------------

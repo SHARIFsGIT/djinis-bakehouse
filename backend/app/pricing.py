@@ -65,8 +65,13 @@ def price_basket_exclusive(subtotal: float, coupon, free_threshold: float, tax_r
     """Net shelf prices + the flat register rate on the discounted
     subtotal, delivery judged on the pre-discount shelf value. The exact
     arithmetic routers/orders._price_basket has always run — moved, not
-    changed; the suite pins it to the cent."""
-    discount = round(subtotal * coupon.percent_off / 100, 2) if coupon else 0.0
+    changed; the suite pins it to the cent. The one addition: a
+    fixed-value voucher (coupon.fixed_amount_off set) takes its whole euro
+    amount off the subtotal, never past it."""
+    if coupon is not None and coupon.fixed_amount_off is not None:
+        discount = round(min(float(coupon.fixed_amount_off), subtotal), 2)
+    else:
+        discount = round(subtotal * coupon.percent_off / 100, 2) if coupon else 0.0
     taxable = round(subtotal - discount, 2)
     tax = round(taxable * tax_rate, 2)
     shipping = 0.0 if subtotal >= free_threshold else shipping_fee
@@ -168,24 +173,38 @@ def price_basket_inclusive(db, merged: dict, coupon, shipping_gross) -> Inclusiv
     Raises ProductNotVatReady for the first product that cannot be priced
     (unclassified, parked for review, or not approved) — the caller turns
     that into a fail-closed refusal naming the product. The coupon takes
-    its whole percent off every line's gross (a discount reduces the VAT
-    base with it), each discounted line is re-extracted at its own rate,
-    and the delivery charge is allocated across the discounted lines' rate
-    buckets. Every figure below is Decimal cents, half-up.
+    its percent off every line's gross (a fixed-value voucher instead
+    splits its whole euro amount across the lines by gross weight,
+    vat.split_by_weights — never past the basket's shelf value); a discount
+    reduces the VAT base with it, each discounted line is re-extracted at
+    its own rate, and the delivery charge is allocated across the
+    discounted lines' rate buckets. Every figure below is Decimal cents,
+    half-up.
     """
-    percent = Decimal(str(coupon.percent_off)) if coupon else Decimal("0")
-
-    lines = []
+    entries = []
     for product, quantity in merged.items():
         try:
             base = vat.price_line_inclusive(product, quantity, db)
         except vat.VatError as exc:
             raise ProductNotVatReady(product.name, str(exc)) from None
-        discount = (
-            vat.round_cents(base.gross_line_total * percent / Decimal("100"))
-            if coupon
-            else Decimal("0.00")
-        )
+        entries.append((product, quantity, base))
+
+    # The coupon's slice per line — exactly one kind ever applies.
+    if coupon is not None and coupon.fixed_amount_off is not None:
+        shelf = sum((b.gross_line_total for _, _, b in entries), Decimal("0.00"))
+        pool = min(vat.round_cents(coupon.fixed_amount_off), shelf)
+        discounts = vat.split_by_weights(pool, [b.gross_line_total for _, _, b in entries])
+    elif coupon is not None:
+        percent = Decimal(str(coupon.percent_off))
+        discounts = [
+            vat.round_cents(b.gross_line_total * percent / Decimal("100"))
+            for _, _, b in entries
+        ]
+    else:
+        discounts = [Decimal("0.00")] * len(entries)
+
+    lines = []
+    for (product, quantity, base), discount in zip(entries, discounts):
         gross_after = base.gross_line_total - discount
         net_after, vat_after = vat.extract_vat(gross_after, base.vat_rate)
         lines.append(

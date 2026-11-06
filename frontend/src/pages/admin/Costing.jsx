@@ -177,14 +177,18 @@ export default function Costing() {
 function ReviewTab({ onOpenRecipe }) {
   const toast = useToast();
   const [data, setData] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [windowDays, setWindowDays] = useState(14);
 
   useEffect(() => {
-    setData(null);
+    // The old shelf stays up (dimmed) while the new window loads — swapping
+    // it for a spinner would bounce the whole tab on every change.
+    setRefreshing(true);
     client
       .get("/admin/costing/cost-review", { params: { window: windowDays } })
       .then(({ data }) => setData(data))
-      .catch((e) => toast.error(apiError(e)));
+      .catch((e) => toast.error(apiError(e)))
+      .finally(() => setRefreshing(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [windowDays]);
 
@@ -240,9 +244,13 @@ function ReviewTab({ onOpenRecipe }) {
         </Card>
       )}
 
+      <div className={refreshing ? "space-y-6 opacity-60 transition-opacity" : "space-y-6 transition-opacity"}>
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-display text-lg font-semibold">Overdue ({overdue.length})</h3>
+          <h3 className="font-display text-lg font-semibold">
+            Overdue ({overdue.length})
+            {refreshing && <span className="loading loading-spinner loading-xs ml-2 align-middle opacity-60" />}
+          </h3>
           <label className="flex items-center gap-2 text-xs opacity-70">
             Upcoming window
             <select
@@ -273,6 +281,7 @@ function ReviewTab({ onOpenRecipe }) {
           <div className="mt-3 space-y-2">{upcoming.map(entryRow)}</div>
         )}
       </Card>
+      </div>
     </div>
   );
 }
@@ -514,10 +523,10 @@ function IngredientsTab() {
 
   return (
     <div className="space-y-6">
-      {/* Create */}
+      {/* Create — two-up on tablets, one row only where it genuinely fits */}
       <form
         onSubmit={create}
-        className="grid gap-3 rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_80px_90px_90px_100px_minmax(0,1fr)_auto] sm:items-end"
+        className="grid gap-3 rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,90px)_minmax(0,100px)_minmax(0,100px)_minmax(0,100px)_minmax(0,1.2fr)_auto] xl:items-end"
       >
         <Field label="Name *">
           <input
@@ -900,7 +909,7 @@ function IngredientRow({
   const set = (key) => (e) => setEditDraft((d) => ({ ...d, [key]: e.target.value }));
   return (
     <>
-      <tr className={ing.overdue ? "hover:bg-base-200/50" : "hover:bg-base-200/50"}>
+      <tr className={ing.overdue ? "bg-warning/5 hover:bg-base-200/50" : "hover:bg-base-200/50"}>
         <td>
           <span className="font-semibold">
             {ing.name}
@@ -973,7 +982,7 @@ function IngredientRow({
       {editing && (
         <tr className="bg-base-200/40">
           <td colSpan={5}>
-            <div className="grid grid-cols-2 gap-2 p-2 sm:grid-cols-4 lg:grid-cols-6">
+            <div className="grid grid-cols-2 gap-3 p-2 sm:grid-cols-4 lg:grid-cols-6">
               <Field label="Name">
                 <input className={inputCls} value={editDraft.name} onChange={set("name")} />
               </Field>
@@ -1003,7 +1012,11 @@ function IngredientRow({
                 <input type="number" step="any" min="0" className={inputCls} value={editDraft.purchase_price} onChange={set("purchase_price")} />
               </Field>
               <Field label="Currency">
-                <input className={inputCls} maxLength={3} value={editDraft.currency} onChange={set("currency")} />
+                <select className={selectCls} value={editDraft.currency} onChange={set("currency")}>
+                  {CURRENCIES.map((c) => (
+                    <option key={c} value={c}>{c.toUpperCase()}</option>
+                  ))}
+                </select>
               </Field>
               <Field label="Density g/ml">
                 <input type="number" step="any" min="0" className={inputCls} placeholder="mass ↔ volume only" value={editDraft.density_g_per_ml} onChange={set("density_g_per_ml")} />
@@ -1211,33 +1224,60 @@ function RecipesTab({ products, selectedId, onSelect }) {
   const costStatus = detail?.cost_status ?? "not_costed";
   const margins = cost?.margins ?? {};
 
+  // The picker heads whatever card is showing, so switching products never
+  // redraws the layout around it — only the body underneath changes.
+  const picker = (
+    <Field label="Product">
+      <select
+        className={`${selectCls} max-w-md`}
+        value={selectedId ?? ""}
+        onChange={(e) => onSelect(Number(e.target.value))}
+      >
+        <option value="">Choose a product…</option>
+        {products.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+    </Field>
+  );
+
+  if (!selectedId || recipe === null) {
+    return (
+      <div className="space-y-6">
+        <Card className="space-y-4">
+          {picker}
+          {selectedId ? (
+            /* A form-shaped placeholder, so the card keeps its height while
+               the recipe loads instead of collapsing to a one-liner. */
+            <div className="space-y-3 py-2" aria-label="Loading the recipe">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="space-y-1.5">
+                    <div className="skeleton h-3 w-16" />
+                    <div className="skeleton h-8 w-full" />
+                  </div>
+                ))}
+              </div>
+              <div className="skeleton h-8 w-2/3" />
+              <div className="skeleton h-8 w-1/2" />
+            </div>
+          ) : (
+            <p className="pb-2 text-sm opacity-60">
+              Pick a product to see or record its recipe.
+            </p>
+          )}
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
-      <Card>
-        <Field label="Product">
-          <select
-            className={`${selectCls} max-w-md`}
-            value={selectedId ?? ""}
-            onChange={(e) => onSelect(Number(e.target.value))}
-          >
-            <option value="">Choose a product…</option>
-            {products.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </Card>
-
-      {!selectedId || recipe === null ? (
-        <p className="rounded-box glass p-8 text-center text-sm opacity-60 ring-1 ring-base-300/60">
-          {selectedId ? "Loading recipe…" : "Pick a product to see or record its recipe."}
-        </p>
-      ) : (
-        <>
           <Card>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            {picker}
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
               <Field label="Hands-on min">
                 <input
                   type="number" min="0" step="any" className={inputCls}
@@ -1448,8 +1488,6 @@ function RecipesTab({ products, selectedId, onSelect }) {
               </div>
             )}
           </Card>
-        </>
-      )}
     </div>
   );
 }
@@ -1469,14 +1507,19 @@ function BatchesTab({ products }) {
   const [closingId, setClosingId] = useState(null);
   const [closeDraft, setCloseDraft] = useState(EMPTY_CLOSE);
 
+  const [refreshing, setRefreshing] = useState(false);
+
   const load = () =>
     client
       .get("/admin/costing/batches", { params: { status: statusFilter || undefined } })
       .then(({ data }) => setBatches(data));
 
   useEffect(() => {
-    setBatches(null);
-    load().catch((e) => toast.error(apiError(e)));
+    // The old list stays up (dimmed) while the new filter loads.
+    setRefreshing(true);
+    load()
+      .catch((e) => toast.error(apiError(e)))
+      .finally(() => setRefreshing(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
 
@@ -1549,7 +1592,7 @@ function BatchesTab({ products }) {
     <div className="space-y-6">
       <form
         onSubmit={create}
-        className="grid gap-3 rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60 sm:grid-cols-[minmax(0,1.5fr)_140px_100px_120px_auto] sm:items-end"
+        className="grid gap-3 rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.5fr)_150px_110px_130px_auto] lg:items-end"
       >
         <Field label="Product *">
           <select
@@ -1591,7 +1634,7 @@ function BatchesTab({ products }) {
           {busy && <span className="loading loading-spinner loading-xs" />}
           Open batch
         </button>
-        <div className="sm:col-span-5">
+        <div className="sm:col-span-2 lg:col-span-5">
           <Field label="Overhead categories (one per line — the double-count watchlist)">
             <textarea
               className="textarea textarea-bordered textarea-sm w-full" rows={1} maxLength={2000}
@@ -1620,12 +1663,14 @@ function BatchesTab({ products }) {
 
       {batches === null ? (
         <Loading label="Counting the ovens…" />
-      ) : batches.length === 0 ? (
-        <p className="rounded-box glass p-8 text-center text-sm opacity-60 ring-1 ring-base-300/60">
-          No batches yet — open one when production starts.
-        </p>
       ) : (
-        <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
+        <div className={refreshing ? "opacity-60 transition-opacity" : "transition-opacity"}>
+          {batches.length === 0 ? (
+            <p className="rounded-box glass p-8 text-center text-sm opacity-60 ring-1 ring-base-300/60">
+              No batches yet — open one when production starts.
+            </p>
+          ) : (
+            <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
           <table className="table table-sm">
             <thead>
               <tr className="text-xs uppercase opacity-50">
@@ -1683,6 +1728,8 @@ function BatchesTab({ products }) {
               ))}
             </tbody>
           </table>
+            </div>
+          )}
         </div>
       )}
 
@@ -1935,7 +1982,7 @@ function OverheadTab() {
               return (
                 <Card key={m.id}>
                   {editingMonthId === m.id ? (
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                       <Field label="Fixed total">
                         <input
                           type="number" min="0" step="any" className={inputCls}
@@ -1964,7 +2011,18 @@ function OverheadTab() {
                           onChange={(e) => setMonthEdit((d) => ({ ...d, actual_hours: e.target.value }))}
                         />
                       </Field>
-                      <div className="col-span-2">
+                      <Field label="Confidence">
+                        <select
+                          className={selectCls}
+                          value={monthEdit.confidence}
+                          onChange={(e) => setMonthEdit((d) => ({ ...d, confidence: e.target.value }))}
+                        >
+                          {CONFIDENCE.map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                      </Field>
+                      <div className="col-span-2 sm:col-span-1">
                         <Field label="Variance note">
                           <input
                             className={inputCls} maxLength={2000}

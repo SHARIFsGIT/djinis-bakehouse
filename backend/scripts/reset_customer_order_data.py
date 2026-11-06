@@ -1,9 +1,14 @@
 """Guarded customer/order data reset — DRY RUN BY DEFAULT.
 
 Deletes every customer account and order/payment record while keeping the
-shop itself intact: products (with prices, untouched), categories, coupons,
+shop itself intact: products (with prices, untouched), categories,
+shop-wide coupons (a personalised voucher goes with its customer),
 newsletter subscribers, bulk enquiries and replies, testimonials,
 coming-soon items, store settings, VAT data and the whole costing book.
+Marketing campaign records and the GDPR suppression list survive the wipe —
+campaigns are admin-authored content (their per-recipient delivery rows are
+customer data and go), and suppression outlives the account by design, so
+a reset can never re-permission someone who said no.
 The admin account and auth configuration are preserved — verified, not
 assumed.
 
@@ -84,6 +89,11 @@ DELETE_ALL = frozenset(
         "favorites",
         "restock_alerts",
         "addresses",
+        # Per-customer marketing records: the classification audit ledger
+        # dies with the customer it describes, and every campaign delivery
+        # row carries a recipient email snapshot.
+        "classification_events",
+        "campaign_deliveries",
     }
 )
 
@@ -91,14 +101,15 @@ DELETE_ALL = frozenset(
 #   users            — role 'customer' goes, 'admin' stays (verified after)
 #   admin_notifications — desk pings ABOUT deleted things go (order, review,
 #                     customer); enquiry pings stay (bulk enquiries are kept)
-DELETE_BY_PREDICATE = frozenset({"users", "admin_notifications"})
+#   coupons          — personalised vouchers (restricted_to_user_id set) go
+#                     with their customer; shop-wide codes stay (verified)
+DELETE_BY_PREDICATE = frozenset({"users", "admin_notifications", "coupons"})
 
 # The shop itself — counted before and after, verified untouched.
 KEEP = frozenset(
     {
         "categories",
         "products",
-        "coupons",
         "loyalty_vouchers",
         "subscribers",
         "bulk_enquiries",
@@ -117,6 +128,14 @@ KEEP = frozenset(
         "overhead_months",
         "labour_rates",
         "product_cost_records",
+        # Campaigns are admin-authored shop content (kept like bulk
+        # enquiries); only their per-recipient delivery rows are customer
+        # data, and those sit in DELETE_ALL above.
+        "marketing_campaigns",
+        # Unsubscribe records outlive the account they came from — deleting
+        # them would re-permission people who said no (see auth.py's account
+        # deletion, which makes the same call).
+        "suppression_list",
     }
 )
 
@@ -132,6 +151,9 @@ AMBIGUITY_NOTES = (
     "loyalty_vouchers is shop config (tier -> coupon), not customer data — "
     "KEPT. Flagged because the reset brief mentioned 'customer loyalty "
     "vouchers'; if it must go, that is a separate, explicit decision.",
+    "suppression_list (unsubscribes) is KEPT on purpose: a reset must never "
+    "re-permission someone who opted out, and account deletion in auth.py "
+    "makes the same call. Clearing it is a separate, explicit decision.",
 )
 
 
@@ -176,8 +198,10 @@ def _check_fk_graph(metadata) -> list[str]:
 
     Rules: a kept (or partially-kept) table may not reference a table being
     emptied entirely; it may reference the partially-emptied users table
-    only through a SET NULL rule. Deleted tables may reference anything —
-    their rows are going too.
+    only through SET NULL (the row survives its customer) or CASCADE (the
+    row dies with its customer — coupons.restricted_to_user_id is the case
+    in point, and its rows are predicate-deleted here anyway). Deleted
+    tables may reference anything — their rows are going too.
     """
     problems = []
     kept = set(KEEP) | set(DELETE_BY_PREDICATE)
@@ -191,10 +215,10 @@ def _check_fk_graph(metadata) -> list[str]:
                     f"kept table '{name}' references fully-deleted '{target}' "
                     f"via {fk} — rows would dangle"
                 )
-            elif target == "users" and (fk.ondelete or "").upper() != "SET NULL":
+            elif target == "users" and (fk.ondelete or "").upper() not in ("SET NULL", "CASCADE"):
                 problems.append(
                     f"kept table '{name}' references users via {fk} without "
-                    "SET NULL — deleting customers would break it"
+                    "SET NULL or CASCADE — deleting customers would break it"
                 )
     return problems
 
@@ -357,6 +381,32 @@ def run_reset(
                 "manual step."
             )
 
+        # Personalised vouchers are customer data: they go with their
+        # customer, and the shop-wide codes must account for every row.
+        coupons_table = metadata.tables["coupons"]
+        personal = coupons_table.c.restricted_to_user_id
+        report["personal_vouchers_to_delete"] = conn.scalar(
+            select(func.count()).select_from(coupons_table).where(personal.is_not(None))
+        )
+        report["shopwide_coupons_before"] = conn.scalar(
+            select(func.count()).select_from(coupons_table).where(personal.is_(None))
+        )
+        # A tier handing out a personalised code would dangle once the code's
+        # customer goes — no endpoint builds that link, so meeting one is
+        # drift the script refuses to guess about.
+        loyalty_table = metadata.tables["loyalty_vouchers"]
+        tier_linked_personal = conn.scalar(
+            select(func.count()).select_from(
+                loyalty_table.join(coupons_table, loyalty_table.c.coupon_id == coupons_table.c.id)
+            ).where(personal.is_not(None))
+        )
+        if tier_linked_personal:
+            raise ResetAborted(
+                f"{tier_linked_personal} loyalty voucher(s) point at a "
+                "personalised coupon — the coupon's customer is being deleted "
+                "and the tier link would dangle. Untangle it before resetting."
+            )
+
     if not execute:
         report["status"] = "dry-run"
         return report
@@ -370,6 +420,14 @@ def run_reset(
                 metadata.tables["admin_notifications"].c.kind.in_(
                     DELETED_NOTIFICATION_KINDS
                 )
+            )
+        )
+        # Personalised vouchers go with their customers — children before
+        # parents like everything else, and explicitly so on databases whose
+        # coupons FK was added by ALTER TABLE (no engine-level CASCADE there).
+        conn.execute(
+            delete(metadata.tables["coupons"]).where(
+                metadata.tables["coupons"].c.restricted_to_user_id.is_not(None)
             )
         )
         # Customers last — everything referencing them is already gone.
@@ -404,6 +462,17 @@ def run_reset(
             .select_from(notifications_table)
             .where(notifications_table.c.kind == "enquiry")
         )
+        coupons_table = metadata.tables["coupons"]
+        report["personal_vouchers_after"] = conn.scalar(
+            select(func.count())
+            .select_from(coupons_table)
+            .where(coupons_table.c.restricted_to_user_id.is_not(None))
+        )
+        report["shopwide_coupons_after"] = conn.scalar(
+            select(func.count())
+            .select_from(coupons_table)
+            .where(coupons_table.c.restricted_to_user_id.is_(None))
+        )
 
     problems = []
     if leftover:
@@ -420,6 +489,15 @@ def run_reset(
                 f"protected table '{name}' changed: "
                 f"{report['counts_before'][name]} -> {report['counts_after'][name]}"
             )
+    if report["personal_vouchers_after"]:
+        problems.append(
+            f"{report['personal_vouchers_after']} personalised voucher(s) survived"
+        )
+    if report["shopwide_coupons_after"] != report["shopwide_coupons_before"]:
+        problems.append(
+            "shop-wide coupons changed: "
+            f"{report['shopwide_coupons_before']} -> {report['shopwide_coupons_after']}"
+        )
     report["status"] = "executed" if not problems else "EXECUTED WITH PROBLEMS"
     report["problems"] = problems
     return report
@@ -434,6 +512,7 @@ def _render(report: dict) -> str:
         f"  order           : {' -> '.join(report['deletion_order'])}",
         f"  customer accounts: {report['customers_to_delete']}",
         f"  admin accounts   : {report['admins_before']} (kept, verified after)",
+        f"  personalised vchrs: {report['personal_vouchers_to_delete']} (go with their customers)",
         "  desk pings       : "
         + ", ".join(f"{k} ×{v}" for k, v in report["notifications_to_delete"].items()),
         "",

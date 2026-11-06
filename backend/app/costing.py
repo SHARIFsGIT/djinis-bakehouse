@@ -297,6 +297,54 @@ def min_net_price(cost) -> Decimal:
     return _dec(cost) / MARGIN_FLOOR_DIVISOR
 
 
+def max_safe_voucher_discount(db, active_currency: str) -> dict | None:
+    """The largest discount a voucher may carry without driving any costed
+    product below the 40 % margin floor — the marketing desk's brake when
+    minting personalised vouchers (the same D2 floor evaluate_margins flags
+    shelf prices against; checkout applies one code per basket, so a single
+    voucher's bound is the whole combination story).
+
+    The bound comes from the thinnest margin among products whose latest
+    cost record is complete and in the shop's active currency: a percent
+    voucher takes percent_off off every shelf price it can meet, so the
+    worst-margin product sets the ceiling. Returns
+    ``{"percent": int, "fixed_amount": Decimal, "costed_products": n}``
+    with whole-percent floors (a voucher may not exceed the bound, so the
+    percent rounds *down*), or None when no product has usable costing
+    data — without costs there is no knowable floor, and the desk refuses
+    rather than guess."""
+    best_percent: int | None = None
+    best_fixed: Decimal | None = None
+    costed = 0
+    products = db.scalars(select(Product)).all()
+    for product in products:
+        record = latest_cost_record(db, product.id)
+        if record is None or not record.is_complete or record.total_cost is None:
+            continue
+        if (record.currency or "").lower() != active_currency.lower():
+            continue
+        costed += 1
+        price = _dec(product.current_price)
+        floor = min_net_price(record.total_cost)
+        safe_frac = (price - floor) / price  # ≤ 0 when already at/below floor
+        best_percent = (
+            safe_frac
+            if best_percent is None
+            else min(best_percent, safe_frac)
+        )
+        headroom = price - floor
+        best_fixed = headroom if best_fixed is None else min(best_fixed, headroom)
+    if best_percent is None or best_fixed is None:
+        return None
+    # Floor both bounds — never round past the limit, and a product already
+    # at/below the floor means no voucher headroom at all (0, not negative).
+    return {
+        "percent": max(0, int(best_percent * 100)),
+        "fixed_amount": best_fixed if best_fixed > 0 else Decimal("0"),
+        "costed_products": costed,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Review scheduling (D18)
 # ---------------------------------------------------------------------------

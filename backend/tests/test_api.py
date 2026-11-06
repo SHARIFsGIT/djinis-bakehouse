@@ -50,6 +50,12 @@ def remove_test_db():
             os.remove(f"test_bakehouse.db{suffix}")
         except FileNotFoundError:
             pass
+        except PermissionError:
+            # A sister module (test_marketing.py) imported first holds the
+            # file open on Windows — and its boot already deleted the stale
+            # database and created a fresh one, which is all this removal
+            # exists to guarantee. Nothing to do.
+            pass
 
 
 remove_test_db()
@@ -3292,11 +3298,15 @@ def test_the_currency_column_migrates_a_legacy_sqlite_database(tmp_path, monkeyp
     with engine.begin() as conn:
         conn.execute(sa.text("CREATE TABLE orders (id INTEGER PRIMARY KEY, total NUMERIC(10,2))"))
         conn.execute(sa.text("INSERT INTO orders (id, total) VALUES (1, 12.00)"))
-        # the boot-time data fixes touch categories and store_settings
-        # unconditionally
+        # the boot-time data fixes touch categories, store_settings and
+        # users unconditionally
         conn.execute(sa.text("CREATE TABLE categories (id INTEGER PRIMARY KEY, description VARCHAR(255))"))
         conn.execute(sa.text(
             "CREATE TABLE store_settings (id INTEGER PRIMARY KEY, announcement VARCHAR(255))"
+        ))
+        conn.execute(sa.text("CREATE TABLE users (id INTEGER PRIMARY KEY, email VARCHAR(255))"))
+        conn.execute(sa.text(
+            "INSERT INTO users (id, email) VALUES (7, 'deleted-account-7@customers.invalid')"
         ))
 
     monkeypatch.setattr("app.engine", engine)
@@ -3305,6 +3315,10 @@ def test_the_currency_column_migrates_a_legacy_sqlite_database(tmp_path, monkeyp
     with engine.begin() as conn:
         rows = conn.execute(sa.text("SELECT id, total, currency FROM orders")).fetchall()
         assert rows == [(1, 12.0, "eur")]
+        # the poisoned shell address is rewritten to the schema-valid
+        # placeholder — one such row must not 500 the Users roll forever
+        fixed = conn.execute(sa.text("SELECT email FROM users")).fetchall()
+        assert fixed == [("deleted-account-7@deleted.djinisbakehouse.com",)]
     engine.dispose()
 
 

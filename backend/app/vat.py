@@ -228,6 +228,39 @@ def add_vat(net, rate) -> tuple[Decimal, Decimal]:
     return net_dec + vat, vat
 
 
+def split_by_weights(total, weights) -> list[Decimal]:
+    """Split a cent-rounded amount across non-negative weights so the parts
+    reassemble the total exactly — largest-remainder in integer cents, ties
+    to the larger weight, then the earlier index. The pure split behind
+    fixed-value voucher discounts (allocate_shipping keeps its own
+    rate-aware allocation; this is the weight-only core)."""
+    amount = round_cents(total)
+    parts_of = [_dec(w) for w in weights]
+    if not parts_of:
+        return []
+    if amount <= 0 or sum(parts_of) == 0:
+        return [Decimal("0.00")] * len(parts_of)
+    total_cents = int(amount * HUNDRED)
+    total_weight = sum(parts_of)
+    floors: list[int] = []
+    remainders: list[Decimal] = []
+    allocated = 0
+    for weight in parts_of:
+        exact = Decimal(total_cents) * weight / total_weight
+        floor_cents = int(exact)  # weights are >= 0, so truncation is floor
+        floors.append(floor_cents)
+        remainders.append(exact - floor_cents)
+        allocated += floor_cents
+    order = sorted(range(len(parts_of)), key=lambda i: (-remainders[i], -parts_of[i], i))
+    leftover = total_cents - allocated
+    for i in order[:leftover]:
+        floors[i] += 1
+    parts = [Decimal(cents) / HUNDRED for cents in floors]
+    # The reconciliation this function promises — cents in == cents out.
+    assert sum(parts, Decimal("0.00")) == amount
+    return parts
+
+
 @dataclass(frozen=True)
 class VatLine:
     """One order line's frozen tax figures — what the OrderItem snapshot

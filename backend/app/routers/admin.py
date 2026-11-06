@@ -25,6 +25,7 @@ from ..models import (
     BulkReply,
     Category,
     ComingSoonItem,
+    ClassificationEvent,
     Coupon,
     LoyaltyVoucher,
     Order,
@@ -60,6 +61,8 @@ from ..schemas import (
     BulkReplyCreate,
     CategoryCreateRequest,
     CategoryOut,
+    ClassificationEventOut,
+    ClassificationUpdateRequest,
     ComingSoonCreate,
     ComingSoonOut,
     ComingSoonUpdate,
@@ -897,8 +900,23 @@ def all_coupons(admin: CurrentAdmin, db: DbSession):
             .group_by(Order.coupon_code)
         ).all()
     )
+    # Personalised vouchers name their owner at the marketing desk — a bare
+    # user id would leave the voucher shelf faceless.
+    owners = {
+        u.id: u.full_name
+        for u in db.scalars(
+            select(User).where(User.id.in_(
+                {c.restricted_to_user_id for c in coupons if c.restricted_to_user_id}
+            ))
+        )
+    }
     return [
-        CouponOut.model_validate(c).model_copy(update={"redemptions": used.get(c.code, 0)})
+        CouponOut.model_validate(c).model_copy(
+            update={
+                "redemptions": used.get(c.code, 0),
+                "restricted_to_name": owners.get(c.restricted_to_user_id),
+            }
+        )
         for c in coupons
     ]
 
@@ -1381,18 +1399,31 @@ def all_users(
     admin: CurrentAdmin,
     db: DbSession,
     tier: str | None = Query(None, pattern="^(vip|loyal|lapsed|regular)$"),
+    classification: str | None = Query(
+        None, pattern="^(vip|loyal|lapsed|regular|none)$"
+    ),
     sort: str = Query("spend", pattern="^(spend|orders|last|joined)$"),
     search: str | None = Query(None, min_length=1, max_length=100),
     page: int = Query(1, ge=1),
     per_page: int = Query(10, ge=5, le=50),
 ):
-    """The regulars' roll, one shelf at a time: tier-filtered, searched,
-    ordered and paginated — with the whole roll's tier counts alongside, so
-    the chips count loyal hands from any page and any search."""
+    """The regulars' roll, one shelf at a time: tier- and
+    classification-filtered, searched, ordered and paginated — with the
+    whole roll's counts alongside, so the chips count loyal hands from any
+    page and any search. `tier` filters the measured loyalty; `classification`
+    filters the desk's manual word (none = customers without one)."""
     roll = _customer_roll(db)
     tier_counts = Counter(c.loyalty for c in roll)
+    classification_counts = Counter(
+        c.classification for c in roll if c.classification is not None
+    )
     if tier:
         roll = [c for c in roll if c.loyalty == tier]
+    if classification:
+        if classification == "none":
+            roll = [c for c in roll if c.classification is None]
+        else:
+            roll = [c for c in roll if c.classification == classification]
     if search:
         # Matched against name, email or phone — the things the baker
         # actually knows about a regular. Numbers compare digit-for-digit,
@@ -1412,6 +1443,7 @@ def all_users(
     return AdminUserPage(
         items=roll[start : start + per_page],
         tier_counts=dict(tier_counts),
+        classification_counts=dict(classification_counts),
         pagination=PaginationOut(
             page=page,
             per_page=per_page,
@@ -1453,3 +1485,50 @@ def update_user(user_id: int, payload: UserAdminUpdateRequest, admin: CurrentAdm
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.put("/users/{user_id}/classification", response_model=UserOut)
+def set_classification(
+    user_id: int, payload: ClassificationUpdateRequest, admin: CurrentAdmin, db: DbSession
+):
+    """Set, change or clear the desk's manual classification for one
+    customer. Strictly separate from the measured loyalty tier — this write
+    never touches order data and nothing recalculate: it is the baker's own
+    word, and every change lands in the classification ledger."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    previous = user.classification
+    value = payload.classification  # None clears
+    if previous == value:
+        # An identical write is a no-op — the ledger records changes, not
+        # echoes, so the history stays meaningful.
+        return user
+    user.classification = value
+    db.add(
+        ClassificationEvent(
+            user_id=user.id,
+            admin_user_id=admin.id,
+            admin_name=admin.full_name,
+            from_classification=previous,
+            to_classification=value,
+        )
+    )
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.get("/users/{user_id}/classification-history", response_model=list[ClassificationEventOut])
+def classification_history(user_id: int, admin: CurrentAdmin, db: DbSession):
+    """The classification ledger for one customer, newest first: who set
+    what, from what, and when."""
+    if db.get(User, user_id) is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return list(
+        db.scalars(
+            select(ClassificationEvent)
+            .where(ClassificationEvent.user_id == user_id)
+            .order_by(ClassificationEvent.created_at.desc(), ClassificationEvent.id.desc())
+        )
+    )

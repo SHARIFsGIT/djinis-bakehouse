@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   LogOut,
   MapPin,
+  Megaphone,
   ScrollText,
   Settings,
   Star,
@@ -48,7 +49,10 @@ const DESK_SECTIONS = [
   },
   {
     title: "Customers",
-    tabs: [{ to: "/admin/users", label: "Users", Icon: Users, end: true }],
+    tabs: [
+      { to: "/admin/users", label: "Users", Icon: Users, end: true },
+      { to: "/admin/marketing", label: "Marketing", Icon: Megaphone, end: true },
+    ],
   },
   {
     title: "Setup",

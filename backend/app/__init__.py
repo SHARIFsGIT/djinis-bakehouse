@@ -45,6 +45,14 @@ _ADDITIVE_COLUMNS = {
         "facebook_id": "ALTER TABLE users ADD COLUMN facebook_id VARCHAR(64)",
         "login_code_hash": "ALTER TABLE users ADD COLUMN login_code_hash VARCHAR(64)",
         "login_code_expires": "ALTER TABLE users ADD COLUMN login_code_expires TIMESTAMP",
+        # Manual customer classification + marketing permission (GDPR):
+        # all nullable, all NULL on arrival — no customer is classified or
+        # opted in by the migration itself.
+        "classification": "ALTER TABLE users ADD COLUMN classification VARCHAR(12)",
+        "marketing_consent_at": "ALTER TABLE users ADD COLUMN marketing_consent_at TIMESTAMP",
+        "marketing_consent_source": "ALTER TABLE users ADD COLUMN marketing_consent_source VARCHAR(50)",
+        "marketing_consent_evidence": "ALTER TABLE users ADD COLUMN marketing_consent_evidence TEXT",
+        "marketing_token": "ALTER TABLE users ADD COLUMN marketing_token VARCHAR(64)",
     },
     "orders": {
         "cancel_fee": "ALTER TABLE orders ADD COLUMN cancel_fee NUMERIC(10,2) NOT NULL DEFAULT 0",
@@ -97,6 +105,15 @@ _ADDITIVE_COLUMNS = {
         # must not present themselves as euro thresholds) until an admin
         # re-saves the coupon from the Promotions desk.
         "min_subtotal_approved": "ALTER TABLE coupons ADD COLUMN min_subtotal_approved BOOLEAN NOT NULL DEFAULT FALSE",
+        # Personalised-voucher columns (marketing desk): all nullable, NULL
+        # on every existing shop-wide code. A plain INTEGER for the user
+        # restriction — ALTER TABLE can't add a portable FK — the application
+        # owns the reference on databases altered in place.
+        "fixed_amount_off": "ALTER TABLE coupons ADD COLUMN fixed_amount_off NUMERIC(10,2)",
+        "restricted_to_user_id": "ALTER TABLE coupons ADD COLUMN restricted_to_user_id INTEGER",
+        "expires_at": "ALTER TABLE coupons ADD COLUMN expires_at TIMESTAMP",
+        "max_redemptions": "ALTER TABLE coupons ADD COLUMN max_redemptions INTEGER",
+        "created_by_admin_id": "ALTER TABLE coupons ADD COLUMN created_by_admin_id INTEGER",
     },
     "reviews": {
         # TRUE, not 1 — PostgreSQL refuses an integer default on a boolean
@@ -130,6 +147,14 @@ _DATA_FIXES = (
     "'WELCOME10 takes 10% off your first order' "
     "WHERE announcement = 'Free delivery on boxes over $50 · "
     "WELCOME10 takes 10% off your first order'",
+    # Deleted-account shells were anonymised to a `.invalid` address the
+    # email schema itself rejects — one such row 500s the whole Users roll.
+    # Rewrite them to the shop's own non-mail subdomain (REPLACE is portable
+    # across SQLite and PostgreSQL; fires once — the pattern it matches
+    # disappears with the rewrite).
+    "UPDATE users SET email = REPLACE(email, '@customers.invalid', "
+    "'@deleted.djinisbakehouse.com') "
+    "WHERE email LIKE 'deleted-account-%@customers.invalid'",
 )
 
 
@@ -172,6 +197,9 @@ def create_limiters(settings) -> dict[str, SlidingWindowLimiter]:
         # Back-in-stock asks — emails leave the shop when they're answered,
         # so the brake matches the newsletter's.
         "restock": SlidingWindowLimiter(5),
+        # One-click unsubscribe from marketing emails — a write, so braked
+        # like the other public writes (the token itself is unguessable).
+        "unsubscribe": SlidingWindowLimiter(10),
         # Basket quotes — a read (nothing is stored), but public and
         # unauthenticated, so it still gets a brake. Generous on purpose:
         # the storefront re-quotes on every basket change.

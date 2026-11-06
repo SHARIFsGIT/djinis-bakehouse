@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { Copy, Crown, Gift, Heart, Hourglass, ScrollText } from "lucide-react";
+import { Copy, Crown, Gift, Heart, History, Hourglass, MailCheck, MailX, ScrollText } from "lucide-react";
 import client, { apiError } from "../../api/client";
-import { hasNonActiveCurrency, money } from "../../lib/format";
+import { formatDateTime, hasNonActiveCurrency, money } from "../../lib/format";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { Loading } from "../../components/Loading";
@@ -42,6 +42,17 @@ const SORTS = [
   { value: "joined", label: "Newest members" },
 ];
 
+/* The desk's manual word for a customer — same vocabulary as the measured
+   tiers, but a different thing entirely: this one is the baker's own call,
+   written by hand, and nothing ever recalculates it. */
+const CLASSIFICATIONS = ["vip", "loyal", "lapsed", "regular"];
+
+const CLASS_FILTERS = [
+  { value: "all", label: "Any word" },
+  ...CLASSIFICATIONS.map((value) => ({ value, label: TIERS[value].label })),
+  { value: "none", label: "No word yet" },
+];
+
 /* The tiers that have earned a code of their own — the loyalty the shop
    thanks with a voucher. */
 const VOUCHER_TIERS = ["vip", "loyal"];
@@ -59,6 +70,186 @@ function TierBadge({ loyalty }) {
   );
 }
 
+const wordOf = (value) => (value ? TIERS[value].label : "—");
+
+/* One customer's card: the classification ledger (who set what, from what,
+   when) and their marketing permission. Consent is recorded, never assumed —
+   a grant must say where it was given and carry evidence the owner could
+   show a regulator. */
+function CustomerDrawer({ user, onClose, onChanged }) {
+  const toast = useToast();
+  const [ledger, setLedger] = useState(null);
+  // The roll carries only the timestamp; any write here brings back the
+  // full state (source, evidence, suppression) straight from the server.
+  const [consent, setConsent] = useState({
+    marketing_consent_at: user.marketing_consent_at,
+    marketing_consent_source: null,
+    marketing_consent_evidence: null,
+    suppressed: false,
+    suppression_reason: null,
+  });
+  const [proof, setProof] = useState({ source: "", evidence: "" });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    client
+      .get(`/admin/users/${user.id}/classification-history`)
+      .then(({ data }) => setLedger(data))
+      .catch((err) => toast.error(apiError(err)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user.id]);
+
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && !busy && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+
+  const recordConsent = async (granted) => {
+    setBusy(true);
+    try {
+      const { data } = await client.put(`/admin/users/${user.id}/marketing-consent`, {
+        granted,
+        ...(granted ? { source: proof.source, evidence: proof.evidence } : {}),
+      });
+      setConsent(data);
+      setProof({ source: "", evidence: "" });
+      toast.success(granted ? "Consent recorded" : "Consent withdrawn — the address is suppressed");
+      onChanged();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label={`Desk card for ${user.first_name} ${user.last_name}`}>
+      <div className="absolute inset-0 bg-black/40" onClick={() => !busy && onClose()} />
+      <div className="absolute inset-y-0 right-0 flex w-full max-w-md flex-col bg-base-100 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-base-300/70 px-6 py-4">
+          <div>
+            <h2 className="font-display text-xl font-semibold">
+              {user.first_name} {user.last_name}
+            </h2>
+            <p className="text-xs opacity-60">{user.email}</p>
+          </div>
+          <button type="button" className="btn btn-ghost btn-sm btn-square" onClick={onClose} aria-label="Close" disabled={busy}>
+            ✕
+          </button>
+        </div>
+
+        <div className="flex-1 space-y-6 overflow-y-auto px-6 py-5">
+          {/* Marketing permission — the gate every campaign and voucher email passes */}
+          <section>
+            <h3 className="font-display text-sm font-bold uppercase tracking-widest opacity-55">
+              Marketing permission
+            </h3>
+            {consent.marketing_consent_at ? (
+              <div className="mt-2 rounded-box border border-success/30 bg-success/10 p-4 text-sm">
+                <p className="flex items-center gap-2 font-semibold text-success">
+                  <MailCheck size={16} aria-hidden="true" />
+                  Consented — news may be sent
+                </p>
+                <p className="mt-1 text-xs opacity-75">
+                  Recorded {formatDateTime(consent.marketing_consent_at)}
+                  {consent.marketing_consent_source && <> · source: {consent.marketing_consent_source}</>}
+                </p>
+                {consent.suppressed && (
+                  <p className="mt-2 text-xs font-semibold text-error">
+                    But the address is on the suppression list ({consent.suppression_reason}) — a fresh
+                    recorded consent is the only thing that lifts it.
+                  </p>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs mt-3 text-error"
+                  disabled={busy}
+                  onClick={() => recordConsent(false)}
+                >
+                  <MailX size={14} /> Withdraw consent
+                </button>
+              </div>
+            ) : (
+              <form
+                className="mt-2 space-y-3 rounded-box border border-base-300 bg-base-200/50 p-4"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  recordConsent(true);
+                }}
+              >
+                <p className="text-xs opacity-70">
+                  No recorded consent — nothing marketing may be emailed. An account, an order or a
+                  newsletter signup is <span className="font-semibold">not</span> consent by itself:
+                  record what the customer actually agreed to.
+                </p>
+                <div>
+                  <label className="label text-xs" htmlFor="mk-source">Where it was given</label>
+                  <input
+                    id="mk-source"
+                    className="input input-bordered input-sm w-full"
+                    required
+                    maxLength={50}
+                    placeholder="at the counter, phone call, signup form…"
+                    value={proof.source}
+                    onChange={(e) => setProof((p) => ({ ...p, source: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="label text-xs" htmlFor="mk-evidence">Evidence (what a regulator could be shown)</label>
+                  <textarea
+                    id="mk-evidence"
+                    className="textarea textarea-bordered textarea-sm w-full"
+                    required
+                    maxLength={1000}
+                    rows={2}
+                    placeholder="Signed card on file, email dated …, ticked box on the paper form…"
+                    value={proof.evidence}
+                    onChange={(e) => setProof((p) => ({ ...p, evidence: e.target.value }))}
+                  />
+                </div>
+                <button type="submit" className="btn btn-secondary btn-sm text-secondary-content" disabled={busy}>
+                  {busy ? "Recording…" : "Record consent"}
+                </button>
+              </form>
+            )}
+          </section>
+
+          {/* The classification ledger — newest first, exactly as the server keeps it */}
+          <section>
+            <h3 className="font-display text-sm font-bold uppercase tracking-widest opacity-55">
+              Classification history
+            </h3>
+            {ledger === null ? (
+              <div className="mt-2 space-y-2" aria-label="Loading the ledger">
+                <div className="skeleton h-4 w-full" />
+                <div className="skeleton h-4 w-2/3" />
+              </div>
+            ) : ledger.length === 0 ? (
+              <p className="mt-2 text-xs opacity-60">
+                No changes recorded yet — the desk hasn't set a word for this customer.
+              </p>
+            ) : (
+              <ul className="mt-2 space-y-2">
+                {ledger.map((event) => (
+                  <li key={event.id} className="rounded-box border border-base-300/70 bg-base-200/40 px-3 py-2 text-xs">
+                    <span className="font-semibold">{wordOf(event.from_classification)}</span>
+                    {" → "}
+                    <span className="font-semibold text-secondary">{wordOf(event.to_classification)}</span>
+                    <span className="opacity-60">
+                      {" "}· {event.admin_name} · {formatDateTime(event.created_at)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminUsers() {
   const toast = useToast();
   const { user: me } = useAuth();
@@ -67,9 +258,13 @@ export default function AdminUsers() {
   const [search, setSearch] = useState(params.get("search") ?? "");
   const [vouchers, setVouchers] = useState(null); // { vip: coupon|null, loyal: coupon|null }
   const [coupons, setCoupons] = useState([]);
+  const [card, setCard] = useState(null); // the customer whose desk card is open
 
   const tier = TIER_FILTERS.some((f) => f.value === params.get("tier"))
     ? params.get("tier")
+    : "all";
+  const cls = CLASS_FILTERS.some((f) => f.value === params.get("classification"))
+    ? params.get("classification")
     : "all";
   const sort = SORTS.some((s) => s.value === params.get("sort"))
     ? params.get("sort")
@@ -77,14 +272,16 @@ export default function AdminUsers() {
   const searched = params.get("search") ?? "";
   const page = Math.max(1, Number(params.get("page")) || 1);
 
-  // The shelf is served ready-cut by the desk: filtered by tier, searched,
-  // ordered, one page at a time — the tier counts ride along so the chips
-  // count the whole roll from any page.
+  // The shelf is served ready-cut by the desk: filtered by tier and by the
+  // desk's manual word, searched, ordered, one page at a time — the tier and
+  // classification counts ride along so the chips count the whole roll from
+  // any page.
   const load = () =>
     client
       .get("/admin/users", {
         params: {
           tier: tier === "all" ? undefined : tier,
+          classification: cls === "all" ? undefined : cls,
           sort,
           search: searched || undefined,
           page,
@@ -98,7 +295,7 @@ export default function AdminUsers() {
     setData(null);
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tier, sort, searched, page]);
+  }, [tier, cls, sort, searched, page]);
 
   // Which coupon each tier hands out, plus the tin to choose from — once
   // per visit, not per shelf.
@@ -135,6 +332,25 @@ export default function AdminUsers() {
       await client.put(`/admin/users/${id}`, payload);
       await load();
       toast.success("User updated");
+    } catch (err) {
+      toast.error(apiError(err));
+    }
+  };
+
+  // The desk's own word for a customer — a different thing from the measured
+  // tier beside it: hand-set, hand-cleared, and every change lands in the
+  // ledger the drawer shows.
+  const setWord = async (user, value) => {
+    try {
+      await client.put(`/admin/users/${user.id}/classification`, {
+        classification: value || null,
+      });
+      await load();
+      toast.success(
+        value
+          ? `${user.first_name} marked ${TIERS[value].label} at the desk`
+          : `Desk's word cleared for ${user.first_name}`,
+      );
     } catch (err) {
       toast.error(apiError(err));
     }
@@ -233,6 +449,39 @@ export default function AdminUsers() {
         </select>
       </div>
 
+      {/* The desk's manual word — a second, quieter row: these narrow by the
+          hand-set classification, not the order book's arithmetic. The
+          unclassified count is the whole roll minus the classified ones. */}
+      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+        <span className="mr-1 font-semibold uppercase tracking-widest opacity-50">
+          Desk's word
+        </span>
+        {CLASS_FILTERS.map((f) => {
+          const count =
+            f.value === "all"
+              ? null
+              : f.value === "none"
+                ? Object.values(tierCounts).reduce((a, b) => a + b, 0) -
+                  Object.values(data.classification_counts ?? {}).reduce((a, b) => a + b, 0)
+                : (data.classification_counts ?? {})[f.value] ?? 0;
+          return (
+            <button
+              key={f.value}
+              type="button"
+              onClick={() => setParam("classification", f.value === "all" ? "" : f.value)}
+              className={`btn btn-xs gap-1.5 rounded-full ${cls === f.value ? "btn-secondary text-secondary-content" : "btn-ghost border border-base-300"}`}
+            >
+              {f.label}
+              {count !== null && count > 0 && (
+                <span className={`badge badge-xs border-0 ${cls === f.value ? "bg-secondary-content/20 text-secondary-content" : "bg-base-200 text-base-content/60"}`}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
       {/* The codes loyalty earns — one per tier, chosen from the coupon tin */}
       {worthAVoucher > 0 && (
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-box glass px-4 py-3 text-sm shadow-sm ring-1 ring-base-300/60">
@@ -294,6 +543,7 @@ export default function AdminUsers() {
               <th className="text-right">Orders</th>
               <th className="text-right">Lifetime</th>
               <th>Loyalty</th>
+              <th>Desk's word</th>
               <th>Role</th>
               <th>Active</th>
               <th />
@@ -340,6 +590,32 @@ export default function AdminUsers() {
                   </td>
                   <td><TierBadge loyalty={u.loyalty} /></td>
                   <td>
+                    <div className="flex items-center gap-1">
+                      <select
+                        className="select select-bordered select-xs"
+                        value={u.classification ?? ""}
+                        onChange={(e) => setWord(u, e.target.value)}
+                        aria-label={`Desk's word for ${u.email}`}
+                      >
+                        <option value="">— none —</option>
+                        {CLASSIFICATIONS.map((c) => (
+                          <option key={c} value={c}>{TIERS[c].label}</option>
+                        ))}
+                      </select>
+                      {/* Consent at a glance: a tick means recorded consent,
+                          the muted slash means nothing marketing may be sent */}
+                      {u.marketing_consent_at ? (
+                        <span className="text-success" title="Recorded marketing consent">
+                          <MailCheck size={13} aria-label="Has marketing consent" />
+                        </span>
+                      ) : (
+                        <span className="opacity-30" title="No recorded consent">
+                          <MailX size={13} aria-label="No marketing consent" />
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td>
                     <select
                       className="select select-bordered select-xs"
                       value={u.role}
@@ -362,6 +638,15 @@ export default function AdminUsers() {
                   </td>
                   <td>
                     <div className="flex items-center justify-end gap-1">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs btn-square"
+                        onClick={() => setCard(u)}
+                        aria-label={`Desk card for ${u.first_name}: classification history and marketing consent`}
+                        title="Desk card — history & marketing permission"
+                      >
+                        <History size={13} />
+                      </button>
                       {voucher && (
                         <button
                           type="button"
@@ -390,7 +675,7 @@ export default function AdminUsers() {
             })}
             {users.length === 0 && (
               <tr>
-                <td colSpan={7} className="py-10 text-center text-sm opacity-60">
+                <td colSpan={8} className="py-10 text-center text-sm opacity-60">
                   Nobody matches — try another tier or search.
                 </td>
               </tr>
@@ -421,6 +706,14 @@ export default function AdminUsers() {
             </button>
           </div>
         </div>
+      )}
+
+      {card !== null && (
+        <CustomerDrawer
+          user={card}
+          onClose={() => setCard(null)}
+          onChanged={load}
+        />
       )}
     </div>
   );
