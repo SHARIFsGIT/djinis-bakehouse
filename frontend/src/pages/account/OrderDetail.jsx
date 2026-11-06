@@ -308,7 +308,7 @@ export default function OrderDetail() {
                   <span>−{money(order.discount_amount, order.currency)}</span>
                 </div>
               )}
-              <div className="flex justify-between"><span className="opacity-70">Tax</span><span>{money(order.tax, order.currency)}</span></div>
+              <div className="flex justify-between"><span className="opacity-70">{order.tax_included ? "VAT (included)" : "Tax"}</span><span>{money(order.tax, order.currency)}</span></div>
               <div className="flex justify-between">
                 <span className="opacity-70">Delivery</span>
                 <span>{order.shipping_fee === 0 ? <span className="font-semibold text-success">FREE</span> : money(order.shipping_fee, order.currency)}</span>

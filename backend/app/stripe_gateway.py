@@ -194,7 +194,11 @@ def _line_items(order, base_url: str, settings, currency: str) -> list[dict]:
             "quantity": 1,
         }
     )
-    if float(order.tax) > 0:
+    # Exclusive mode adds the register tax as its own row. Inclusive mode
+    # never does — the VAT is already inside every line above, and a second
+    # row would charge it twice. Either way the lines sum to the stored
+    # order total in integer cents.
+    if float(order.tax) > 0 and settings.tax_mode != "inclusive":
         lines.append(
             {
                 "price_data": {

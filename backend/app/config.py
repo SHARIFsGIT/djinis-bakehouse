@@ -53,13 +53,14 @@ class Settings(BaseSettings):
     # applies to everyone.
     vip_free_delivery_threshold: float | None = None
     vip_spend_threshold: float | None = None
-    # Checkout pricing mode. "exclusive" — today's behaviour: net shelf
-    # prices, tax added at the register while a rate is approved (no
-    # approved rate, no tax line at all). "inclusive" — the German target:
-    # gross shelf prices, VAT extracted per line by the engine in app/vat.py.
-    # The EUR cutover (2026-11-05) did NOT flip this: inclusive mode waits
-    # for the professional VAT review's classifications, and nothing reads
-    # it until then, so setting it changes nothing by itself.
+    # Checkout pricing mode. "exclusive" — net shelf prices, tax added at
+    # the register (the approved 7 % register rate). "inclusive" — the
+    # German B2C target: gross shelf prices, VAT extracted per line by the
+    # engine in app/vat.py, shipping VAT allocated across the basket's
+    # rates. Inclusive mode refuses any purchasable product without an
+    # approved classification — fail-closed, per product, by name — so it
+    # only opens once the owner has classified the catalog at the desk.
+    # An unusable value is a boot error, never a silent mode.
     tax_mode: str = "exclusive"
 
     # CORS
@@ -170,6 +171,11 @@ class Settings(BaseSettings):
                 "SECRET_KEY is still a development default. Generate one with "
                 "python -c \"import secrets; print(secrets.token_hex(32))\" and put it in .env "
                 "before starting in production."
+            )
+        if self.tax_mode not in ("exclusive", "inclusive"):
+            raise ValueError(
+                f"TAX_MODE must be 'exclusive' or 'inclusive', not {self.tax_mode!r} — "
+                "the pricing mode is a financial decision, never a guess."
             )
 
 

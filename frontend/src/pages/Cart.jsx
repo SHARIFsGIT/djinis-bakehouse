@@ -363,7 +363,7 @@ export default function Cart() {
                   read as a 0%-VAT decision the shop hasn't made. */}
               {quote.tax > 0 && (
                 <div className="flex justify-between">
-                  <span className="opacity-70">{taxLabel()}</span>
+                  <span className="opacity-70">{taxLabel(quote.tax_included)}</span>
                   <span>{money(quote.tax)}</span>
                 </div>
               )}

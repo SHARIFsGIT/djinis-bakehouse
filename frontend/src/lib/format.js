@@ -226,9 +226,12 @@ export const PAYMENT_STATUSES = {
     VAT treatment is pending review) it names the row plainly, exactly like
     the server's own Stripe page — and in practice the row is hidden while
     the quoted tax is zero, so no "Tax €0.00" ever reads as a 0%-VAT
-    decision. The amount itself is never computed here: basket tallies come
-    from POST /api/orders/quote. */
-export const taxLabel = () => {
+    decision. VAT-inclusive figures (the German B2C mode) say "included"
+    instead — the tax is inside the amounts, not added on top. The amount
+    itself is never computed here: basket tallies come from
+    POST /api/orders/quote. */
+export const taxLabel = (included = false) => {
+  if (included) return "VAT (included)";
   if (shopConfig.taxRate === null || shopConfig.taxRate === undefined) return "Tax";
   const percent = (shopConfig.taxRate * 100).toFixed(2).replace(/\.?0+$/, "");
   return `Tax (${percent}%)`;

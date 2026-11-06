@@ -8,12 +8,11 @@ Card orders are placed unpaid and only become paid when Stripe says so
 
 import random
 from datetime import date, timedelta
-from typing import NamedTuple
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
 from sqlalchemy import func, select, update
 
-from .. import stripe_gateway
+from .. import stripe_gateway, pricing
 from ..config import get_settings
 from ..email import send_order_receipt, send_order_status_email
 from ..money import money
@@ -26,6 +25,7 @@ from ..models import (
     OrderEvent,
     OrderItem,
     OrderStatus,
+    OrderTaxLine,
     PaymentMethod,
     PaymentStatus,
     Product,
@@ -159,16 +159,6 @@ def _basket_coupon(db, code: str | None, user: User | None, subtotal: float) -> 
     return coupon
 
 
-class BasketTotals(NamedTuple):
-    """The five figures every priced basket carries."""
-
-    discount: float
-    taxable: float
-    tax: float
-    shipping: float
-    total: float
-
-
 def _approved_money_rules() -> tuple[float | None, float, float]:
     """The currency-bound money rules a basket may be charged by, or a 503.
 
@@ -213,25 +203,27 @@ def _delivery_threshold(db, user: User | None) -> float:
     return standard
 
 
-def _price_basket(subtotal: float, coupon: Coupon | None, free_threshold: float) -> BasketTotals:
-    """The one money recipe a basket is charged by — checkout and the quote
-    endpoint share it, so what the storefront displays and what the invoice
-    says cannot drift apart. Tax is the shop's flat exclusive rate (None =
-    no tax line; the VAT-inclusive engine is deliberately not consulted).
-
-    The free-delivery threshold is judged on the PRE-DISCOUNT product
-    subtotal — the shelf value of the basket — so no coupon can quietly
-    push a basket over (or under) the line, and delivery charges never
-    count toward it. This is the one definition, tested as such."""
+def _price_basket(db, merged: dict[int, int], by_id: dict, coupon: Coupon | None, user: User | None):
+    """Price a validated basket through the one shared service (app/pricing)
+    — the mode's own recipe runs, and both the quote and placement get the
+    same figures from the same call. Inclusive mode raises
+    ProductNotVatReady (mapped to a 503 naming the bake) for the first
+    product without an approved classification."""
     tax_rate, shipping_fee, _standard = _approved_money_rules()
-    discount = round(subtotal * coupon.percent_off / 100, 2) if coupon else 0.0
-    taxable = round(subtotal - discount, 2)
-    tax = round(taxable * tax_rate, 2)
-    shipping = 0.0 if subtotal >= free_threshold else shipping_fee
-    total = round(taxable + tax + shipping, 2)
-    return BasketTotals(
-        discount=discount, taxable=taxable, tax=tax, shipping=shipping, total=total
-    )
+    free_threshold = _delivery_threshold(db, user)
+    basket = {by_id[pid]: qty for pid, qty in merged.items()}
+    try:
+        return pricing.price_basket(
+            db, basket, coupon, free_threshold, tax_rate=tax_rate, shipping_fee=shipping_fee
+        )
+    except pricing.ProductNotVatReady as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Checkout is paused — {exc.product_name} has no approved VAT class yet. "
+                "Please try again soon."
+            ),
+        ) from None
 
 
 def _late_cancel_fee(order: Order, db) -> float:
@@ -275,6 +267,9 @@ def _serialize(
     )
     if not detailed:
         return data
+    # The per-rate VAT ledger on the order is the inclusive mode's mark:
+    # this order's figures carry their VAT inside.
+    data.tax_included = bool(order.tax_lines)
     return OrderDetailOut(
         **data.model_dump(),
         items=[
@@ -319,6 +314,9 @@ def _receipt_dict(order: Order) -> dict:
         "payment_method": order.payment_method,
         "payment_status": order.payment_status,
         "currency": order.currency,
+        # The per-rate ledger on the order marks VAT-inclusive figures —
+        # the receipt then says "included" instead of adding a tax line.
+        "tax_included": bool(order.tax_lines),
     }
 
 
@@ -431,9 +429,8 @@ def checkout(
 
     subtotal = round(sum(by_id[pid].current_price * qty for pid, qty in merged.items()), 2)
     coupon = _basket_coupon(db, payload.coupon_code, user, subtotal)
-    discount, _taxable, tax, shipping, total = _price_basket(
-        subtotal, coupon, _delivery_threshold(db, user)
-    )
+    priced = _price_basket(db, merged, by_id, coupon, user)
+    inclusive = isinstance(priced, pricing.InclusiveBasket)
 
     # Both rails start pending: cash settles at the door, card settles when
     # Stripe confirms the payment.
@@ -448,12 +445,15 @@ def checkout(
         # The charge currency in force when the order is placed — the same
         # validated code every Stripe session for it will be created with.
         currency=charge_currency,
-        subtotal=round(subtotal, 2),
-        discount_amount=discount,
+        # Both modes fill these from the one priced basket: in inclusive
+        # mode `tax` is the VAT already inside the gross figures, and the
+        # per-line/per-rate snapshots below carry the full breakdown.
+        subtotal=priced.subtotal,
+        discount_amount=priced.discount,
         coupon_code=coupon.code if coupon else None,
-        tax=tax,
-        shipping_fee=shipping,
-        total=total,
+        tax=priced.tax,
+        shipping_fee=priced.shipping,
+        total=priced.total,
         delivery_date=payload.delivery_date,
         note=payload.note,
         recipient=address.recipient,
@@ -493,8 +493,41 @@ def checkout(
                 unit_price=product.current_price,
                 quantity=quantity,
                 subtotal=round(product.current_price * quantity, 2),
+                # Inclusive mode: the line's frozen VAT snapshot, written
+                # once here and never recomputed (the shelf price is gross;
+                # unit figures mirror it, line figures carry the coupon).
+                **(
+                    {
+                        "vat_category": priced_line.vat_category,
+                        "vat_rate": float(priced_line.vat_rate),
+                        "net_unit_price": float(priced_line.net_unit_price),
+                        "gross_unit_price": float(priced_line.gross_unit_price),
+                        "net_line_total": float(priced_line.net_line_total),
+                        "vat_amount": float(priced_line.vat_amount),
+                        "gross_line_total": float(priced_line.gross_after_discount),
+                    }
+                    if inclusive
+                    and (priced_line := next(
+                        pl for pl in priced.lines if pl.product_id == product_id
+                    ))
+                    else {}
+                ),
             )
         )
+
+    if inclusive:
+        # The order's per-rate VAT ledger: products plus the delivery slice
+        # allocated to each rate — one row per rate, frozen at checkout.
+        for row in priced.rate_rows:
+            db.add(
+                OrderTaxLine(
+                    order_id=order.id,
+                    vat_rate=float(row.vat_rate),
+                    net_amount=float(row.net_amount),
+                    vat_amount=float(row.vat_amount),
+                    gross_amount=float(row.gross_amount),
+                )
+            )
 
     db.add(OrderEvent(order_id=order.id, status=OrderStatus.PENDING.value, comment="Order placed"))
     # Same transaction as the order itself — the bell can't announce a sale
@@ -502,7 +535,7 @@ def checkout(
     notify_admin(
         db,
         kind="order",
-        title=f"New order {order.order_number} — {money(total, order.currency)}",
+        title=f"New order {order.order_number} — {money(priced.total, order.currency)}",
         body=f"{user.full_name} · {sum(merged.values())} items · "
         f"{payload.payment_method.value.replace('_', ' ')}",
         link=f"/admin/orders?search={order.order_number}",
@@ -576,8 +609,8 @@ def basket_quote(
     merged, by_id = _resolve_basket(db, payload.items)
     subtotal = round(sum(by_id[pid].current_price * qty for pid, qty in merged.items()), 2)
     coupon = _basket_coupon(db, payload.coupon_code, user, subtotal)
-    free_threshold = _delivery_threshold(db, user)
-    totals = _price_basket(subtotal, coupon, free_threshold)
+    totals = _price_basket(db, merged, by_id, coupon, user)
+    tax_included = isinstance(totals, pricing.InclusiveBasket)
 
     lines = []
     for product_id, quantity in merged.items():
@@ -609,7 +642,11 @@ def basket_quote(
         # The free-delivery line as it applies to THIS shopper (a VIP
         # regular's smaller threshold when one is configured) — the meter on
         # the basket page draws itself from here, never from a guess.
-        free_delivery_threshold=free_threshold,
+        free_delivery_threshold=_delivery_threshold(db, user),
+        # True when the figures above are VAT-inclusive (the German B2C
+        # mode): the tax line is part of them, not added on top — the
+        # storefront relabels its tax row accordingly.
+        tax_included=tax_included,
     )
 
 

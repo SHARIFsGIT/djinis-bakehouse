@@ -129,7 +129,7 @@ export default function OrderReceipt() {
             </div>
           )}
           <div className="flex justify-between">
-            <span className="opacity-70">Tax</span>
+            <span className="opacity-70">{order.tax_included ? "VAT (included)" : "Tax"}</span>
             <span>{money(order.tax, order.currency)}</span>
           </div>
           <div className="flex justify-between">

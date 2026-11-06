@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
 import { Percent, Plus, Search, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import client, { apiError } from "../../api/client";
+import ConfirmDialog from "../../components/ConfirmDialog";
+import { useToast } from "../../context/ToastContext";
 import { formatDate, money } from "../../lib/format";
 import { REDEMPTION_RULES, oncePerCustomerFromRule, redemptionRule } from "../../lib/redemptionRules";
-import { useToast } from "../../context/ToastContext";
-import ConfirmDialog from "../../components/ConfirmDialog";
 
 /* The promotions desk. One page, three stable zones — a summary strip, a
    filter row and the coupon table — and every write happens in the drawer
@@ -21,7 +21,7 @@ const STATUS_FILTERS = [
 
 function StatChip({ label, value, tone = "" }) {
   return (
-    <div className="glass flex min-h-[4.25rem] items-center justify-between gap-3 rounded-box px-4 py-3 ring-1 ring-base-300/60">
+    <div className="glass flex min-h-17 items-center justify-between gap-3 rounded-box px-4 py-3 ring-1 ring-base-300/60">
       <span className="text-xs font-bold tracking-widest uppercase opacity-55">{label}</span>
       <span className={`font-display text-2xl font-bold ${tone}`}>{value}</span>
     </div>
@@ -433,18 +433,6 @@ export default function Promotions() {
                   <td className="max-w-56">
                     <span className="inline-flex items-center gap-2">
                       <span className="truncate font-mono font-bold" title={c.code}>{c.code}</span>
-                      <select
-                        className="select select-bordered select-xs font-sans font-normal"
-                        value={redemptionRule(c.once_per_customer)}
-                        disabled={ruleSavingId === c.id}
-                        title="A 1-per-customer code frees up again if that order is cancelled"
-                        aria-label={`Customer limit for ${c.code}`}
-                        onChange={(e) => changeRedemption(c, oncePerCustomerFromRule(e.target.value))}
-                      >
-                        {REDEMPTION_RULES.map((rule) => (
-                          <option key={rule.value} value={rule.value}>{rule.label}</option>
-                        ))}
-                      </select>
                     </span>
                   </td>
                   <td className="whitespace-nowrap text-right font-bold">{c.percent_off}% off</td>

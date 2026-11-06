@@ -211,7 +211,16 @@ def order_receipt_email(receipt: dict) -> tuple[str, str, str]:
     )
     # No tax line at all while no rate is approved — a "Tax €0.00" row would
     # read as a 0%-VAT decision, and VAT treatment is explicitly pending.
-    tax_row = _row("Tax", _amount(receipt["tax"])) if receipt["tax"] else ""
+    # In inclusive mode the VAT is already inside every figure: the row says
+    # so instead of pretending it was added on top.
+    tax_row = (
+        _row(
+            "VAT (included)" if receipt.get("tax_included") else "Tax",
+            _amount(receipt["tax"]),
+        )
+        if receipt["tax"]
+        else ""
+    )
     delivery_row = _row("Delivery", shipping_label)
     total_row = _row("Total", _amount(receipt["total"]), bold=True)
     payment_line = (

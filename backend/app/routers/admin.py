@@ -971,6 +971,65 @@ def _tier_vouchers(db: DbSession) -> dict[str, Coupon | None]:
     return {tier: linked.get(tier) for tier in VOUCHER_TIERS}
 
 
+@router.get("/vat/report")
+def vat_classification_report(admin: CurrentAdmin, db: DbSession):
+    """The classification inventory the owner reviews before inclusive
+    checkout opens: every purchasable bake's VAT standing, the rates in
+    force, the shipping-VAT configuration, and the exact blockers that
+    would keep inclusive checkout closed today. Read-only, derived at read
+    time, no legal determination — a classification is the owner's call at
+    the desk (with the audit trail it leaves behind)."""
+    from ..models import VatRate
+
+    products = db.scalars(
+        select(Product).where(Product.is_available.is_(True)).order_by(Product.name)
+    ).all()
+    rows = []
+    for p in products:
+        preview = preview_rate(p.vat_category, p.milk_content_percent, db)
+        priceable = (
+            p.vat_review_status == REVIEW_STATUS_APPROVED and preview is not None
+        )
+        rows.append(
+            {
+                "id": p.id,
+                "name": p.name,
+                "slug": p.slug,
+                "vat_category": p.vat_category,
+                "review_status": p.vat_review_status or "pending",
+                "rate_preview": float(preview) if preview is not None else None,
+                "priceable": priceable,
+            }
+        )
+    blockers = [r["name"] for r in rows if not r["priceable"]]
+    rates = [
+        {"code": code, "rate": float(rate)}
+        for code, rate in db.execute(select(VatRate.code, VatRate.rate)).all()
+    ]
+    settings = get_settings()
+    return {
+        "tax_mode": settings.tax_mode,
+        "checkout_ready_for_inclusive": not blockers,
+        "counts": {
+            "total": len(rows),
+            "priceable": len(rows) - len(blockers),
+            "blocked_or_unclassified": len(blockers),
+        },
+        "blockers": blockers,
+        "rates_in_force": rates,
+        "shipping_vat": {
+            "follows_product_vat": True,
+            "mixed_cart_allocation": "proportional (largest-remainder, cent-exact)",
+        },
+        "delivery": {
+            "standard_fee": settings.shipping_fee,
+            "free_threshold": settings.free_shipping_threshold,
+            "vip_free_threshold": settings.vip_free_delivery_threshold,
+        },
+        "products": rows,
+    }
+
+
 @router.get("/loyalty-vouchers", response_model=LoyaltyVouchersOut)
 def get_loyalty_vouchers(admin: CurrentAdmin, db: DbSession):
     """The code a VIP earns and the code a loyal regular earns — so the

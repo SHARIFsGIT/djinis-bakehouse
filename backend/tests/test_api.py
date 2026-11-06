@@ -5009,3 +5009,299 @@ def test_coupon_list_counts_kept_redemptions_only():
         assert fixture["redemptions"] == 1
     finally:
         client.delete(f"/api/admin/coupons/{minted.json()['id']}", headers=admin)
+
+
+# --------------------------------------------------------------------------
+# VAT-inclusive checkout — the German B2C mode, priced through the shared
+# service (app/pricing) with hand-computed expected cents
+# --------------------------------------------------------------------------
+
+from app.config import get_settings as _get_settings  # noqa: E402
+from sqlalchemy import select as _select  # noqa: E402
+
+
+def _make_vat_fixture_products():
+    """Two fresh bakes at controlled prices, classified through the real
+    admin desk flow (which exercises the audit trail): €7.00 at 7 %,
+    €5.00 at 19 %. The classification is the test's own fixture choice,
+    never a legal claim about the bake."""
+    admin = admin_headers()
+    seven = client.post(
+        "/api/admin/products",
+        json={"name": "VAT Fixture Seven", "price": 7.00, "stock": 40, "category_id": 1},
+        headers=admin,
+    ).json()
+    nineteen = client.post(
+        "/api/admin/products",
+        json={"name": "VAT Fixture Nineteen", "price": 5.00, "stock": 40, "category_id": 1},
+        headers=admin,
+    ).json()
+    for product, category in ((seven, "FOOD_REDUCED"), (nineteen, "BEVERAGE_STANDARD")):
+        r = client.put(
+            f"/api/admin/products/{product['id']}/vat",
+            json={"vat_category": category, "vat_review_status": "approved", "milk_content_percent": None},
+            headers=admin,
+        )
+        assert r.status_code == 200, r.text
+    return seven, nineteen
+
+
+def _go_inclusive(monkeypatch):
+    monkeypatch.setattr(_get_settings(), "tax_mode", "inclusive", raising=True)
+
+
+def test_inclusive_quote_prices_a_seven_percent_basket(monkeypatch):
+    """€7.00 gross at 7 %: net €6.542→6.54, VAT €0.46; delivery €3.50 all
+    at 7 % (single rate carries the whole charge): net €3.27, VAT €0.23.
+    Total €10.50, VAT included €0.69 — every figure hand-computed."""
+    _go_inclusive(monkeypatch)
+    seven, _ = _make_vat_fixture_products()
+    quote = client.post("/api/orders/quote", json={"items": [{"product_id": seven["id"], "quantity": 1}]})
+    assert quote.status_code == 200
+    q = quote.json()
+    assert q["tax_included"] is True
+    assert q["subtotal"] == 7.00
+    assert q["shipping_fee"] == 3.50      # below the suite's €30 line
+    assert q["total"] == 10.50
+    assert q["tax"] == 0.69               # 0.46 products + 0.23 delivery
+
+
+def test_inclusive_quote_prices_a_nineteen_percent_basket(monkeypatch):
+    """€5.00 gross at 19 %: net €4.20, VAT €0.80; delivery €3.50 at 19 %:
+    net €2.94, VAT €0.56. Total €8.50, VAT included €1.36."""
+    _go_inclusive(monkeypatch)
+    _, nineteen = _make_vat_fixture_products()
+    q = client.post("/api/orders/quote", json={"items": [{"product_id": nineteen["id"], "quantity": 1}]}).json()
+    assert q["tax_included"] is True
+    assert q["total"] == 8.50
+    assert q["tax"] == 1.36
+
+
+def test_inclusive_mixed_basket_allocates_shipping_proportionally(monkeypatch):
+    """The brief's centrepiece. €7.00@7 + €5.00@19, delivery €3.50:
+
+    products: 7 % net 6.54/vat 0.46; 19 % net 4.20/vat 0.80
+    delivery by net basis (6.54 : 4.20 of 10.74): 350¢ shares 213.13 and
+    136.86 — floors 213/136, the leftover cent to the larger remainder
+    (the 19 % bucket): €2.13 (net 1.99, vat 0.14) and €1.37 (net 1.15,
+    vat 0.22).
+    totals: VAT 0.46+0.80+0.14+0.22 = 1.62; payable 12.00+3.50 = 15.50."""
+    _go_inclusive(monkeypatch)
+    seven, nineteen = _make_vat_fixture_products()
+    q = client.post(
+        "/api/orders/quote",
+        json={"items": [{"product_id": seven["id"], "quantity": 1}, {"product_id": nineteen["id"], "quantity": 1}]},
+    ).json()
+    assert q["subtotal"] == 12.00
+    assert q["shipping_fee"] == 3.50
+    assert q["total"] == 15.50
+    assert q["tax"] == 1.62
+    # the delivered allocation itself is pinned at engine level elsewhere;
+    # here the end-to-end figures must reconcile with the parts
+    assert q["total"] == round(q["subtotal"] - q["discount_amount"] + q["shipping_fee"], 2)
+
+
+def test_inclusive_free_delivery_carries_no_shipping_vat(monkeypatch):
+    _go_inclusive(monkeypatch)
+    seven, _ = _make_vat_fixture_products()
+    # 5 × €7.00 = €35.00 — over the suite's €30 free line
+    q = client.post("/api/orders/quote", json={"items": [{"product_id": seven["id"], "quantity": 5}]}).json()
+    assert q["shipping_fee"] == 0.0
+    assert q["total"] == 35.00
+    # VAT is the products' alone: 35 gross at 7 % → net 32.71, vat 2.29
+    assert q["tax"] == 2.29
+
+
+def test_inclusive_vip_earns_the_smaller_line(monkeypatch):
+    from app.loyalty import VIP_ORDERS
+
+    _go_inclusive(monkeypatch)
+    seven, _ = _make_vat_fixture_products()
+    token = register_and_login("vip.incl@example.com", "VipIncl123!")
+    vip_id = client.get("/api/auth/me", headers=auth_header(token)).json()["id"]
+    _seed_kept_orders(vip_id, VIP_ORDERS)
+    # 3 × €7.00 = €21.00 — under the standard €30, over the VIP €15
+    q = client.post(
+        "/api/orders/quote",
+        json={"items": [{"product_id": seven["id"], "quantity": 3}]},
+        headers=auth_header(token),
+    ).json()
+    assert q["free_delivery_threshold"] == 15.0
+    assert q["shipping_fee"] == 0.0
+    assert q["total"] == 21.00
+
+
+def test_inclusive_coupon_takes_its_percent_off_gross_per_line(monkeypatch):
+    _go_inclusive(monkeypatch)
+    seven, _ = _make_vat_fixture_products()
+    admin = admin_headers()
+    minted = client.post(
+        "/api/admin/coupons", json={"code": "INCL10", "percent_off": 10}, headers=admin
+    )
+    try:
+        q = client.post(
+            "/api/orders/quote",
+            json={"items": [{"product_id": seven["id"], "quantity": 2}], "coupon_code": "INCL10"},
+        ).json()
+        # gross 14.00, −10 % per line = 12.60 payable; VAT extracted from the
+        # discounted gross: 12.60@7 → net 11.78, vat 0.82; delivery 3.50@7
+        # → net 3.27, vat 0.23. Total 16.10, included VAT 1.05.
+        assert q["discount_amount"] == 1.40
+        assert q["total"] == 16.10
+        assert q["tax"] == 1.05
+    finally:
+        client.delete(f"/api/admin/coupons/{minted.json()['id']}", headers=admin)
+
+
+def test_inclusive_fully_discounted_basket_pays_only_delivery(monkeypatch):
+    _go_inclusive(monkeypatch)
+    seven, nineteen = _make_vat_fixture_products()
+    admin = admin_headers()
+    minted = client.post(
+        "/api/admin/coupons", json={"code": "INCL100", "percent_off": 100}, headers=admin
+    )
+    try:
+        q = client.post(
+            "/api/orders/quote",
+            json={
+                "items": [{"product_id": seven["id"], "quantity": 1}, {"product_id": nineteen["id"], "quantity": 1}],
+                "coupon_code": "INCL100",
+            },
+        ).json()
+        assert q["discount_amount"] == 12.00
+        assert q["total"] == 3.50          # the delivery charge alone
+        # every product net is zero: the charge allocates by gross value
+        # (7.00 : 5.00 of 12.00 → 205¢/145¢): €2.05@7 (vat 0.13) + €1.45@19
+        # (vat 0.23) — included VAT 0.36, hand-computed.
+        assert q["tax"] == 0.36
+    finally:
+        client.delete(f"/api/admin/coupons/{minted.json()['id']}", headers=admin)
+
+
+def test_inclusive_mode_refuses_unclassified_products(monkeypatch):
+    """Fail-closed, per product, by name — quote AND placement."""
+    _go_inclusive(monkeypatch)
+    seven, _ = _make_vat_fixture_products()
+    croissant = get_product("butter-croissant")  # seeded catalog: unclassified
+
+    quote = client.post(
+        "/api/orders/quote",
+        json={"items": [{"product_id": seven["id"], "quantity": 1}, {"product_id": croissant["id"], "quantity": 1}]},
+    )
+    assert quote.status_code == 503
+    assert "Butter Croissant" in quote.json()["detail"]
+    assert "VAT" in quote.json()["detail"]
+
+    stock_before = croissant["stock"]
+    placed = client.post(
+        "/api/orders",
+        json=checkout_payload(payment_method="cash_on_delivery", items=[{"product_id": croissant["id"], "quantity": 1}]),
+        headers=auth_header(login_customer()),
+    )
+    assert placed.status_code == 503
+    assert get_product("butter-croissant")["stock"] == stock_before  # nothing reserved
+
+
+def test_inclusive_mode_refuses_unapproved_classifications(monkeypatch):
+    _go_inclusive(monkeypatch)
+    admin = admin_headers()
+    product = client.post(
+        "/api/admin/products", json={"name": "VAT Fixture Pending", "price": 4.00, "stock": 10}, headers=admin
+    ).json()
+    # classified but left pending — the desk never approved it
+    client.put(
+        f"/api/admin/products/{product['id']}/vat",
+        json={"vat_category": "FOOD_REDUCED", "vat_review_status": "pending"},
+        headers=admin,
+    )
+    quote = client.post("/api/orders/quote", json={"items": [{"product_id": product["id"], "quantity": 1}]})
+    assert quote.status_code == 503
+    assert "VAT Fixture Pending" in quote.json()["detail"]
+
+
+def test_inclusive_checkout_persists_the_full_snapshot(monkeypatch):
+    """Quote, invoice, per-line snapshots and the per-rate ledger all agree,
+    and the ledger reconciles to the payable to the cent."""
+    from app.database import SessionLocal as _S
+    from app.models import OrderItem as _OI, OrderTaxLine as _OTL
+
+    _go_inclusive(monkeypatch)
+    seven, nineteen = _make_vat_fixture_products()
+    items = [{"product_id": seven["id"], "quantity": 1}, {"product_id": nineteen["id"], "quantity": 1}]
+
+    quoted = client.post("/api/orders/quote", json={"items": items}).json()
+    placed = client.post(
+        "/api/orders",
+        json=checkout_payload(payment_method="cash_on_delivery", items=items),
+        headers=auth_header(login_customer()),
+    )
+    assert placed.status_code == 201
+    order = placed.json()
+    assert order["tax_included"] is True
+    assert order["total"] == quoted["total"] == 15.50
+    assert order["tax"] == quoted["tax"] == 1.62
+
+    db = _S()
+    try:
+        lines = db.scalars(_select(_OI).where(_OI.order_id == order["id"])).all()
+        by_name = {row.product_name: row for row in lines}
+        assert float(by_name["VAT Fixture Seven"].vat_rate) == 7.0
+        assert float(by_name["VAT Fixture Seven"].net_line_total) == 6.54
+        assert float(by_name["VAT Fixture Seven"].vat_amount) == 0.46
+        assert float(by_name["VAT Fixture Seven"].gross_line_total) == 7.00
+        assert float(by_name["VAT Fixture Nineteen"].net_line_total) == 4.20
+        assert float(by_name["VAT Fixture Nineteen"].vat_amount) == 0.80
+
+        tax_lines = db.scalars(_select(_OTL).where(_OTL.order_id == order["id"])).all()
+        by_rate = {float(t.vat_rate): t for t in tax_lines}
+        # products + the delivery slice allocated to each rate
+        assert float(by_rate[7.0].net_amount) == round(6.54 + 1.99, 2)
+        assert float(by_rate[19.0].net_amount) == round(4.20 + 1.15, 2)
+        assert round(float(by_rate[7.0].gross_amount) + float(by_rate[19.0].gross_amount), 2) == 15.50
+        assert round(
+            float(by_rate[7.0].net_amount) + float(by_rate[7.0].vat_amount)
+            + float(by_rate[19.0].net_amount) + float(by_rate[19.0].vat_amount), 2
+        ) == 15.50
+    finally:
+        db.close()
+
+
+def test_inclusive_snapshots_survive_reclassification_and_refund(monkeypatch):
+    """Historical orders are immutable money: reclassify the product, cancel
+    the paid order — the stored figures never move."""
+    _go_inclusive(monkeypatch)
+    seven, _ = _make_vat_fixture_products()
+    placed = client.post(
+        "/api/orders",
+        json=checkout_payload(payment_method="cash_on_delivery", items=[{"product_id": seven["id"], "quantity": 1}]),
+        headers=auth_header(login_customer()),
+    ).json()
+    order_id = placed["id"]
+
+    # the desk re-classifies the bake afterwards (a legal correction)
+    client.put(
+        f"/api/admin/products/{seven['id']}/vat",
+        json={"vat_category": "BEVERAGE_STANDARD", "vat_review_status": "approved"},
+        headers=admin_headers(),
+    )
+    assert client.post(f"/api/orders/{order_id}/cancel", headers=auth_header(login_customer())).status_code == 200
+
+    detail = client.get(f"/api/orders/{order_id}", headers=auth_header(login_customer())).json()
+    assert detail["tax"] == placed["tax"]           # 7 % figures, frozen
+    assert detail["total"] == placed["total"]
+    assert detail["tax_included"] is True
+
+
+def test_vat_classification_report_counts_the_catalog_honestly(monkeypatch):
+    admin = admin_headers()
+    seven, nineteen = _make_vat_fixture_products()
+    report = client.get("/api/admin/vat/report", headers=admin).json()
+
+    assert report["tax_mode"] == "exclusive"        # the shipped default
+    assert report["counts"]["total"] >= 2
+    assert "VAT Fixture Seven" not in report["blockers"]
+    assert "Butter Croissant" in report["blockers"]  # the seeded catalog: unclassified
+    assert report["checkout_ready_for_inclusive"] is False
+    assert {"code": "REDUCED", "rate": 7.0} in report["rates_in_force"]
+    assert {"code": "STANDARD", "rate": 19.0} in report["rates_in_force"]
+    assert report["shipping_vat"]["follows_product_vat"] is True

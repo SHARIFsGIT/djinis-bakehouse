@@ -560,3 +560,35 @@ def test_the_session_offers_the_configured_methods(monkeypatch) -> None:
     )
     gateway.create_checkout_session(make_order(), BASE_URL)
     assert stub.sessions[0]["payment_method_types"] == ["card", "klarna"]
+
+
+def test_inclusive_mode_never_adds_a_second_tax_row(monkeypatch) -> None:
+    """VAT-inclusive orders carry their tax inside every line — a separate
+    tax row would charge it twice, so the hosted page must not show one.
+    The order here is genuinely inclusive-shaped: €14.00 gross lines (their
+    €0.92 VAT inside) + €3.50 delivery = €17.50 payable."""
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+    monkeypatch.setattr(gateway.get_settings(), "tax_mode", "inclusive", raising=True)
+
+    item = SimpleNamespace(product=None)  # no photo on purpose
+    order = SimpleNamespace(
+        id=9,
+        order_number="DB-INCL01",
+        items=[SimpleNamespace(product_name="Butter Croissant", unit_price=3.50, quantity=4, product=item)],
+        subtotal=14.00,
+        discount_amount=0.0,
+        coupon_code=None,
+        tax=1.12,           # the VAT inside the figures (products + delivery)
+        shipping_fee=3.50,
+        total=17.50,
+        user=SimpleNamespace(email="taster@example.com"),
+        currency="eur",
+    )
+
+    gateway.create_checkout_session(order, BASE_URL)
+    kwargs = stub.sessions[0]
+    names = [line["price_data"]["product_data"]["name"] for line in kwargs["line_items"]]
+    assert names == ["Butter Croissant", "Delivery"]  # no Tax row
+    # and the lines still sum to the invoice, VAT inside
+    assert line_total_cents(kwargs) == gateway.cents(float(order.total)) == 1750

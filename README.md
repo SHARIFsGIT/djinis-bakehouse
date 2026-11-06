@@ -408,6 +408,26 @@ hand-off). Keep it that way on GitHub/GitLab — the PaaS deploys track the
 `main` branch, and `backend/.env`, databases, `node_modules`, `dist/` and
 uploaded photos stay out of history via `.gitignore`.
 
+**Turning on VAT-inclusive pricing (the German B2C mode)**
+
+The default pricing mode is `TAX_MODE=exclusive`: net shelf prices, the
+approved 7 % register rate added at the till. The inclusive mode — shelf
+prices *are* gross, VAT extracted per line, delivery VAT allocated across
+the basket's rates — is fully implemented and tested but ships dark,
+because it refuses any purchasable product without an approved VAT
+classification (fail-closed, per product, by design). To open it:
+
+1. Classify every purchasable product at the desk (Products → the
+   tax-review rail; each change is audit-logged) — the classification is
+   a legal decision the app never makes for you.
+2. Review `GET /api/admin/vat/report` (admin-only): it counts the
+   catalog, names every blocker, and says `checkout_ready_for_inclusive`.
+3. Set `TAX_MODE=inclusive` (Render env var). Quotes, checkout, Stripe's
+   hosted page (no separate tax row — VAT rides inside the lines), the
+   receipt email ("VAT (included)") and the order book (per-line and
+   per-rate snapshots, immutable) all switch together through the one
+   shared pricing service. Existing orders are never recalculated.
+
 **Turning on online payments (Stripe)**
 
 The integration is live in code; it just needs keys. Rehearse in test mode

@@ -355,6 +355,9 @@ class QuoteOut(BaseModel):
     # figure, or the VIP regular's smaller one. The basket page's meter
     # reads it from here so the shopper's own line is what they see.
     free_delivery_threshold: float | None = None
+    # True when every amount above is VAT-inclusive (the German B2C mode):
+    # `tax` is the VAT already inside them, not added on top.
+    tax_included: bool = False
 
 
 class OrderItemOut(ORMModel):
@@ -403,6 +406,12 @@ class OrderOut(ORMModel):
     created_at: datetime
     can_be_cancelled: bool
     item_count: int = 0
+
+
+    # Meaningful on the detail view: True when this order's amounts are
+    # VAT-inclusive and its per-rate snapshots are on the order (the
+    # storefront relabels the tax row "VAT (included)").
+    tax_included: bool = False
 
 
 class OrderDetailOut(OrderOut):

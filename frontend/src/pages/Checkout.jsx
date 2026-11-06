@@ -494,7 +494,7 @@ export default function Checkout() {
               {/* No tax row while none is charged — a "Tax €0.00" line would
                   read as a 0%-VAT decision the shop hasn't made. */}
               {quote.tax > 0 && (
-                <div className="flex justify-between"><span className="opacity-70">{taxLabel()}</span><span>{money(quote.tax)}</span></div>
+                <div className="flex justify-between"><span className="opacity-70">{taxLabel(quote.tax_included)}</span><span>{money(quote.tax)}</span></div>
               )}
               <div className="flex justify-between">
                 <span className="opacity-70">Delivery</span>
