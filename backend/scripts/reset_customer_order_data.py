@@ -82,6 +82,7 @@ DELETE_ALL = frozenset(
         "order_tax_lines",
         "reviews",
         "favorites",
+        "restock_alerts",
         "addresses",
     }
 )

@@ -1,21 +1,23 @@
 """Product catalog: categories, listing with filters, detail, reviews and saved bakes."""
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response, status
 from sqlalchemy import func, or_, select
 
-from ..models import Category, Favorite, Product, Review
+from ..models import Category, Favorite, Product, RestockAlert, Review
 from ..schemas import (
     CategoryOut,
     PaginationOut,
     ProductCard,
     ProductDetail,
     ProductListResponse,
+    RestockAlertRequest,
+    RestockAlertResponse,
     ReviewCreate,
     ReviewOut,
     SortOption,
 )
 from ..notifications import notify_review
-from ..security import CurrentUser, DbSession, OptionalUser
+from ..security import CurrentUser, DbSession, OptionalUser, client_key
 from ..serialize import product_to_card, review_summary, review_to_out, verified_buyers
 
 router = APIRouter(prefix="/api/products", tags=["products"])
@@ -103,6 +105,50 @@ def remove_favorite(product_id: int, user: CurrentUser, db: DbSession):
         db.delete(favorite)
         db.commit()
     return {"product_id": product_id, "saved": False}
+
+
+@router.post("/{product_id}/restock-alert", response_model=RestockAlertResponse, status_code=status.HTTP_201_CREATED)
+def request_restock_alert(
+    product_id: int,
+    payload: RestockAlertRequest,
+    db: DbSession,
+    request: Request,
+    response: Response,
+):
+    """Ask to be emailed the moment a sold-out bake is back.
+
+    Open to guests — the whole point is catching the shopper who's standing
+    at the empty shelf — so it's rate-limited like the newsletter form, not
+    gated behind an account. Asking twice keeps the one ask already on file.
+    """
+    limiter = request.app.state.limiters["restock"]
+    if not limiter.allow(client_key(request)):
+        raise HTTPException(
+            status_code=429, detail="That's a few too many asks. Try again shortly."
+        )
+
+    product = db.get(Product, product_id)
+    if product is None or not product.is_available:
+        raise HTTPException(status_code=404, detail="Product not found")
+    if product.stock > 0:
+        raise HTTPException(
+            status_code=400, detail="This bake is in stock right now — no need to wait"
+        )
+
+    email = payload.email.lower()
+    already = db.scalar(
+        select(RestockAlert).where(
+            RestockAlert.product_id == product_id, RestockAlert.email == email
+        )
+    )
+    if not already:
+        db.add(RestockAlert(product_id=product_id, email=email))
+        db.commit()
+    else:
+        response.status_code = status.HTTP_200_OK
+    return RestockAlertResponse(
+        email=email, product_id=product_id, already_registered=already is not None
+    )
 
 
 @router.get("", response_model=ProductListResponse)

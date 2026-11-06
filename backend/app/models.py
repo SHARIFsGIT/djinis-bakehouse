@@ -274,6 +274,22 @@ class Favorite(Base):
     product: Mapped[Product] = relationship()
 
 
+class RestockAlert(Base):
+    """A shopper's ask to be emailed the moment a sold-out bake returns.
+    One live ask per email per product; the ask disappears with the email
+    that answers it (and with the bake it watches)."""
+
+    __tablename__ = "restock_alerts"
+    __table_args__ = (UniqueConstraint("product_id", "email"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id", ondelete="CASCADE"), index=True)
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    product: Mapped[Product] = relationship()
+
+
 class Subscriber(Base):
     """Newsletter signup — one row per email address, however many times sent."""
 

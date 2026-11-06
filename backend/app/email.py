@@ -273,6 +273,161 @@ def send_order_receipt(receipt: dict) -> None:
         logger.exception("building the receipt email for %s failed", receipt.get("order_number"))
 
 
+def order_status_email(update: dict) -> tuple[str, str, str]:
+    """The customer's word that their order moved — one card per status
+    change, in the same dressing as the receipt.
+
+    `update` carries plain values only (first_name, order_number, status,
+    total, currency, and optionally the desk's own comment) so the
+    background task never touches a session.
+    """
+    shop = get_settings().bakery_name
+    number = update["order_number"]
+    status = update["status"]
+    currency = update.get("currency") or "eur"
+    headline, line = _ORDER_STATUS_COPY.get(status, (None, None))
+    if headline is None:
+        headline = f"Your order is {status.replace('_', ' ')}"
+        line = f"Order {number} moved to “{status.replace('_', ' ')}”."
+    subject = f"{headline} — order {number}"
+    note_html = ""
+    note_text = ""
+    if update.get("comment"):
+        note_html = (
+            '<p style="margin:0 0 16px;font-size:14px;line-height:1.6;'
+            'border-left:3px solid #e7ddd6;padding-left:12px;color:#8a837a;">'
+            f"{escape(update['comment'])}</p>"
+        )
+        note_text = f"\nA note from the bakery: {update['comment']}\n"
+    text = (
+        f"Hi {update['first_name']},\n\n"
+        f"{line}\n"
+        f"Order {number} · total {money(update['total'], currency)}\n"
+        f"{note_text}\n"
+        f"Thank you for baking with us.\n"
+    )
+    html = f"""\
+<div style="margin:0;padding:24px;background:#f6f1ee;font-family:Georgia,'Times New Roman',serif;color:#33322e;">
+  <div style="max-width:480px;margin:0 auto;background:#fffdf9;border-radius:14px;padding:32px;
+              border:1px solid #e7ddd6;">
+    <p style="margin:0 0 4px;font-size:15px;color:{_BRAND};font-weight:bold;">{shop}</p>
+    <h1 style="margin:0 0 12px;font-size:22px;color:#33322e;">{headline}</h1>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;">
+      Hi {escape(update['first_name'])}, {line}
+    </p>
+    <p style="margin:0 0 16px;font-size:13px;color:#8a837a;">
+      Order {number} · total {money(update['total'], currency)}
+    </p>
+    {note_html}
+    <p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:#8a837a;">
+      Thank you for baking with us.
+    </p>
+  </div>
+</div>
+"""
+    return subject, html, text
+
+
+def send_order_status_email(update: dict) -> None:
+    """Queue-safe entry point for the status-change background task."""
+    try:
+        subject, html, text = order_status_email(update)
+        send_email(update["email"], subject, html, text)
+    except Exception:
+        logger.exception("building the status email for %s failed", update.get("order_number"))
+
+
+# The customer-facing line for each status the desk can dial. None of these
+# name a time the shop can't stand behind — "on its way" says the van left,
+# not when it arrives.
+_ORDER_STATUS_COPY = {
+    "confirmed": (
+        "Your order is confirmed",
+        "Djini has your order on the day's bake list.",
+    ),
+    "baking": (
+        "Your bake is in the oven",
+        "The ovens have started on your order — it smells like a good day.",
+    ),
+    "ready": (
+        "Your order is ready",
+        "Your bake is boxed and waiting for its journey to you.",
+    ),
+    "out_for_delivery": (
+        "Your order is on its way",
+        "Your bake has left the counter and is on its way to you.",
+    ),
+    "delivered": (
+        "Your order was delivered",
+        "Enjoy every crumb — Djini hopes the box made your day.",
+    ),
+    "cancelled": (
+        "Your order was cancelled",
+        "Your order has been cancelled and the reserved bakes are back on the shelf.",
+    ),
+}
+
+
+def restock_email(alert: dict) -> tuple[str, str, str]:
+    """The one-shot answer to a back-in-stock ask: the bake is back."""
+    shop = get_settings().bakery_name
+    subject = f"It's back — {alert['product_name']}"
+    link = alert["product_url"]
+    text = (
+        f"Hi,\n\n"
+        f"{alert['product_name']} is back on the counter at {shop}.\n"
+        f"Come and get it while it lasts:\n{link}\n\n"
+        f"You asked us to write when it returned — this is that email, "
+        f"and the only one.\n"
+    )
+    html = f"""\
+<div style="margin:0;padding:24px;background:#f6f1ee;font-family:Georgia,'Times New Roman',serif;color:#33322e;">
+  <div style="max-width:480px;margin:0 auto;background:#fffdf9;border-radius:14px;padding:32px;
+              border:1px solid #e7ddd6;">
+    <p style="margin:0 0 4px;font-size:15px;color:{_BRAND};font-weight:bold;">{shop}</p>
+    <h1 style="margin:0 0 12px;font-size:22px;color:#33322e;">It's back</h1>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;">
+      <strong>{escape(alert['product_name'])}</strong> is back on the counter,
+      while it lasts.
+    </p>
+    <p style="margin:0 0 16px;">
+      <a href="{link}"
+         style="display:inline-block;background:{_BRAND};color:#fffdf9;text-decoration:none;
+                padding:12px 28px;border-radius:999px;font-size:15px;font-weight:bold;">
+        Have a look
+      </a>
+    </p>
+    <p style="margin:0 0 4px;font-size:13px;line-height:1.6;color:#8a837a;">
+      If the button doesn't work, paste this into your browser:<br>
+      <a href="{link}" style="color:{_BRAND};word-break:break-all;">{link}</a>
+    </p>
+    <p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:#8a837a;">
+      You asked us to write when it returned — this is that email, and the
+      only one.
+    </p>
+  </div>
+</div>
+"""
+    return subject, html, text
+
+
+def send_restock_emails(alerts: list[dict], product_url: str, product_name: str) -> None:
+    """Queue-safe entry point: one email per waiting shopper.
+
+    Deliberately not one email with everyone in `To` — each asker's mailbox
+    sees only their own address, never the rest of the waiting list."""
+    for alert in alerts:
+        try:
+            subject, html, text = restock_email(
+                {"product_name": product_name, "product_url": product_url}
+            )
+            send_email(alert["email"], subject, html, text)
+        except Exception:
+            logger.exception(
+                "building the back-in-stock email for %s failed", alert.get("email")
+            )
+
+
 def admin_notification_email(title: str, body: str | None, link: str | None) -> tuple[str, str, str]:
     """The desk ping as an email — for the baker who isn't at the desk.
 

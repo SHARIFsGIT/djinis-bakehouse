@@ -3,7 +3,7 @@
 **Date:** 2026-11-05
 **Base:** `e5ab209` (v3.14.0, deployed) + uncommitted Phase 1/1.1 working-tree changes
 **Contract:** `docs/business/PHASE2_COSTING_IMPLEMENTATION_PLAN.md` (approved final v2)
-**Status:** Implemented, verified, **not committed** — awaiting owner review
+**Status:** Implemented, verified, and **committed** as `19c9603` (2026-11-05; the working-tree wording above describes the hand-off moment, before the commit landed)
 
 ---
 

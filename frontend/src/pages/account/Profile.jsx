@@ -1,14 +1,16 @@
 import { useState } from "react";
-import { Camera, Trash2 } from "lucide-react";
-import client, { apiError, tokens } from "../../api/client";
+import { useNavigate } from "react-router";
+import { Camera, Download, ShieldAlert, Trash2 } from "lucide-react";
+import client, { apiError } from "../../api/client";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { formatDate } from "../../lib/format";
+import { formatDate, todayISO } from "../../lib/format";
 import { shrinkImage } from "../../lib/imageResize";
 
 export default function Profile() {
-  const { user, refreshUser } = useAuth();
+  const { user, refreshUser, logout } = useAuth();
   const toast = useToast();
+  const navigate = useNavigate();
 
   const [form, setForm] = useState({
     first_name: user.first_name,
@@ -20,6 +22,10 @@ export default function Profile() {
 
   const [passwords, setPasswords] = useState({ current_password: "", new_password: "" });
   const [savingPassword, setSavingPassword] = useState(false);
+
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   const pickAvatar = async (e) => {
     const file = e.target.files?.[0];
@@ -77,6 +83,35 @@ export default function Profile() {
       toast.error(apiError(err));
     } finally {
       setSavingPassword(false);
+    }
+  };
+
+  const downloadMyData = async () => {
+    try {
+      const { data } = await client.get("/auth/me/export", { responseType: "blob" });
+      const url = URL.createObjectURL(data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `bakehouse-my-data-${todayISO()}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast.success("Your data is downloading");
+    } catch (err) {
+      toast.error(apiError(err));
+    }
+  };
+
+  const deleteAccount = async (e) => {
+    e.preventDefault();
+    setDeleting(true);
+    try {
+      await client.post("/auth/me/delete", { password: confirmPassword });
+      logout();
+      navigate("/");
+      toast.info("Your account has been deleted — take care");
+    } catch (err) {
+      toast.error(apiError(err));
+      setDeleting(false);
     }
   };
 
@@ -204,6 +239,71 @@ export default function Profile() {
             {savingPassword ? "Updating…" : "Update password"}
           </button>
         </form>
+      </section>
+
+      {/* Your data — see it whole, or take it back */}
+      <section className="h-fit rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60 lg:col-span-2">
+        <h2 className="font-display text-2xl font-semibold">Your data</h2>
+        <p className="mt-1 text-sm opacity-60">
+          Everything this shop holds on you — profile, addresses, orders,
+          reviews — in one file you can keep. Or close the account entirely:
+          your personal details are scrubbed and only anonymized invoices
+          remain, as the law requires.
+        </p>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button type="button" className="btn btn-outline btn-sm" onClick={downloadMyData}>
+            <Download size={16} /> Download my data
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm text-error"
+            onClick={() => setConfirmOpen((open) => !open)}
+          >
+            <Trash2 size={16} /> Delete my account
+          </button>
+        </div>
+
+        {confirmOpen && (
+          <form
+            onSubmit={deleteAccount}
+            className="mt-4 rounded-box border border-error/30 bg-error/5 p-4"
+          >
+            <p className="flex items-center gap-2 text-sm font-semibold text-error">
+              <ShieldAlert size={16} className="shrink-0" />
+              This closes the account for good
+            </p>
+            <p className="mt-1 text-xs opacity-70">
+              Your name, contact details, saved bakes and reviews are erased.
+              Past orders stay as anonymous invoices. This can&rsquo;t be
+              undone — confirm with your password.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <input
+                type="password"
+                required
+                autoComplete="current-password"
+                placeholder="Your password"
+                className="input input-bordered input-sm w-full max-w-xs"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                aria-label="Confirm with your password"
+              />
+              <button type="submit" className="btn btn-error btn-sm" disabled={deleting}>
+                {deleting ? "Deleting…" : "Delete everything"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  setConfirmOpen(false);
+                  setConfirmPassword("");
+                }}
+              >
+                Keep my account
+              </button>
+            </div>
+          </form>
+        )}
       </section>
     </div>
   );

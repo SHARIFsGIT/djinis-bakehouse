@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import client, { apiError } from "../../api/client";
 import { formatDate, money } from "../../lib/format";
-import { REDEMPTION_RULES, oncePerCustomerFromRule, redemptionRule } from "../../lib/coupons";
+import { REDEMPTION_RULES, oncePerCustomerFromRule, redemptionRule } from "../../lib/redemptionRules";
 import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import { Loading } from "../../components/Loading";

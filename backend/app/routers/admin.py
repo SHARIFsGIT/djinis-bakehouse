@@ -5,14 +5,15 @@ import io
 import re
 import uuid
 from collections import Counter
+from datetime import date, timedelta
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, func, or_, select, update
 
 from ..config import get_settings
 from ..database import utcnow
-from ..email import bulk_reply_email, send_email
+from ..email import bulk_reply_email, send_email, send_restock_emails
 from ..models import (
     DEFAULT_ANNOUNCEMENT,
     DEFAULT_HERO_IMAGE,
@@ -34,6 +35,7 @@ from ..models import (
     Product,
     ProductVatEvent,
     Recipe,
+    RestockAlert,
     Review,
     Testimonial,
     User,
@@ -65,6 +67,7 @@ from ..schemas import (
     CouponOut,
     CouponUpdateRequest,
     CurrencyStatsOut,
+    DayRevenueOut,
     LoyaltyVouchersOut,
     OrderDetailOut,
     OrderListResponse,
@@ -89,7 +92,13 @@ from ..serialize import product_to_card, review_summary, verified_buyers
 from .. import costing
 from ..vat import REVIEW_STATUS_APPROVED, preview_rate, validate_classification
 from ..uploads import MAX_PRODUCT_PHOTO_BYTES, save_photo
-from .orders import _cancel_order, _late_cancel_fee, _lock_for_cancellation, _serialize
+from .orders import (
+    _cancel_order,
+    _late_cancel_fee,
+    _lock_for_cancellation,
+    _serialize,
+    queue_status_email,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -171,6 +180,28 @@ def stats(admin: CurrentAdmin, db: DbSession):
     ).all()
     low_ratings = review_summary(db, [p.id for p in low_stock_products])
 
+    # The trading chart: the active currency's kept orders, one bar per day,
+    # zeros included, so quiet days read as quiet rather than missing. The
+    # window rides UTC because created_at does — a local-clock "today" would
+    # drift a bar near midnight. Bucketed from the kept orders already
+    # loaded above: portable across SQLite and PostgreSQL, where date
+    # arithmetic in SQL speaks different dialects.
+    series_start = utcnow().date() - timedelta(days=29)
+    by_day: dict[date, tuple[float, int]] = {}
+    for o in orders:
+        if str(o.currency or "").strip().lower() != active:
+            continue
+        day = o.created_at.date()
+        if day < series_start:
+            continue
+        revenue, count = by_day.get(day, (0.0, 0))
+        by_day[day] = (revenue + float(o.total), count + 1)
+    revenue_series = []
+    for offset in range(30):
+        day = series_start + timedelta(days=offset)
+        revenue, count = by_day.get(day, (0.0, 0))
+        revenue_series.append(DayRevenueOut(date=day, revenue=round(revenue, 2), orders=count))
+
     return AdminStatsOut(
         total_revenue=round(active_bucket["total"], 2),
         paid_revenue=round(buckets.get(active, {}).get("paid", 0.0), 2),
@@ -192,6 +223,7 @@ def stats(admin: CurrentAdmin, db: DbSession):
         )
         or 0,
         revenue_by_currency=by_currency,
+        revenue_series=revenue_series,
     )
 
 
@@ -337,7 +369,11 @@ def all_orders(
 
 @router.put("/orders/{order_id}/status", response_model=OrderDetailOut)
 def update_order_status(
-    order_id: int, payload: OrderStatusUpdateRequest, admin: CurrentAdmin, db: DbSession
+    order_id: int,
+    payload: OrderStatusUpdateRequest,
+    admin: CurrentAdmin,
+    db: DbSession,
+    background: BackgroundTasks,
 ):
     order = db.get(Order, order_id)
     if order is None:
@@ -355,6 +391,7 @@ def update_order_status(
             raise HTTPException(status_code=400, detail="Order is already cancelled")
         _cancel_order(order, db, by_customer=False, comment=payload.comment)
         db.commit()
+        queue_status_email(order, background, comment=payload.comment)
         db.refresh(order)
         return _serialize(order, detailed=True, cancel_fee_preview=_late_cancel_fee(order, db))
 
@@ -377,6 +414,9 @@ def update_order_status(
         )
     )
     db.commit()
+    # Every dial the desk makes is news the customer asked for when they
+    # ordered — the mailbox hears it in the same breath.
+    queue_status_email(order, background, comment=payload.comment)
     db.refresh(order)
     return _serialize(order, detailed=True, cancel_fee_preview=_late_cancel_fee(order, db))
 
@@ -624,19 +664,50 @@ def create_product(payload: ProductCreateRequest, admin: CurrentAdmin, db: DbSes
 
 @router.put("/products/{product_id}", response_model=AdminProductCard)
 def update_product(
-    product_id: int, payload: ProductUpdateRequest, admin: CurrentAdmin, db: DbSession
+    product_id: int,
+    payload: ProductUpdateRequest,
+    admin: CurrentAdmin,
+    db: DbSession,
+    background: BackgroundTasks,
+    request: Request,
 ):
     product = db.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
+
+    was_sold_out = product.stock <= 0 or not product.is_available
 
     data = payload.model_dump()
     data["name"] = data["name"].strip()
     for field, value in data.items():
         setattr(product, field, value)
     db.commit()
+    _answer_restock_alerts(product, was_sold_out, db, background, request)
     db.refresh(product)
     return _admin_card(product, db)
+
+
+def _answer_restock_alerts(
+    product: Product, was_sold_out: bool, db: DbSession, background: BackgroundTasks, request: Request
+) -> None:
+    """The moment a watched bake is buyable again, every waiting shopper
+    hears — once. The asks are claimed and cleared in the same transaction
+    that restocked the shelf, so a second save while the emails are in
+    flight can never answer the same ask twice."""
+    if not was_sold_out or product.stock <= 0 or not product.is_available:
+        return
+    alerts = [
+        {"email": email}
+        for email in db.scalars(
+            select(RestockAlert.email).where(RestockAlert.product_id == product.id)
+        )
+    ]
+    if not alerts:
+        return
+    db.execute(delete(RestockAlert).where(RestockAlert.product_id == product.id))
+    db.commit()
+    product_url = f"{str(request.base_url).rstrip('/')}/products/{product.slug}"
+    background.add_task(send_restock_emails, alerts, product_url, product.name)
 
 
 @router.put("/products/{product_id}/vat", response_model=AdminProductCard)
@@ -684,6 +755,10 @@ def delete_product(product_id: int, admin: CurrentAdmin, db: DbSession):
     product = db.get(Product, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
+    # Waiting restock asks go with the bake — cleared here rather than by the
+    # FK cascade alone, so it also holds on the dev database, where SQLite
+    # runs without foreign keys enforced.
+    db.execute(delete(RestockAlert).where(RestockAlert.product_id == product_id))
     db.delete(product)
     db.commit()
     return {"message": "Product deleted"}

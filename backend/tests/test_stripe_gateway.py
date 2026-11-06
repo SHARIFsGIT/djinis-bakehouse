@@ -522,3 +522,41 @@ def test_retrieve_session_returns_plain_values() -> None:
     stub.raise_on_retrieve = True
     with pytest.raises(gateway.GatewayUnavailable):
         gateway.retrieve_session("cs_test_page")
+
+
+def test_payment_methods_default_to_the_card_rail(monkeypatch) -> None:
+    gateway = load_real_gateway(StubStripe())
+    monkeypatch.setattr(gateway.get_settings(), "stripe_payment_methods", "card", raising=True)
+    assert gateway.payment_method_types() == ["card"]
+    # an empty setting is the same decision, not an error
+    monkeypatch.setattr(gateway.get_settings(), "stripe_payment_methods", " ", raising=True)
+    assert gateway.payment_method_types() == ["card"]
+
+
+def test_extra_payment_methods_ride_along_card_first(monkeypatch) -> None:
+    gateway = load_real_gateway(StubStripe())
+    monkeypatch.setattr(
+        gateway.get_settings(), "stripe_payment_methods", "paypal,card,klarna", raising=True
+    )
+    methods = gateway.payment_method_types()
+    assert methods == ["card", "paypal", "klarna"]  # the universal rail stays on top
+
+
+def test_unknown_payment_methods_drop_back_to_card(monkeypatch) -> None:
+    gateway = load_real_gateway(StubStripe())
+    # nothing here is supported (giropay included: Stripe retired it), so
+    # the page falls back to the one method that always works
+    monkeypatch.setattr(
+        gateway.get_settings(), "stripe_payment_methods", "crypto,giropay", raising=True
+    )
+    assert gateway.payment_method_types() == ["card"]
+
+
+def test_the_session_offers_the_configured_methods(monkeypatch) -> None:
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+    monkeypatch.setattr(
+        gateway.get_settings(), "stripe_payment_methods", "card,klarna", raising=True
+    )
+    gateway.create_checkout_session(make_order(), BASE_URL)
+    assert stub.sessions[0]["payment_method_types"] == ["card", "klarna"]

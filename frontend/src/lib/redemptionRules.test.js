@@ -2,7 +2,7 @@
    create form and the coupon table lean on: the coupon model's single rule
    field (once_per_customer) and the option values the selects speak.
    Plain node:test like the rest of src/lib:
-     node --test src/lib/coupons.test.js   (or: npm test) */
+     node --test src/lib/redemptionRules.test.js   (or: npm test) */
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -11,7 +11,7 @@ import {
   REDEMPTION_RULES,
   oncePerCustomerFromRule,
   redemptionRule,
-} from "./coupons.js";
+} from "./redemptionRules.js";
 
 test("the rule vocabulary covers the model exactly — both booleans, nothing invented", () => {
   assert.deepEqual(

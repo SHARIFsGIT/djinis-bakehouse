@@ -97,6 +97,13 @@ The home page also carries two bands the baker curates from the same desk:
 line of copy) and "Word around the neighborhood" (hand-picked testimonials
 with optional star ratings) — both served from the API and hidden when empty.
 
+**Back-in-stock alerts** — a sold-out bake's page takes an email instead of
+an order ("Tell me when it's back", guests included, rate-limited and
+idempotent). The moment the baker refills the shelf from the desk, every
+waiting shopper gets exactly one email — the asks are claimed and cleared
+in the same save that restocked the shelf, so a second save can never
+answer twice.
+
 **Sale nudges (honest ones)** — the basket keeps a free-delivery progress meter
 against the $50 threshold, product cards flag "Only N left" while stock lasts,
 and the basket suggests three best-rated one-tap add-ons ("Complete the box")
@@ -123,6 +130,13 @@ round out the ledger.
 product page; hearts sync to the server (`PUT/DELETE /api/products/{id}/favorite`,
 idempotent) and surface in the navbar and under Account → Saved bakes. Guests are
 invited to log in rather than losing the tap.
+
+**Findable from the outside** — the shop serves a live `sitemap.xml`
+(every standing page plus each live bake, stamped with its last change)
+and a `robots.txt` that keeps crawlers out of the API and the private
+corners; product pages carry their own `<title>`, description and
+schema.org Product structured data (price, availability, aggregate
+rating), so search engines and share cards speak the catalog's own words.
 
 **Newsletter capture** — the footer collects sign-ups (`POST /api/newsletter`,
 rate-limited, idempotent — re-subscribing says so instead of erroring). Admins see
@@ -159,11 +173,25 @@ even if the webhook is still in flight. Unpaid card orders can be paid again wit
 a fresh link (`POST /api/payments/{id}/session`) and cancel themselves — stock
 restored — when their pay window expires. Cancelling a paid card order refunds
 the card through Stripe (the total less any late-cancellation fee); if the refund
-call fails, the timeline says so instead of pretending it happened. Set
+call fails, the timeline says so instead of pretending it happened. A refund
+issued by hand in the Stripe dashboard syncs back through the
+`charge.refunded` webhook, so the book never claims money it has already
+returned, and a `charge.dispute.created` event rings the desk the moment a
+chargeback opens. Set
 `STRIPE_SECRET_KEY` to turn the card option on (checkout offers cash only without
-it); `STRIPE_WEBHOOK_SECRET` verifies the webhook, `STRIPE_CURRENCY` (default
-`usd`) sets the charge currency. Free delivery over $50, tax and shipping
-calculated server-side.
+it); `STRIPE_WEBHOOK_SECRET` verifies the webhook, `STRIPE_CURRENCY` (EUR
+only) sets the charge currency, and `STRIPE_PAYMENT_METHODS` can add local
+rails (Klarna, PayPal, SEPA direct debit, iDEAL, Bancontact) to the hosted
+page. Delivery and tax are calculated server-side from the approved money
+rules — while the EUR delivery figures await the owner's approval, checkout
+pauses fail-closed rather than charge an unapproved figure.
+
+**Order emails that follow the box** — every move the desk dials (confirmed,
+baking, ready, out for delivery, delivered, cancelled) lands in the
+customer's mailbox in the same breath, the baker's own note riding along.
+Customers cancelling their own order get the confirmation email too, and an
+order that dies because its payment window closed gets an honest word about
+where it went.
 
 **Photo uploads** — admins add or replace a product's photo straight from the
 product form (file picker or phone camera): the browser shrinks it locally
@@ -187,14 +215,20 @@ changes past orders. Customers can cancel while an order is pending/confirmed/
 baking — stock is restored, paid card orders auto-refund through Stripe, and cancelling after the
 ovens start keeps a late-cancellation fee the admin tunes under Settings
 (refunds pay back the total minus the fee; 0% turns it off). Customers can
-reorder a past box with one click.
+reorder a past box with one click. Under Profile they also hold the keys to
+their own data (GDPR arts. 15/17): one click downloads everything the shop
+keeps on them as JSON, and a password-confirmed deletion scrubs the person
+— name, contact details, hearts, reviews, restock asks — while past orders
+remain only as anonymized invoices, as bookkeeping law requires.
 
 **Baker's desk (admin)** — the whole desk sits in one sidebar (Dashboard,
 Orders, Products, Reviews, Promotions, Users, Settings) alongside the baker's
 own profile and address book, so nothing needs a second click to reach; on a
 phone the sidebar flattens into a thumb-swipe rail of the same tabs, and the
 Store link leads back to the counter. Dashboard with
-revenue/orders/customers stats, best sellers, low stock and recent orders;
+revenue/orders/customers stats, a thirty-day trading chart (one bar per
+day, active currency, kept orders), best sellers, low stock and recent
+orders;
 order management with a status timeline
 (pending → confirmed → baking → ready → out for delivery → delivered), payment
 controls and a CSV export for bookkeeping, plus a Bulk enquiries tab for the
@@ -244,9 +278,16 @@ backend/
                      coming-soon)
   static/            product & site photos (generated, see scripts/);
                      uploads/ holds admin- and customer-added photos
-  tests/test_api.py  63 end-to-end API tests; test_stripe_gateway.py adds 9
-                     more on the payment seam (webhook signing, plain-dict
-                     handback)
+  scripts/           reset_customer_order_data.py — the guarded customer/order
+                     reset (dry-run by default; see docs/operations/)
+  tests/             205 backend tests: 124 end-to-end API (test_api.py),
+                     36 costing, 24 reset-script, 21 on the Stripe gateway
+                     seam (signed webhooks, plain-dict handback, payment
+                     methods)
+docs/
+  business/          the pricing/costing specification set (v1.2 is live)
+                     and the Phase 0/2 audit + delivery records
+  operations/        EUR-migration runbook and the production-reset procedure
 frontend/
   src/
     api/client.js    axios + token attach + silent refresh on 401
@@ -276,6 +317,7 @@ images/              original photography (source of truth for the pipeline)
 | `LOGIN_RATE_LIMIT` / `REGISTER_RATE_LIMIT` | 10 / 5 per minute per IP | brute-force brakes |
 | `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` | empty | "Continue with Facebook" — the button appears once both are set |
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | empty | phone sign-in codes over SMS; all three together switch it on |
+| `STRIPE_PAYMENT_METHODS` | `card` | comma list of hosted-page methods (`klarna`, `paypal`, `sepa_debit`, `ideal`, `bancontact` alongside `card`; unknown entries drop with a warning) |
 | `SEED_DEMO_DATA`         | unset (dev yes, production no)   | demo customers/orders/reviews; production refuses `true` |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | empty                     | first admin on a fresh no-demo database (required then) |
 | `UPLOADS_DIR`            | empty (`static/uploads`)         | absolute path to a persistent disk on ephemeral platforms |
@@ -374,8 +416,12 @@ secret key exists, so nothing breaks in the meantime.
    endpoint at `https://<your-domain>/api/payments/webhook` with the events
    `checkout.session.completed`, `checkout.session.expired`,
    `checkout.session.async_payment_succeeded`,
-   `checkout.session.async_payment_expired`. Copy its signing secret
-   (`whsec_…`) into `STRIPE_WEBHOOK_SECRET`.
+   `checkout.session.async_payment_expired`,
+   `charge.refunded`, `charge.dispute.created`. Copy its signing secret
+   (`whsec_…`) into `STRIPE_WEBHOOK_SECRET`. (The two charge events keep
+   the book honest when money moves from the Stripe dashboard itself: a
+   by-hand refund syncs the order's payment status, and a dispute rings
+   the desk the moment it opens.)
 4. Buy something with a Stripe test card (`4242 4242 4242 4242`, any future
    expiry, any CVC): the order should flip to paid and email the receipt;
    abandoning the page instead should leave it payable from the order page
@@ -384,8 +430,13 @@ secret key exists, so nothing breaks in the meantime.
    the live webhook endpoint's secret) — and keep cash on delivery on too;
    most German customers still like it.
 
-Notes: charges go out in `STRIPE_CURRENCY` (default `usd` — set `eur` when
-the catalog moves to euro prices); refunds on cancellation are issued
+Local payment methods (Klarna, PayPal, SEPA direct debit, iDEAL,
+Bancontact) can ride along on the hosted page: set `STRIPE_PAYMENT_METHODS`
+to a comma list (default `card`). Availability is Stripe's to decide per
+country — see their payment-methods docs before enabling one.
+
+Notes: charges go out in `STRIPE_CURRENCY` (EUR only — any other value
+pauses checkout fail-closed); refunds on cancellation are issued
 through the gateway automatically; every gateway call lives behind
 `backend/app/stripe_gateway.py` so the rest of the app never imports the
 Stripe SDK — and everything crossing that seam is a plain dict (the SDK's

@@ -1,21 +1,32 @@
 """Authentication, profile and address management endpoints."""
 
 import hashlib
+import logging
 import secrets
 from datetime import timedelta
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from .. import facebook_gateway, sms_gateway
 from ..config import get_settings
 from ..email import reset_password_email, send_email
 from ..facebook_gateway import FacebookError
-from ..models import Address, User, utcnow
+from ..models import (
+    Address,
+    Favorite,
+    Order,
+    RestockAlert,
+    Review,
+    Subscriber,
+    User,
+    utcnow,
+)
 from ..notifications import notify_admin
 from ..schemas import (
     AccessTokenResponse,
+    AccountDeleteRequest,
     AddressCreate,
     AddressOut,
     AddressUpdate,
@@ -47,6 +58,8 @@ from ..security import (
 from ..uploads import MAX_AVATAR_BYTES, delete_photo, save_photo
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+logger = logging.getLogger("bakery.auth")
 
 settings = get_settings()
 
@@ -451,6 +464,183 @@ def remove_avatar(user: CurrentUser, db: DbSession):
     db.commit()
     db.refresh(user)
     return user
+
+
+# --------------------------------------------------------------------------
+# The customer's own data — see it whole, or take it back (GDPR art. 15/17)
+# --------------------------------------------------------------------------
+
+@router.get("/me/export")
+def export_my_data(user: CurrentUser, db: DbSession):
+    """Everything the shop holds on this account, as one JSON download.
+
+    Secrets are described, never included: passwords and codes exist only
+    as one-way hashes, which are of no use to anyone but the login itself.
+    """
+    def _order(order):
+        return {
+            "order_number": order.order_number,
+            "placed_at": order.created_at.isoformat(),
+            "status": order.status,
+            "payment_method": order.payment_method,
+            "payment_status": order.payment_status,
+            "currency": order.currency,
+            "subtotal": float(order.subtotal),
+            "discount_amount": float(order.discount_amount or 0),
+            "coupon_code": order.coupon_code,
+            "tax": float(order.tax),
+            "shipping_fee": float(order.shipping_fee),
+            "total": float(order.total),
+            "delivery_date": order.delivery_date.isoformat() if order.delivery_date else None,
+            "delivered_to": {
+                "recipient": order.recipient,
+                "phone": order.phone,
+                "line1": order.line1,
+                "line2": order.line2,
+                "city": order.city,
+                "state": order.state,
+                "postal_code": order.postal_code,
+                "country": order.country,
+            },
+            "items": [
+                {
+                    "product_name": item.product_name,
+                    "unit_price": float(item.unit_price),
+                    "quantity": item.quantity,
+                    "subtotal": float(item.subtotal),
+                }
+                for item in order.items
+            ],
+            "timeline": [
+                {"status": event.status, "comment": event.comment, "at": event.created_at.isoformat()}
+                for event in order.timeline
+            ],
+        }
+
+    orders = list(
+        db.scalars(select(Order).where(Order.user_id == user.id).order_by(Order.created_at))
+    )
+    return {
+        "exported_at": utcnow().isoformat(),
+        "account": {
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "phone": user.phone,
+            "avatar_url": user.avatar_url,
+            "facebook_linked": user.facebook_id is not None,
+            "member_since": user.created_at.isoformat(),
+            # What the shop keeps but cannot show: one-way hashes only.
+            "password_storage": "bcrypt hash (not exportable)",
+        },
+        "addresses": [
+            {
+                "label": a.label,
+                "recipient": a.recipient,
+                "phone": a.phone,
+                "line1": a.line1,
+                "line2": a.line2,
+                "city": a.city,
+                "state": a.state,
+                "postal_code": a.postal_code,
+                "country": a.country,
+                "is_default": a.is_default,
+            }
+            for a in user.addresses
+        ],
+        "orders": [_order(o) for o in orders],
+        "reviews": [
+            {
+                "product_id": r.product_id,
+                "rating": r.rating,
+                "comment": r.comment,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in db.scalars(select(Review).where(Review.user_id == user.id))
+        ],
+        "saved_products": list(
+            db.scalars(select(Favorite.product_id).where(Favorite.user_id == user.id))
+        ),
+        "restock_alerts": list(
+            db.scalars(
+                select(RestockAlert.product_id).where(RestockAlert.email == user.email.lower())
+            )
+        ),
+        "newsletter_subscribed": user.email.lower()
+        in set(db.scalars(select(Subscriber.email).where(Subscriber.email == user.email.lower()))),
+    }
+
+
+@router.post("/me/delete")
+def delete_my_account(
+    payload: AccountDeleteRequest,
+    user: CurrentUser,
+    db: DbSession,
+    request: Request,
+    background: BackgroundTasks,
+):
+    """Close the account and scrub the person from it (GDPR art. 17).
+
+    The *books* stay honest: orders and their address snapshots are
+    invoices, which the shop must keep by law — but they keep belonging to
+    "a deleted customer", never to a name. Everything that is purely the
+    person (address book, reviews, hearts, asks, subscriptions, logins)
+    goes away entirely, the account is deactivated with an unguessable
+    password and no way in, and every outstanding session dies.
+
+    The password is asked again at the door — an open tab on a shared
+    computer must not be enough to erase an account.
+    """
+    if not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Password is incorrect")
+
+    user_id = user.id
+    old_email = user.email.lower()
+
+    # The purely personal rows go first, explicitly — the dev database runs
+    # SQLite without foreign keys enforced, so nothing may rely on the
+    # cascade alone.
+    db.execute(delete(Address).where(Address.user_id == user_id))
+    db.execute(delete(Review).where(Review.user_id == user_id))
+    db.execute(delete(Favorite).where(Favorite.user_id == user_id))
+    db.execute(delete(RestockAlert).where(RestockAlert.email == old_email))
+    db.execute(delete(Subscriber).where(Subscriber.email == old_email))
+
+    delete_photo(user.avatar_url)
+    # The account row stays — orders point at it — but it is a shell: no
+    # name, no contact details, no linked logins, no way to sign in, and
+    # every token already issued dies with the version bump.
+    user.email = f"deleted-account-{user_id}@customers.invalid"
+    user.first_name = "Deleted"
+    user.last_name = "customer"
+    user.phone = None
+    user.avatar_url = None
+    user.facebook_id = None
+    user.reset_token_hash = None
+    user.reset_token_expires = None
+    user.phone_otp_hash = None
+    user.phone_otp_expires = None
+    user.phone_otp_created_at = None
+    user.login_code_hash = None
+    user.login_code_expires = None
+    user.password_hash = hash_password(secrets.token_urlsafe(32))
+    user.token_version += 1
+    user.is_active = False
+
+    # The desk's audit trail names the account number, never the person.
+    notify_admin(
+        db,
+        kind="customer",
+        title=f"A customer deleted their account (#{user_id})",
+        body="Their data was anonymized; past orders remain as invoices.",
+        link="/admin/users",
+        background=background,
+    )
+    db.commit()
+    logger.info("account #%s deleted and anonymized at its own request", user_id)
+    return {
+        "message": "Your account has been deleted — past orders remain only as anonymized invoices."
+    }
 
 
 # --------------------------------------------------------------------------

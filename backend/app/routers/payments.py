@@ -6,6 +6,10 @@ the webhook (Stripe's signed word for it) and POST /confirm (what the order
 page calls when the customer returns from paying, so the page doesn't have
 to wait for the webhook). The transition itself is idempotent and the
 webhook row-locks, so exactly one of them sends the receipt.
+
+The webhook also listens for money the *dashboard* moves: a refund issued
+by hand at Stripe (the documented fallback when a gateway refund fails)
+syncs the order's payment status here, and a dispute rings the desk.
 """
 
 import logging
@@ -17,7 +21,8 @@ from sqlalchemy import select
 
 from .. import stripe_gateway
 from ..database import SessionLocal, utcnow
-from ..models import Order, OrderStatus, PaymentMethod, PaymentStatus
+from ..models import Order, OrderEvent, OrderStatus, PaymentMethod, PaymentStatus
+from ..notifications import notify_admin
 from ..routers.orders import (
     _approved_money_rules,
     _cancel_order,
@@ -25,6 +30,7 @@ from ..routers.orders import (
     _late_cancel_fee,
     _serialize,
     mark_order_paid,
+    queue_status_email,
 )
 from ..schemas import OrderDetailOut
 from ..security import CurrentUser, DbSession
@@ -106,8 +112,14 @@ def reconcile_stale_card_orders() -> None:
                         )
                     _drain(background)
                 elif session.get("status") == "expired":
-                    # The expiry webhook's own guards, reused verbatim.
-                    _cancel_expired_session({"id": order.stripe_session_id}, db)
+                    # The expiry webhook's own guards, reused verbatim. The
+                    # customer email rides the sweep's own drain — no
+                    # response will carry these tasks.
+                    expiry_background = BackgroundTasks()
+                    _cancel_expired_session(
+                        {"id": order.stripe_session_id}, db, expiry_background
+                    )
+                    _drain(expiry_background)
             except Exception:
                 logger.exception(
                     "reconciliation sweep: order %s could not be reconciled",
@@ -158,7 +170,7 @@ def _record_completed_payment(session: dict, background: BackgroundTasks, db) ->
         logger.info("order %s paid via Stripe session %s", order.order_number, session.get("id"))
 
 
-def _cancel_expired_session(session: dict, db) -> None:
+def _cancel_expired_session(session: dict, db, background: BackgroundTasks | None = None) -> None:
     """The pay-by window closed with no payment: cancel the order and put
     the stock back so the case doesn't leak reserved boxes."""
     order = _order_for_session(session, db)
@@ -187,7 +199,118 @@ def _cancel_expired_session(session: dict, db) -> None:
         order, db, by_customer=False, comment="Payment window expired — cancelled automatically"
     )
     db.commit()
+    if background is not None:
+        # They asked for the bake and walked away from the pay page — the
+        # honest email says the window closed and the box went back, so
+        # they're never left wondering where the order went.
+        queue_status_email(order, background)
     logger.info("order %s cancelled: its Stripe session expired unpaid", order.order_number)
+
+
+def _order_for_intent(charge: dict, db) -> Order | None:
+    """The order a charge belongs to, by the payment intent the checkout
+    session left behind. None means Stripe knows a charge this book
+    doesn't — logged, never guessed."""
+    intent = str(charge.get("payment_intent") or "")
+    if not intent:
+        return None
+    return db.scalar(select(Order).where(Order.stripe_payment_intent_id == intent))
+
+
+def _record_external_refund(charge: dict, db) -> None:
+    """A refund issued from the Stripe dashboard landed on the wire — sync
+    the book to match.
+
+    The app refunds through the gateway itself (idempotently), so its own
+    refunds arrive here twice: the order already says refunded/partially
+    refunded and this is a no-op. What this catches is the human path —
+    the timeline's own fallback advice ("retry it from the Stripe
+    dashboard") and any support refund — which without this handler would
+    leave an order claiming money back it has already returned.
+    """
+    order = _order_for_intent(charge, db)
+    if order is None:
+        logger.warning(
+            "Stripe refund for unknown payment intent %s — no order touched",
+            charge.get("payment_intent"),
+        )
+        return
+    order = db.scalar(
+        select(Order)
+        .where(Order.id == order.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if order is None:
+        return
+    if order.payment_status not in (
+        PaymentStatus.PAID.value,
+        PaymentStatus.PARTIALLY_REFUNDED.value,
+    ):
+        return  # nothing collected, or already fully recorded
+    try:
+        refunded = int(charge.get("amount_refunded") or 0)
+        charged = int(charge.get("amount") or 0)
+    except (TypeError, ValueError):
+        return  # unreadable amounts are logged, never guessed from
+    if charged <= 0:
+        return
+    new_status = (
+        PaymentStatus.REFUNDED.value if refunded >= charged else PaymentStatus.PARTIALLY_REFUNDED.value
+    )
+    if new_status == order.payment_status:
+        return  # already in the book — the app's own refund, arriving twice
+    order.payment_status = new_status
+    word = "refunded" if new_status == PaymentStatus.REFUNDED.value else "partially refunded"
+    db.add(
+        OrderEvent(
+            order_id=order.id,
+            status=order.status,
+            comment=f"Refund recorded from the Stripe dashboard — payment marked {word}",
+        )
+    )
+    db.commit()
+    logger.info("order %s payment marked %s by a dashboard refund", order.order_number, word)
+
+
+def _record_dispute(charge: dict, background: BackgroundTasks, db) -> None:
+    """A customer disputed a charge with their bank — the desk must hear
+    this the moment it happens, not at the next reconciliation.
+
+    Disputes change nothing here by themselves (Stripe holds the money and
+    the case is answered in Stripe's dashboard within their deadline); the
+    bell, the email and the timeline entry exist so the deadline is never
+    discovered after it passed."""
+    order = _order_for_intent(charge, db)
+    if order is None:
+        logger.warning(
+            "dispute on unknown payment intent %s", charge.get("payment_intent")
+        )
+        notify_admin(
+            db,
+            kind="order",
+            title="Card dispute opened — no matching order found",
+            body=f"Payment intent {charge.get('payment_intent')}",
+            background=background,
+        )
+        db.commit()
+        return
+    db.add(
+        OrderEvent(
+            order_id=order.id,
+            status=order.status,
+            comment="Card dispute opened — answer it in the Stripe dashboard before its deadline",
+        )
+    )
+    notify_admin(
+        db,
+        kind="order",
+        title=f"Card dispute on order {order.order_number}",
+        body="Answer it in the Stripe dashboard — deadlines are short and evidence is everything",
+        link=f"/admin/orders?search={order.order_number}",
+        background=background,
+    )
+    db.commit()
 
 
 @router.post("/webhook")
@@ -206,15 +329,19 @@ async def stripe_webhook(request: Request, background: BackgroundTasks, db: DbSe
     except stripe_gateway.BadSignature as exc:
         raise HTTPException(status_code=400, detail=f"Webhook rejected: {exc}") from None
 
-    session = event.get("data", {}).get("object")
-    if not isinstance(session, dict):
-        session = {}  # a malformed event is ignored, never a 500
+    obj = event.get("data", {}).get("object")
+    if not isinstance(obj, dict):
+        obj = {}  # a malformed event is ignored, never a 500
     event_type = event.get("type")
     # DB work off the event loop — the endpoint is async only for the raw body.
     if event_type in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
-        await run_in_threadpool(_record_completed_payment, session, background, db)
+        await run_in_threadpool(_record_completed_payment, obj, background, db)
     elif event_type in ("checkout.session.expired", "checkout.session.async_payment_expired"):
-        await run_in_threadpool(_cancel_expired_session, session, db)
+        await run_in_threadpool(_cancel_expired_session, obj, db, background)
+    elif event_type == "charge.refunded":
+        await run_in_threadpool(_record_external_refund, obj, db)
+    elif event_type == "charge.dispute.created":
+        await run_in_threadpool(_record_dispute, obj, background, db)
     else:
         logger.info("ignoring Stripe event %s", event_type)
     return {"received": True}

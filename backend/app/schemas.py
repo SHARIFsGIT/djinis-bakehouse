@@ -67,6 +67,13 @@ class PasswordChangeRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=72)
 
 
+class AccountDeleteRequest(BaseModel):
+    """Erasing an account asks for the password at the door — an open tab on
+    a shared computer must not be enough."""
+
+    password: str = Field(min_length=1, max_length=72)
+
+
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
@@ -257,6 +264,19 @@ class ProductDetail(ProductCard):
 class ReviewCreate(BaseModel):
     rating: int = Field(ge=1, le=5)
     comment: str | None = Field(default=None, max_length=2000)
+
+
+class RestockAlertRequest(BaseModel):
+    email: EmailStr
+
+
+class RestockAlertResponse(BaseModel):
+    """The answer to a back-in-stock ask — idempotent by design, so signing
+    up twice is enthusiasm, not an error (the newsletter's own shape)."""
+
+    email: str
+    product_id: int
+    already_registered: bool = False
 
 
 class PaginationOut(BaseModel):
@@ -663,6 +683,17 @@ class CurrencyStatsOut(BaseModel):
     avg_order_value: float
 
 
+class DayRevenueOut(BaseModel):
+    """One day's bar on the dashboard's trading chart: the active currency's
+    order value and order count for that calendar day, kept orders only.
+    Days with no orders are present with zeros, so the chart's axis is a
+    steady rhythm rather than a list of the busy days."""
+
+    date: date
+    revenue: float
+    orders: int
+
+
 class AdminStatsOut(BaseModel):
     """The desk's morning page. The headline money figures describe the
     shop's *active* currency (settings.stripe_currency) only — for an
@@ -693,6 +724,11 @@ class AdminStatsOut(BaseModel):
         description="The complete currency-separated breakdown, one entry per "
         "currency in the book (active first, then alphabetical; unreadable "
         "codes keep their own 'unknown' bucket).",
+    )
+    revenue_series: list[DayRevenueOut] = Field(
+        default=[],
+        description="The last 30 calendar days as one entry per day (today last), "
+        "active currency only, kept orders only — the desk's trading chart.",
     )
 
 

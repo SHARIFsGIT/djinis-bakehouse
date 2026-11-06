@@ -15,7 +15,7 @@ from sqlalchemy import func, select, update
 
 from .. import stripe_gateway
 from ..config import get_settings
-from ..email import send_order_receipt
+from ..email import send_order_receipt, send_order_status_email
 from ..money import money
 from ..notifications import notify_admin
 from ..models import (
@@ -293,6 +293,34 @@ def _receipt_dict(order: Order) -> dict:
         "payment_status": order.payment_status,
         "currency": order.currency,
     }
+
+
+def _status_update_dict(order: Order, comment: str | None = None) -> dict:
+    """The plain-values payload for a status-change email — same rules as
+    the receipt: everything the background task needs, nothing ORM-shaped."""
+    return {
+        "email": order.user.email,
+        "first_name": order.user.first_name,
+        "order_number": order.order_number,
+        "status": order.status,
+        "comment": comment,
+        "total": float(order.total),
+        "currency": order.currency,
+    }
+
+
+def queue_status_email(
+    order: Order, background: BackgroundTasks, comment: str | None = None
+) -> None:
+    """Tell the customer their order moved — every caller's single seam.
+
+    A dial back to "pending" is the one move that says nothing new to the
+    customer, so it stays quiet; every other status (cancellations
+    included) deserves the mailbox's word.
+    """
+    if order.status == OrderStatus.PENDING.value:
+        return
+    background.add_task(send_order_status_email, _status_update_dict(order, comment))
 
 
 def mark_order_paid(
@@ -697,7 +725,7 @@ def _cancel_order(order: Order, db, *, by_customer: bool, comment: str | None = 
 
 
 @router.post("/{order_id}/cancel", response_model=OrderDetailOut)
-def cancel_order(order_id: int, user: CurrentUser, db: DbSession):
+def cancel_order(order_id: int, user: CurrentUser, db: DbSession, background: BackgroundTasks):
     order = _get_order_for(order_id, user, db)
     # Judge under the lock: the admin desk's dial or the expiry sweep may
     # have cancelled this order a moment before the click landed.
@@ -711,5 +739,8 @@ def cancel_order(order_id: int, user: CurrentUser, db: DbSession):
         )
     _cancel_order(order, db, by_customer=order.user_id == user.id)
     db.commit()
+    # The confirmation the mailbox deserves: cancelled, fee (if any) and
+    # refund state are all on the order page this email points home to.
+    queue_status_email(order, background)
     db.refresh(order)
     return _serialize(order, detailed=True)

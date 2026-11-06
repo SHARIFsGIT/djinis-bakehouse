@@ -4,6 +4,7 @@ import { BadgeEuro, ScrollText, TrendingUp, Users } from "lucide-react";
 import client from "../../api/client";
 import { formatDate, hasNonActiveCurrency, money, ORDER_STATUSES, statusBadge, statusLabel } from "../../lib/format";
 import PhotoTile from "../../components/PhotoTile";
+import TradingChart from "../../components/TradingChart";
 import { Loading } from "../../components/Loading";
 
 function StatTile({ label, value, sub, Icon }) {
@@ -59,6 +60,17 @@ export default function Dashboard() {
         <StatTile Icon={Users} label="Customers" value={stats.customer_count} sub="registered regulars" />
         <StatTile Icon={TrendingUp} label="Avg order" value={money(stats.avg_order_value)} sub={mixed ? "active currency only" : "across all orders"} />
       </div>
+
+      {/* The last 30 days of trading — active currency, kept orders */}
+      <section className="glass rounded-box p-6 shadow-sm ring-1 ring-base-300/60">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="font-display text-xl font-semibold">The last 30 days</h2>
+          <p className="text-xs opacity-60">
+            Daily order value{mixed ? " · active currency only" : ""}
+          </p>
+        </div>
+        <TradingChart series={stats.revenue_series} />
+      </section>
 
       {mixed && (
         <div className="glass rounded-box p-5 shadow-sm ring-1 ring-base-300/60">

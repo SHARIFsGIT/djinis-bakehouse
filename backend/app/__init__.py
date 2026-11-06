@@ -169,6 +169,9 @@ def create_limiters(settings) -> dict[str, SlidingWindowLimiter]:
         # signups or catering leads is plenty for anyone.
         "newsletter": SlidingWindowLimiter(5),
         "bulk": SlidingWindowLimiter(5),
+        # Back-in-stock asks — emails leave the shop when they're answered,
+        # so the brake matches the newsletter's.
+        "restock": SlidingWindowLimiter(5),
         # Basket quotes — a read (nothing is stored), but public and
         # unauthenticated, so it still gets a brake. Generous on purpose:
         # the storefront re-quotes on every basket change.
@@ -370,6 +373,9 @@ def create_app() -> FastAPI:
     app.include_router(costing_routes.router)
     app.include_router(marketing.router)
     app.include_router(content.router)
+    # Root-level crawl files (sitemap.xml, robots.txt) — declared before the
+    # SPA catch-all takes over unknown root paths.
+    app.include_router(content.seo_router)
 
     # Single-origin production deploy: serve the built SPA if it is present.
     dist_dir = BACKEND_DIR.parent / "frontend" / "dist"

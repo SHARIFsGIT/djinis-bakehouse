@@ -4255,3 +4255,324 @@ def test_quote_serves_guests_and_rate_limits_bursts():
             break
     assert throttled is not None and throttled.status_code == 429
     assert throttled.json()["detail"] == "That's a lot of price checks — try again in a moment."
+
+
+# --------------------------------------------------------------------------
+# Order emails, back-in-stock asks, crawl files, dashboard refunds, GDPR
+# --------------------------------------------------------------------------
+
+def test_admin_status_change_emails_the_customer(caplog):
+    """Every dial the desk makes lands in the customer's mailbox too —
+    the transactional update a serious shop owes its regulars."""
+    import logging
+
+    order = client.post(
+        "/api/orders",
+        json=checkout_payload(payment_method="cash_on_delivery"),
+        headers=auth_header(login_customer()),
+    ).json()
+
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        moved = client.put(
+            f"/api/admin/orders/{order['id']}/status",
+            json={"status": "baking", "comment": "In the oven"},
+            headers=admin_headers(),
+        )
+    assert moved.status_code == 200
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "Your bake is in the oven" in logged
+    assert order["order_number"] in logged
+    # The desk's own words ride along
+    assert "In the oven" in logged
+
+
+def test_customer_cancel_earns_a_confirmation_email(caplog):
+    import logging
+
+    order = client.post(
+        "/api/orders",
+        json=checkout_payload(payment_method="cash_on_delivery"),
+        headers=auth_header(login_customer()),
+    ).json()
+
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        cancelled = client.post(
+            f"/api/orders/{order['id']}/cancel", headers=auth_header(login_customer())
+        )
+    assert cancelled.status_code == 200
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "Your order was cancelled" in logged
+    assert order["order_number"] in logged
+
+
+def test_payment_window_expiry_emails_the_customer(caplog):
+    import logging
+
+    placed = client.post(
+        "/api/orders", json=checkout_payload(), headers=auth_header(login_customer())
+    ).json()
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        expire_order_via_webhook(placed["id"])
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "Your order was cancelled" in logged
+    assert placed["order_number"] in logged
+
+
+def test_restock_alert_signs_up_idempotently():
+    croissant = get_product("butter-croissant")
+    admin = admin_headers()
+    detail = client.get(f"/api/admin/products/{croissant['id']}", headers=admin).json()
+    sold_out = dict(detail, stock=0)
+    assert client.put(
+        f"/api/admin/products/{croissant['id']}", json=sold_out, headers=admin
+    ).status_code == 200
+
+    ask = client.post(
+        f"/api/products/{croissant['id']}/restock-alert",
+        json={"email": "Waiter@example.com"},
+    )
+    assert ask.status_code == 201
+    assert ask.json() == {
+        "email": "waiter@example.com",
+        "product_id": croissant["id"],
+        "already_registered": False,
+    }
+
+    # asking twice is enthusiasm, not an error
+    again = client.post(
+        f"/api/products/{croissant['id']}/restock-alert",
+        json={"email": "waiter@example.com"},
+    )
+    assert again.status_code == 200
+    assert again.json()["already_registered"] is True
+
+    # a stocked bake has nothing to wait for
+    stocked = dict(detail, stock=12)
+    client.put(f"/api/admin/products/{croissant['id']}", json=stocked, headers=admin)
+    assert client.post(
+        f"/api/products/{croissant['id']}/restock-alert",
+        json={"email": "waiter@example.com"},
+    ).status_code == 400
+
+
+def test_refilling_the_shelf_answers_restock_asks_once(caplog):
+    import logging
+
+    croissant = get_product("butter-croissant")
+    admin = admin_headers()
+    detail = client.get(f"/api/admin/products/{croissant['id']}", headers=admin).json()
+
+    client.put(f"/api/admin/products/{croissant['id']}", json=dict(detail, stock=0), headers=admin)
+    client.post(
+        f"/api/products/{croissant['id']}/restock-alert", json={"email": "early@example.com"}
+    )
+    client.post(
+        f"/api/products/{croissant['id']}/restock-alert", json={"email": "second@example.com"}
+    )
+
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        refilled = client.put(
+            f"/api/admin/products/{croissant['id']}",
+            json=dict(detail, stock=24),
+            headers=admin,
+        )
+    assert refilled.status_code == 200
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "It's back — Butter Croissant" in logged
+    assert "early@example.com" in logged
+    assert "second@example.com" in logged
+
+    # a second save while the shelf is stocked answers nobody again
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        client.put(
+            f"/api/admin/products/{croissant['id']}", json=dict(detail, stock=30), headers=admin
+        )
+    assert "It's back" not in "\n".join(r.getMessage() for r in caplog.records)
+
+
+def test_sitemap_lists_the_shop_and_its_bakes():
+    sitemap = client.get("/sitemap.xml")
+    assert sitemap.status_code == 200
+    assert sitemap.headers["content-type"].startswith("application/xml")
+    body = sitemap.text
+    assert body.startswith('<?xml version="1.0"')
+    assert "<loc>http://testserver/</loc>" in body
+    assert "<loc>http://testserver/products/butter-croissant</loc>" in body
+    assert "<changefreq>weekly</changefreq>" in body
+    assert "<lastmod>" in body  # every bake stamps its last change
+
+
+def test_robots_opens_the_shop_and_closes_the_back_rooms():
+    robots = client.get("/robots.txt")
+    assert robots.status_code == 200
+    body = robots.text
+    assert "User-agent: *" in body
+    assert "Disallow: /api/" in body
+    assert "Disallow: /admin" in body
+    assert "Disallow: /account" in body
+    assert "Sitemap: http://testserver/sitemap.xml" in body
+
+
+def test_stats_carry_a_thirty_day_trading_chart():
+    client.post(
+        "/api/orders",
+        json=checkout_payload(payment_method="cash_on_delivery"),
+        headers=auth_header(login_customer()),
+    )
+    stats = client.get("/api/admin/stats", headers=admin_headers()).json()
+
+    series = stats["revenue_series"]
+    assert len(series) == 30
+    # every day present, oldest first, ISO dates
+    from datetime import date as _date, timedelta as _timedelta
+
+    first, last = _date.fromisoformat(series[0]["date"]), _date.fromisoformat(series[-1]["date"])
+    assert last - first == _timedelta(days=29)
+    # today's bar carries the freshly placed order
+    today = series[-1]
+    assert today["orders"] >= 1
+    assert today["revenue"] > 0
+
+
+def test_dashboard_refund_webhook_syncs_the_book():
+    """A refund issued by hand in the Stripe dashboard must reach the order —
+    the timeline's own fallback advice says to do exactly that."""
+    placed = client.post(
+        "/api/orders", json=checkout_payload(), headers=auth_header(login_customer())
+    ).json()
+    pay_order_via_webhook(placed["id"])
+
+    charge = {"payment_intent": f"pi_fake_{placed['id']}", "amount": 1820, "amount_refunded": 1820}
+    synced = client.post(
+        "/api/payments/webhook",
+        json={"type": "charge.refunded", "data": {"object": charge}},
+        headers={"stripe-signature": "t=1,v1=fake"},
+    )
+    assert synced.status_code == 200
+    detail = client.get(f"/api/orders/{placed['id']}", headers=auth_header(login_customer())).json()
+    assert detail["payment_status"] == "refunded"
+    assert any("Stripe dashboard" in e["comment"] for e in detail["timeline"])
+
+    # the app's own refund arriving twice changes nothing
+    client.post(
+        "/api/payments/webhook",
+        json={"type": "charge.refunded", "data": {"object": charge}},
+        headers={"stripe-signature": "t=1,v1=fake"},
+    )
+    detail = client.get(f"/api/orders/{placed['id']}", headers=auth_header(login_customer())).json()
+    assert sum("Stripe dashboard" in e["comment"] for e in detail["timeline"]) == 1
+
+
+def test_partial_dashboard_refund_marks_partially_refunded():
+    placed = client.post(
+        "/api/orders", json=checkout_payload(), headers=auth_header(login_customer())
+    ).json()
+    pay_order_via_webhook(placed["id"])
+
+    client.post(
+        "/api/payments/webhook",
+        json={
+            "type": "charge.refunded",
+            "data": {
+                "object": {
+                    "payment_intent": f"pi_fake_{placed['id']}",
+                    "amount": 1820,
+                    "amount_refunded": 500,
+                }
+            },
+        },
+        headers={"stripe-signature": "t=1,v1=fake"},
+    )
+    detail = client.get(f"/api/orders/{placed['id']}", headers=auth_header(login_customer())).json()
+    assert detail["payment_status"] == "partially_refunded"
+
+
+def test_dispute_rings_the_desk():
+    placed = client.post(
+        "/api/orders", json=checkout_payload(), headers=auth_header(login_customer())
+    ).json()
+    pay_order_via_webhook(placed["id"])
+
+    rung = client.post(
+        "/api/payments/webhook",
+        json={
+            "type": "charge.dispute.created",
+            "data": {"object": {"payment_intent": f"pi_fake_{placed['id']}"}},
+        },
+        headers={"stripe-signature": "t=1,v1=fake"},
+    )
+    assert rung.status_code == 200
+    notifications = client.get("/api/admin/notifications?limit=10", headers=admin_headers()).json()
+    assert any(
+        placed["order_number"] in n["title"] and "dispute" in n["title"].lower()
+        for n in notifications["items"]
+    )
+    detail = client.get(f"/api/orders/{placed['id']}", headers=auth_header(login_customer())).json()
+    assert any("dispute" in e["comment"].lower() for e in detail["timeline"])
+
+
+def test_account_export_holds_everything_the_shop_keeps():
+    email, password = "exported@example.com", "Export123!"
+    token = register_and_login(email, password)
+    headers = auth_header(token)
+    croissant = get_product("butter-croissant")
+    client.put(f"/api/products/{croissant['id']}/favorite", headers=headers)
+
+    order = client.post(
+        "/api/orders",
+        json=checkout_payload(payment_method="cash_on_delivery"),
+        headers=headers,
+    ).json()
+
+    export = client.get("/api/auth/me/export", headers=headers).json()
+    assert export["account"]["email"] == email
+    assert export["account"]["password_storage"] == "bcrypt hash (not exportable)"
+    assert export["addresses"][0]["city"] == "Sweet Valley"
+    assert [o["order_number"] for o in export["orders"]] == [order["order_number"]]
+    assert export["orders"][0]["items"][0]["product_name"] == "Butter Croissant"
+    assert croissant["id"] in export["saved_products"]
+
+    # the neighbours' data never rides along
+    assert "shopper@example.com" not in str(export)
+
+
+def test_account_deletion_scrubs_the_person_keeps_the_books():
+    email, password = "gone@example.com", "Gone12345!"
+    token = register_and_login(email, password)
+    headers = auth_header(token)
+    croissant = get_product("butter-croissant")
+
+    order = client.post(
+        "/api/orders",
+        json=checkout_payload(payment_method="cash_on_delivery"),
+        headers=headers,
+    ).json()
+    client.put(f"/api/products/{croissant['id']}/favorite", headers=headers)
+    client.post(
+        f"/api/products/{croissant['id']}/reviews",
+        json={"rating": 5, "comment": "Heavenly"},
+        headers=headers,
+    )
+
+    # an open tab is not enough — the password is asked at the door
+    assert client.post("/api/auth/me/delete", json={"password": "wrong"}, headers=headers).status_code == 400
+
+    deleted = client.post("/api/auth/me/delete", json={"password": password}, headers=headers)
+    assert deleted.status_code == 200
+
+    # the session died with the account
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
+    # the old login no longer opens anything
+    assert client.post("/api/auth/login", json={"email": email, "password": password}).status_code == 401
+
+    # the invoice survives, belonging to no one in particular
+    admin = admin_headers()
+    found = client.get(f"/api/admin/orders?search={order['order_number']}", headers=admin).json()
+    assert found["pagination"]["total_items"] == 1
+    kept = found["orders"][0]
+    assert kept["recipient"] == "Shopper Smith"  # the address snapshot is the invoice's own
+    # hearts and words are gone — the demo seed's other reviews stay, the
+    # deleted customer's own word does not
+    listing = client.get("/api/products/butter-croissant").json()
+    assert all(r["comment"] != "Heavenly" for r in listing["reviews"])

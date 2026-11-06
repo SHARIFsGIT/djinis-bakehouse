@@ -92,6 +92,12 @@ class Settings(BaseSettings):
     # Any other value pauses checkout fail-closed rather than charging money
     # the pipeline hasn't approved — see routers/orders._charge_currency.
     stripe_currency: str = "eur"
+    # Which payment methods the hosted Checkout page offers, comma-separated
+    # (default just cards). Values the gateway doesn't know are dropped with
+    # a warning; an empty result falls back to card, so the page never stops
+    # offering the one method that always works. Availability is Stripe's to
+    # decide per country — see their payment-methods docs before enabling.
+    stripe_payment_methods: str = "card"
 
     # "Continue with Facebook" — Facebook Login for the web. Set the App ID
     # and secret from the app's dashboard and the button appears on the login

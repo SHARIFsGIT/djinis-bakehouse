@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
-import { BadgeCheck, Heart, Share2, Star, Truck } from "lucide-react";
+import { BadgeCheck, Bell, Heart, Share2, Star, Truck } from "lucide-react";
 import client, { apiError } from "../api/client";
-import { formatDate, formatPrepTime } from "../lib/format";
+import { formatDate, formatPrepTime, shopConfig } from "../lib/format";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
 import { useFavorites } from "../context/FavoritesContext";
@@ -13,6 +13,71 @@ import RatingStars from "../components/RatingStars";
 import QuantityInput from "../components/QuantityInput";
 import ProductCard from "../components/ProductCard";
 import { Loading } from "../components/Loading";
+
+const DEFAULT_TITLE = "Djini's Bakehouse — Fresh from the oven";
+
+/** Set (or replace) a <meta name=…> tag — crawlers and share cards read
+    these after the SPA paints, so each product page carries its own. */
+function setMetaTag(name, content) {
+  let tag = document.head.querySelector(`meta[name="${name}"]`);
+  if (!tag) {
+    tag = document.createElement("meta");
+    tag.setAttribute("name", name);
+    document.head.appendChild(tag);
+  }
+  tag.setAttribute("content", content);
+}
+
+/** The product page's own <title>, description and Product structured
+    data — the crawl files point spiders here, so the page must say what
+    it is. Cleared on unmount so the next page starts clean. */
+function useProductHead(product) {
+  useEffect(() => {
+    if (!product) return undefined;
+    document.title = `${product.name} — Djini's Bakehouse`;
+    const description = (product.description || DEFAULT_TITLE).slice(0, 160);
+    setMetaTag("description", description);
+
+    const script = document.createElement("script");
+    script.type = "application/ld+json";
+    script.id = "product-structured-data";
+    script.textContent = JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "Product",
+      name: product.name,
+      sku: String(product.id),
+      description,
+      ...(product.image_url
+        ? { image: [new URL(product.image_url, window.location.origin).href] }
+        : {}),
+      offers: {
+        "@type": "Offer",
+        url: window.location.href,
+        priceCurrency: shopConfig.currency || "EUR",
+        price: product.current_price.toFixed(2),
+        availability:
+          product.stock > 0
+            ? "https://schema.org/InStock"
+            : "https://schema.org/OutOfStock",
+      },
+      ...(product.review_count > 0
+        ? {
+            aggregateRating: {
+              "@type": "AggregateRating",
+              ratingValue: product.average_rating,
+              reviewCount: product.review_count,
+            },
+          }
+        : {}),
+    });
+    document.head.appendChild(script);
+
+    return () => {
+      script.remove();
+      document.title = DEFAULT_TITLE;
+    };
+  }, [product]);
+}
 
 /** Interactive 1–5 star picker for the review form. */
 function StarPicker({ value, onChange }) {
@@ -57,6 +122,11 @@ export default function ProductDetail() {
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewComment, setReviewComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [restockEmail, setRestockEmail] = useState("");
+  const [restockDone, setRestockDone] = useState(false);
+  const [restockSending, setRestockSending] = useState(false);
+
+  useProductHead(product);
 
   const loadProduct = () =>
     client
@@ -68,6 +138,8 @@ export default function ProductDetail() {
     setProduct(null);
     setError(null);
     setQuantity(1);
+    setRestockEmail("");
+    setRestockDone(false);
     loadProduct();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
@@ -134,6 +206,21 @@ export default function ProductDetail() {
       await loadProduct();
     } catch (err) {
       toast.error(apiError(err));
+    }
+  };
+
+  const askForRestock = async (e) => {
+    e.preventDefault();
+    setRestockSending(true);
+    try {
+      await client.post(`/products/${product.id}/restock-alert`, {
+        email: restockEmail.trim(),
+      });
+      setRestockDone(true);
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setRestockSending(false);
     }
   };
 
@@ -271,6 +358,46 @@ export default function ProductDetail() {
               <Share2 size={18} />
             </button>
           </div>
+
+          {soldOut &&
+            (restockDone ? (
+              <p className="mt-4 flex items-center gap-2 rounded-box border border-dashed border-secondary/40 bg-base-200/60 px-4 py-3 text-sm">
+                <Bell size={16} className="shrink-0 text-secondary" />
+                You&rsquo;re on the list — one email, the moment it&rsquo;s
+                back.
+              </p>
+            ) : (
+              <form
+                onSubmit={askForRestock}
+                className="mt-4 rounded-box border border-dashed border-base-300 bg-base-200/60 p-4"
+              >
+                <p className="flex items-center gap-2 text-sm font-semibold">
+                  <Bell size={16} className="shrink-0 text-secondary" />
+                  Want one when it&rsquo;s back?
+                </p>
+                <p className="mt-1 text-xs opacity-70">
+                  Leave your email — we write once, the day the shelf refills.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <input
+                    type="email"
+                    required
+                    value={restockEmail}
+                    onChange={(e) => setRestockEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="input input-bordered input-sm min-w-0 flex-1"
+                    aria-label="Email me when this bake is back"
+                  />
+                  <button
+                    type="submit"
+                    className="btn btn-secondary btn-sm text-secondary-content"
+                    disabled={restockSending}
+                  >
+                    {restockSending ? "Saving…" : "Tell me when it's back"}
+                  </button>
+                </div>
+              </form>
+            ))}
 
           <p className="mt-4 flex items-center gap-2 text-sm opacity-70">
             <Truck size={16} className="shrink-0 text-secondary" />

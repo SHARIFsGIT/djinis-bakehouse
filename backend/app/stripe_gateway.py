@@ -64,6 +64,15 @@ class BadSignature(Exception):
 # configured otherwise pauses fail-closed instead of relabelling money.
 SUPPORTED_CURRENCIES = ("eur",)
 
+# Payment methods the hosted page may offer beyond the universal card rail.
+# Curated, not exhaustive: each entry is one Stripe Checkout supports across
+# the shop's market and whose delayed-settlement variants the webhook already
+# answers (async_payment_succeeded / async_payment_expired). Availability is
+# still Stripe's to decide per account and country — a refused method is a
+# session-creation failure, which checkout already handles by cancelling the
+# order honestly and telling the customer to try again.
+EXTRA_PAYMENT_METHODS = frozenset({"klarna", "paypal", "sepa_debit", "ideal", "bancontact"})
+
 
 def order_currency(order) -> str:
     """The currency this order's money moves in — read off the order, never
@@ -82,6 +91,39 @@ def order_currency(order) -> str:
 def configured() -> bool:
     """Card checkout goes live the moment a secret key exists."""
     return bool(get_settings().stripe_secret_key)
+
+
+def payment_method_types() -> list[str]:
+    """The methods the hosted page offers, from STRIPE_PAYMENT_METHODS.
+
+    Cards always lead — the one method that works everywhere — and anything
+    the gateway doesn't know drops out with a warning rather than reaching
+    Stripe as a refusal. An unusable setting (empty after filtering) falls
+    back to card alone, so the pay page never loses its universal rail.
+    """
+    settings = get_settings()
+    requested = [
+        m.strip().lower()
+        for m in str(settings.stripe_payment_methods or "").split(",")
+        if m.strip()
+    ]
+    methods = [m for m in requested if m == "card" or m in EXTRA_PAYMENT_METHODS]
+    dropped = [m for m in requested if m not in methods]
+    if dropped:
+        logger.warning(
+            "STRIPE_PAYMENT_METHODS contains unsupported entr%s (%s) — offering %s",
+            "y" if len(dropped) == 1 else "ies",
+            ", ".join(dropped),
+            ", ".join(methods) or "card",
+        )
+    if not methods:
+        return ["card"]
+    # Card first when asked for, so the familiar rail is never buried under
+    # wallet options on the hosted page.
+    if "card" in methods:
+        methods.remove("card")
+        methods.insert(0, "card")
+    return methods
 
 
 def cents(amount: float) -> int:
@@ -211,6 +253,7 @@ def create_checkout_session(order, base_url: str) -> dict:
             "customer_email": order.user.email,
             "expires_at": int(time.time()) + SESSION_LIFETIME_SECONDS,
             "line_items": _line_items(order, base_url, settings, currency),
+            "payment_method_types": payment_method_types(),
             "branding_settings": {
                 "background_color": BRAND_BACKGROUND_COLOR,
                 "button_color": BRAND_BUTTON_COLOR,
