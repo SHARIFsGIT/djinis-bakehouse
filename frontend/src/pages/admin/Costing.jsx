@@ -141,6 +141,14 @@ export default function Costing() {
 
   return (
     <div className="space-y-6">
+      {/* Page head — every desk page names itself the same way */}
+      <div>
+        <h1 className="font-display text-2xl font-semibold">Costing</h1>
+        <p className="mt-0.5 text-sm opacity-60">
+          What each bake truly costs — ingredients, hands-on time and overhead, kept honest by review.
+        </p>
+      </div>
+
       {/* Tabs */}
       <div className="flex flex-wrap items-center gap-2">
         {TABS.map((t) => (
@@ -1913,13 +1921,52 @@ function OverheadTab() {
     }
   };
 
+  // The headline pair: the two hourly figures every cost multiplies. The
+  // ledger order is not promised, so "latest" is computed, not assumed.
+  const latestMonth = months?.length
+    ? [...months].sort((a, b) => b.month.localeCompare(a.month))[0]
+    : null;
+  const overheadHourly = latestMonth
+    ? overheadRatePerHour(latestMonth.fixed_overhead_total, latestMonth.forecast_hours)
+    : null;
+
   return (
-    <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+    <div className="space-y-6">
+      {/* The tab's headline — the two rates costing runs on */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="rounded-box glass px-4 py-3 shadow-sm ring-1 ring-base-300/60">
+          <p className="text-xs font-semibold uppercase tracking-widest opacity-50">Overhead per hour</p>
+          <p className="mt-0.5 font-display text-2xl font-bold">
+            {overheadHourly != null ? money(overheadHourly, latestMonth.currency) : "—"}
+            <span className="ml-2 text-xs font-normal opacity-60">
+              {latestMonth ? `${latestMonth.month.slice(0, 7)} forecast` : "no month recorded yet"}
+            </span>
+          </p>
+        </div>
+        <div className="rounded-box glass px-4 py-3 shadow-sm ring-1 ring-base-300/60">
+          <p className="text-xs font-semibold uppercase tracking-widest opacity-50">Labour per hour</p>
+          <p className="mt-0.5 font-display text-2xl font-bold">
+            {rate ? money(rate.rate, rate.currency) : "—"}
+            <span className="ml-2 text-xs font-normal opacity-60">
+              {rate?.source === "table"
+                ? `from ${formatDate(rate.valid_from)}`
+                : rate
+                  ? "default fallback"
+                  : ""}
+            </span>
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
       {/* Overhead months */}
       <div className="space-y-6">
+        {/* Two-by-two fields with a full-width button — this column is only
+            half the page wide at xl, so five-across crams the button past
+            the card edge. */}
         <form
           onSubmit={saveMonth}
-          className="grid grid-cols-2 gap-3 rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60 sm:grid-cols-3 xl:grid-cols-5 xl:items-end"
+          className="grid grid-cols-2 gap-3 rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60"
         >
           <Field label="Month *">
             <input
@@ -1953,11 +2000,11 @@ function OverheadTab() {
               ))}
             </select>
           </Field>
-          <button type="submit" className="btn btn-primary btn-sm min-w-28" disabled={busyMonth}>
+          <button type="submit" className="btn btn-primary btn-sm col-span-2 w-full" disabled={busyMonth}>
             {busyMonth && <span className="loading loading-spinner loading-xs" />}
             Save month
           </button>
-          <div className="col-span-2 sm:col-span-3 xl:col-span-5">
+          <div className="col-span-2">
             <Field label="Included categories (one per line)">
               <textarea
                 className="textarea textarea-bordered textarea-sm w-full" rows={1} maxLength={2000}
@@ -1982,7 +2029,7 @@ function OverheadTab() {
               return (
                 <Card key={m.id}>
                   {editingMonthId === m.id ? (
-                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                       <Field label="Fixed total">
                         <input
                           type="number" min="0" step="any" className={inputCls}
@@ -2031,7 +2078,7 @@ function OverheadTab() {
                           />
                         </Field>
                       </div>
-                      <div className="col-span-2 flex gap-2 sm:col-span-4">
+                      <div className="col-span-2 flex gap-2 sm:col-span-3">
                         <button type="button" className="btn btn-secondary btn-sm" onClick={() => saveMonthEdit(m)}>
                           Save
                         </button>
@@ -2067,22 +2114,12 @@ function OverheadTab() {
 
       {/* Labour rate */}
       <div className="space-y-6">
-        {rate === null ? (
-          <Loading label="Checking the wage book…" />
-        ) : (
+        {/* The rate in force headlines the tab above; this card is the
+            history the append-only table keeps. */}
+        {rate !== null && rate.history?.length > 0 && (
           <Card>
-            <h3 className="font-display text-lg font-semibold">Labour rate in force</h3>
-            <p className="mt-1 font-display text-2xl font-bold">
-              {money(rate.rate, rate.currency)}
-              <span className="ml-1 text-sm font-normal opacity-60">per hour</span>
-            </p>
-            <p className="text-xs opacity-60">
-              {rate.source === "table"
-                ? `from the table, effective ${formatDate(rate.valid_from)}`
-                : "the default fallback — record your real rate to replace it"}
-            </p>
-            {rate.history?.length > 0 && (
-              <div className="mt-3 overflow-x-auto">
+            <h3 className="font-display text-base font-semibold">Rate history</h3>
+            <div className="mt-2 overflow-x-auto">
                 <table className="table table-xs">
                   <thead>
                     <tr className="uppercase opacity-50">
@@ -2101,14 +2138,13 @@ function OverheadTab() {
                     ))}
                   </tbody>
                 </table>
-              </div>
-            )}
+            </div>
           </Card>
         )}
 
         <form
           onSubmit={saveRate}
-          className="grid grid-cols-2 gap-3 rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60 sm:grid-cols-3 xl:grid-cols-5 xl:items-end"
+          className="grid grid-cols-2 gap-3 rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60"
         >
           <Field label="Effective from *">
             <input
@@ -2142,7 +2178,7 @@ function OverheadTab() {
               onChange={(e) => setRateForm((f) => ({ ...f, source: e.target.value }))}
             />
           </Field>
-          <button type="submit" className="btn btn-primary btn-sm min-w-28" disabled={busyRate}>
+          <button type="submit" className="btn btn-primary btn-sm col-span-2 w-full" disabled={busyRate}>
             {busyRate && <span className="loading loading-spinner loading-xs" />}
             Set rate
           </button>
@@ -2150,6 +2186,7 @@ function OverheadTab() {
         <p className="text-xs opacity-50">
           Rates are append-only: a new effective date adds a row, history is never rewritten.
         </p>
+      </div>
       </div>
     </div>
   );

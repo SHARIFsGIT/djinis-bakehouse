@@ -296,6 +296,7 @@ export default function AdminUsers() {
   const [vouchers, setVouchers] = useState(null); // { vip: coupon|null, loyal: coupon|null }
   const [coupons, setCoupons] = useState([]);
   const [card, setCard] = useState(null); // the customer whose desk card is open
+  const [codesOpen, setCodesOpen] = useState(false); // the loyalty-code pickers, on request
 
   const tier = TIER_FILTERS.some((f) => f.value === params.get("tier"))
     ? params.get("tier")
@@ -481,6 +482,20 @@ export default function AdminUsers() {
             Clear
           </button>
         )}
+        {/* The desk's manual word — one quiet select, not a second chip row:
+            it narrows by the hand-set classification, not the arithmetic */}
+        <select
+          className="select select-bordered select-sm"
+          value={cls}
+          onChange={(e) => setParam("classification", e.target.value === "all" ? "" : e.target.value)}
+          aria-label="Filter by the desk's word"
+        >
+          {CLASS_FILTERS.map((f) => (
+            <option key={f.value} value={f.value}>
+              {f.value === "all" ? "Any word" : `Word: ${f.label}`}
+            </option>
+          ))}
+        </select>
         <select
           className="select select-bordered select-sm sm:ml-auto"
           value={sort}
@@ -493,89 +508,72 @@ export default function AdminUsers() {
         </select>
       </div>
 
-      {/* The desk's manual word — a second, quieter row: these narrow by the
-          hand-set classification, not the order book's arithmetic. The
-          unclassified count is the whole roll minus the classified ones. */}
-      <div className="flex flex-wrap items-center gap-1.5 text-xs">
-        <span className="mr-1 font-semibold uppercase tracking-widest opacity-50">
-          Desk's word
-        </span>
-        {CLASS_FILTERS.map((f) => {
-          const count =
-            f.value === "all"
-              ? null
-              : f.value === "none"
-                ? Object.values(tierCounts).reduce((a, b) => a + b, 0) -
-                  Object.values(data.classification_counts ?? {}).reduce((a, b) => a + b, 0)
-                : (data.classification_counts ?? {})[f.value] ?? 0;
-          return (
-            <button
-              key={f.value}
-              type="button"
-              onClick={() => setParam("classification", f.value === "all" ? "" : f.value)}
-              className={`btn btn-xs gap-1.5 rounded-full ${cls === f.value ? "btn-secondary text-secondary-content" : "btn-ghost border border-base-300"}`}
-            >
-              {f.label}
-              {count !== null && count > 0 && (
-                <span className={`badge badge-xs border-0 ${cls === f.value ? "bg-secondary-content/20 text-secondary-content" : "bg-base-200 text-base-content/60"}`}>
-                  {count}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* The codes loyalty earns — one per tier, chosen from the coupon tin */}
+      {/* The codes loyalty earns — one quiet line; the pickers stay folded
+          away until asked for, because this is shop config, not roll work */}
       {worthAVoucher > 0 && (
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-box glass px-4 py-3 text-sm shadow-sm ring-1 ring-base-300/60">
-          {VOUCHER_TIERS.map((key) => {
-            const t = TIERS[key];
-            const coupon = vouchers?.[key];
-            const Icon = t.Icon;
-            return (
-              <div key={key} className="flex flex-wrap items-center gap-2">
-                <span className="flex items-center gap-1.5 font-semibold">
+        <div className="rounded-box glass px-4 py-2 text-sm shadow-sm ring-1 ring-base-300/60">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span className="text-xs font-semibold uppercase tracking-widest opacity-50">
+              Loyalty codes
+            </span>
+            {VOUCHER_TIERS.map((key) => {
+              const t = TIERS[key];
+              const coupon = vouchers?.[key];
+              const Icon = t.Icon;
+              return (
+                <span key={key} className="flex items-center gap-1.5">
                   <Icon size={14} className="text-secondary" aria-hidden="true" />
-                  {t.label}
-                  <span className="opacity-60">
-                    ({tierCounts[key] ?? 0})
-                  </span>
-                </span>
-                {coupon ? (
-                  <>
-                    <span className="badge badge-sm border font-mono font-bold">
-                      {coupon.code} · {coupon.percent_off}% off
-                    </span>
+                  <span className="font-semibold">{t.label}</span>
+                  {coupon ? (
                     <button
                       type="button"
-                      className="btn btn-ghost btn-xs btn-square"
+                      className="btn btn-ghost btn-xs px-1.5 font-mono text-xs font-bold"
                       onClick={() => copyCode(coupon)}
                       aria-label={`Copy the ${t.label} code`}
                       title={`Copy ${coupon.code}`}
                     >
-                      <Copy size={13} />
+                      {coupon.code} · {coupon.percent_off}%
                     </button>
-                  </>
-                ) : (
-                  <span className="opacity-50">no code yet</span>
-                )}
-                <select
-                  className="select select-bordered select-xs max-w-40"
-                  value={coupon?.id ?? ""}
-                  onChange={(e) => linkVoucher(key, e.target.value ? Number(e.target.value) : null)}
-                  aria-label={`Coupon for the ${t.label} tier`}
-                >
-                  <option value="">— pick a coupon —</option>
-                  {coupons.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.code} · {c.percent_off}%{c.is_active ? "" : " (paused)"}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            );
-          })}
+                  ) : (
+                    <span className="opacity-50">no code yet</span>
+                  )}
+                </span>
+              );
+            })}
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs ml-auto"
+              onClick={() => setCodesOpen((o) => !o)}
+              aria-expanded={codesOpen}
+            >
+              {codesOpen ? "Done" : "Change"}
+            </button>
+          </div>
+          {codesOpen && (
+            <div className="mt-2 flex flex-wrap gap-x-6 gap-y-2 border-t border-base-300/60 pt-2">
+              {VOUCHER_TIERS.map((key) => {
+                const coupon = vouchers?.[key];
+                return (
+                  <label key={key} className="flex items-center gap-2 text-xs">
+                    <span className="font-semibold">{TIERS[key].label} code</span>
+                    <select
+                      className="select select-bordered select-xs max-w-44"
+                      value={coupon?.id ?? ""}
+                      onChange={(e) => linkVoucher(key, e.target.value ? Number(e.target.value) : null)}
+                      aria-label={`Coupon for the ${TIERS[key].label} tier`}
+                    >
+                      <option value="">— none —</option>
+                      {coupons.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.code} · {c.percent_off}%{c.is_active ? "" : " (paused)"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
