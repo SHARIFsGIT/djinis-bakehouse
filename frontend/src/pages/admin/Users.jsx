@@ -6,6 +6,7 @@ import { formatDateTime, hasNonActiveCurrency, money } from "../../lib/format";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { Loading } from "../../components/Loading";
+import Drawer from "../../components/Drawer";
 
 /* What each tier wears. The rules live on the server (admin.py) — this is
    only their wardrobe. */
@@ -72,12 +73,15 @@ function TierBadge({ loyalty }) {
 
 const wordOf = (value) => (value ? TIERS[value].label : "—");
 
-/* One customer's card: the classification ledger (who set what, from what,
-   when) and their marketing permission. Consent is recorded, never assumed —
-   a grant must say where it was given and carry evidence the owner could
-   show a regulator. */
-function CustomerDrawer({ user, onClose, onChanged }) {
+/* One customer's card: what the order book says about them, the
+   classification ledger (who set what, from what, when), their marketing
+   permission and the rare account knobs — everything about this one person
+   in one place, so the roll itself stays a roll. Consent is recorded,
+   never assumed — a grant must say where it was given and carry evidence
+   the owner could show a regulator. */
+function CustomerDrawer({ user, onClose, onChanged, onUpdate }) {
   const toast = useToast();
+  const { user: me } = useAuth();
   const [ledger, setLedger] = useState(null);
   // The roll carries only the timestamp; any write here brings back the
   // full state (source, evidence, suppression) straight from the server.
@@ -99,12 +103,6 @@ function CustomerDrawer({ user, onClose, onChanged }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.id]);
 
-  useEffect(() => {
-    const onKey = (e) => e.key === "Escape" && !busy && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
-
   const recordConsent = async (granted) => {
     setBusy(true);
     try {
@@ -124,22 +122,24 @@ function CustomerDrawer({ user, onClose, onChanged }) {
   };
 
   return (
-    <div className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label={`Desk card for ${user.first_name} ${user.last_name}`}>
-      <div className="absolute inset-0 bg-black/40" onClick={() => !busy && onClose()} />
-      <div className="absolute inset-y-0 right-0 flex w-full max-w-md flex-col bg-base-100 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-base-300/70 px-6 py-4">
-          <div>
-            <h2 className="font-display text-xl font-semibold">
-              {user.first_name} {user.last_name}
-            </h2>
-            <p className="text-xs opacity-60">{user.email}</p>
-          </div>
-          <button type="button" className="btn btn-ghost btn-sm btn-square" onClick={onClose} aria-label="Close" disabled={busy}>
-            ✕
-          </button>
-        </div>
+    <Drawer
+      title={`${user.first_name} ${user.last_name}`}
+      subtitle={user.email}
+      label={`Desk card for ${user.first_name} ${user.last_name}`}
+      onClose={onClose}
+      busy={busy}
+    >
+      <div className="flex-1 space-y-6 overflow-y-auto px-6 py-5">
+          {/* The file's front page — what the order book says about them */}
+          <section className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-box border border-base-300/70 bg-base-200/40 px-4 py-3 text-sm">
+            <TierBadge loyalty={user.loyalty} />
+            <span className="font-semibold">{user.order_count} {user.order_count === 1 ? "order" : "orders"}</span>
+            <span className="opacity-70">{user.order_count > 0 ? money(user.lifetime_spend) : "—"}</span>
+            {user.last_order_at && (
+              <span className="text-xs opacity-60">last {formatDateTime(user.last_order_at)}</span>
+            )}
+          </section>
 
-        <div className="flex-1 space-y-6 overflow-y-auto px-6 py-5">
           {/* Marketing permission — the gate every campaign and voucher email passes */}
           <section>
             <h3 className="font-display text-sm font-bold uppercase tracking-widest opacity-55">
@@ -244,9 +244,46 @@ function CustomerDrawer({ user, onClose, onChanged }) {
               </ul>
             )}
           </section>
+
+          {/* Account — the rare knobs, kept in the card so the roll stays a roll */}
+          <section>
+            <h3 className="font-display text-sm font-bold uppercase tracking-widest opacity-55">
+              Account
+            </h3>
+            <div className="mt-2 flex flex-wrap items-end gap-5 rounded-box border border-base-300 bg-base-200/50 p-4">
+              <div>
+                <label className="label text-xs" htmlFor={`role-${user.id}`}>Role</label>
+                <select
+                  id={`role-${user.id}`}
+                  className="select select-bordered select-sm"
+                  value={user.role}
+                  onChange={(e) => onUpdate(user.id, { role: e.target.value })}
+                  aria-label={`Role for ${user.email}`}
+                >
+                  <option value="customer">customer</option>
+                  <option value="admin">admin</option>
+                </select>
+              </div>
+              <div>
+                <span className="label text-xs">Active</span>
+                <input
+                  type="checkbox"
+                  className="toggle toggle-success toggle-sm"
+                  checked={user.is_active}
+                  disabled={user.id === me.id}
+                  onChange={(e) => onUpdate(user.id, { is_active: e.target.checked })}
+                  aria-label={`Active toggle for ${user.email}`}
+                />
+              </div>
+              {user.id === me.id && (
+                <p className="w-full text-[11px] opacity-50">
+                  This is your own account — the shop never lets the last admin step down from here.
+                </p>
+              )}
+            </div>
+          </section>
         </div>
-      </div>
-    </div>
+    </Drawer>
   );
 }
 
@@ -288,7 +325,14 @@ export default function AdminUsers() {
           per_page: PER_PAGE,
         },
       })
-      .then(({ data }) => setData(data))
+      .then(({ data }) => {
+        setData(data);
+        // Any write re-fetches the roll; the open desk card must follow it,
+        // or its role/active selects would still speak the old row.
+        setCard((open) =>
+          open === null ? null : (data.items.find((u) => u.id === open.id) ?? open),
+        );
+      })
       .catch((err) => toast.error(apiError(err)));
 
   useEffect(() => {
@@ -413,9 +457,9 @@ export default function AdminUsers() {
             )}
           </button>
         ))}
-        <form onSubmit={submitSearch} className="join">
+        <form onSubmit={submitSearch} className="join min-w-full sm:min-w-0">
           <input
-            className="input input-bordered input-sm join-item w-40 sm:w-52"
+            className="input input-bordered input-sm join-item w-full sm:w-52"
             placeholder="Search name, email, phone…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -541,11 +585,10 @@ export default function AdminUsers() {
             <tr className="text-xs uppercase opacity-50">
               <th>Customer</th>
               <th className="text-right">Orders</th>
-              <th className="text-right">Lifetime</th>
-              <th>Loyalty</th>
-              <th>Desk's word</th>
-              <th>Role</th>
-              <th>Active</th>
+              {/* On phones the roll keeps just who + how many; lifetime,
+                  the word and consent all live in the desk card. */}
+              <th className="hidden text-right sm:table-cell">Lifetime</th>
+              <th className="hidden sm:table-cell">Desk's word</th>
               <th />
             </tr>
           </thead>
@@ -568,16 +611,17 @@ export default function AdminUsers() {
                         </span>
                       )}
                       <div>
-                        <p className="font-semibold">
+                        <p className="flex flex-wrap items-center gap-1.5 font-semibold">
                           {u.first_name} {u.last_name}
-                          {u.id === me.id && <span className="ml-1 text-xs opacity-50">(you)</span>}
+                          {u.id === me.id && <span className="text-xs opacity-50">(you)</span>}
+                          <TierBadge loyalty={u.loyalty} />
                         </p>
-                        <p className="text-xs opacity-60">{u.email}{u.phone ? ` · ${u.phone}` : ""}</p>
+                        <p className="break-all text-xs opacity-60">{u.email}{u.phone ? ` · ${u.phone}` : ""}</p>
                       </div>
                     </div>
                   </td>
                   <td className="text-right font-bold">{u.order_count}</td>
-                  <td className="text-right font-bold">
+                  <td className="hidden text-right font-bold sm:table-cell">
                     {u.order_count > 0 ? money(u.lifetime_spend) : "—"}
                     {u.order_count > 0 &&
                       hasNonActiveCurrency(Object.keys(u.lifetime_spend_by_currency ?? {})) && (
@@ -588,8 +632,7 @@ export default function AdminUsers() {
                         </span>
                       )}
                   </td>
-                  <td><TierBadge loyalty={u.loyalty} /></td>
-                  <td>
+                  <td className="hidden sm:table-cell">
                     <div className="flex items-center gap-1">
                       <select
                         className="select select-bordered select-xs"
@@ -614,27 +657,6 @@ export default function AdminUsers() {
                         </span>
                       )}
                     </div>
-                  </td>
-                  <td>
-                    <select
-                      className="select select-bordered select-xs"
-                      value={u.role}
-                      onChange={(e) => update(u.id, { role: e.target.value })}
-                      aria-label={`Role for ${u.email}`}
-                    >
-                      <option value="customer">customer</option>
-                      <option value="admin">admin</option>
-                    </select>
-                  </td>
-                  <td>
-                    <input
-                      type="checkbox"
-                      className="toggle toggle-success toggle-sm"
-                      checked={u.is_active}
-                      disabled={u.id === me.id}
-                      onChange={(e) => update(u.id, { is_active: e.target.checked })}
-                      aria-label={`Active toggle for ${u.email}`}
-                    />
                   </td>
                   <td>
                     <div className="flex items-center justify-end gap-1">
@@ -675,7 +697,7 @@ export default function AdminUsers() {
             })}
             {users.length === 0 && (
               <tr>
-                <td colSpan={8} className="py-10 text-center text-sm opacity-60">
+                <td colSpan={5} className="py-10 text-center text-sm opacity-60">
                   Nobody matches — try another tier or search.
                 </td>
               </tr>
@@ -713,6 +735,7 @@ export default function AdminUsers() {
           user={card}
           onClose={() => setCard(null)}
           onChanged={load}
+          onUpdate={update}
         />
       )}
     </div>

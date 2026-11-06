@@ -1,7 +1,8 @@
-import { Percent, Plus, Search, X } from "lucide-react";
+import { Percent, Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import client, { apiError } from "../../api/client";
 import ConfirmDialog from "../../components/ConfirmDialog";
+import Drawer from "../../components/Drawer";
 import { useToast } from "../../context/ToastContext";
 import { formatDate, money } from "../../lib/format";
 import { REDEMPTION_RULES, oncePerCustomerFromRule, redemptionRule } from "../../lib/redemptionRules";
@@ -56,13 +57,6 @@ function CouponDrawer({ coupon, onClose, onSaved }) {
     return () => clearTimeout(timer);
   }, [coupon, editing]);
 
-  // Escape closes — the drawer's back door.
-  useEffect(() => {
-    const onKey = (e) => e.key === "Escape" && !busy && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
-
   const percent = Number(form.percent_off);
   const minimum = form.min_subtotal.trim() === "" ? null : Number(form.min_subtotal);
   const percentError =
@@ -108,25 +102,12 @@ function CouponDrawer({ coupon, onClose, onSaved }) {
   };
 
   return (
-    <div className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label={editing ? `Edit ${coupon.code}` : "New promotion"}>
-      <div className="absolute inset-0 bg-black/40" onClick={() => !busy && onClose()} />
-      <div className="absolute inset-y-0 right-0 flex w-full max-w-md flex-col bg-base-100 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-base-300/70 px-6 py-4">
-          <h2 className="font-display text-xl font-semibold">
-            {editing ? `Edit ${coupon.code}` : "New promotion"}
-          </h2>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm btn-square"
-            onClick={onClose}
-            aria-label="Close"
-            disabled={busy}
-          >
-            <X size={18} />
-          </button>
-        </div>
-
-        <form onSubmit={save} className="flex flex-1 flex-col gap-4 overflow-y-auto px-6 py-5">
+    <Drawer
+      title={editing ? `Edit ${coupon.code}` : "New promotion"}
+      onClose={onClose}
+      busy={busy}
+    >
+      <form onSubmit={save} className="flex flex-1 flex-col gap-4 overflow-y-auto px-6 py-5">
           <div>
             <label className="label text-xs" htmlFor="pr-code">Code</label>
             <input
@@ -234,9 +215,8 @@ function CouponDrawer({ coupon, onClose, onSaved }) {
               {editing ? "Save changes" : "Create"}
             </button>
           </div>
-        </form>
-      </div>
-    </div>
+      </form>
+    </Drawer>
   );
 }
 
@@ -250,7 +230,6 @@ export default function Promotions() {
   const [deleting, setDeleting] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [togglingId, setTogglingId] = useState(null);
-  const [ruleSavingId, setRuleSavingId] = useState(null);
 
   const load = () =>
     client
@@ -302,30 +281,6 @@ export default function Promotions() {
       toast.error(apiError(err));
     } finally {
       setTogglingId(null);
-    }
-  };
-
-  const changeRedemption = async (coupon, oncePerCustomer) => {
-    if (oncePerCustomer === coupon.once_per_customer || ruleSavingId === coupon.id) return;
-    const rule = REDEMPTION_RULES.find((r) => r.once_per_customer === oncePerCustomer);
-    setRuleSavingId(coupon.id);
-    // Show the admin's pick right away; the server's answer settles it.
-    setCoupons((list) =>
-      list.map((c) => (c.id === coupon.id ? { ...c, once_per_customer: oncePerCustomer } : c)),
-    );
-    try {
-      const { data } = await client.put(`/admin/coupons/${coupon.id}`, {
-        once_per_customer: oncePerCustomer,
-      });
-      setCoupons((list) => list.map((c) => (c.id === coupon.id ? data : c)));
-      toast.success(`${coupon.code} — ${rule.label.toLowerCase()}`);
-    } catch (err) {
-      setCoupons((list) =>
-        list.map((c) => (c.id === coupon.id ? { ...c, once_per_customer: coupon.once_per_customer } : c)),
-      );
-      toast.error(apiError(err));
-    } finally {
-      setRuleSavingId(null);
     }
   };
 
@@ -423,7 +378,7 @@ export default function Promotions() {
                 <th className="text-right">Redemptions</th>
                 <th>Note</th>
                 <th>Status</th>
-                <th className="text-right">Added</th>
+                <th className="hidden text-right md:table-cell">Added</th>
                 <th className="text-right">Actions</th>
               </tr>
             </thead>
@@ -470,7 +425,7 @@ export default function Promotions() {
                       </span>
                     </span>
                   </td>
-                  <td className="text-right text-xs whitespace-nowrap opacity-60">{formatDate(c.created_at)}</td>
+                  <td className="hidden text-right text-xs whitespace-nowrap opacity-60 md:table-cell">{formatDate(c.created_at)}</td>
                   <td className="text-right whitespace-nowrap">
                     <button
                       type="button"

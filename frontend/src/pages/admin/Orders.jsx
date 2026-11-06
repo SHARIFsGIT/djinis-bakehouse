@@ -19,10 +19,12 @@ import {
 import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import { Loading } from "../../components/Loading";
+import { useScrollLock } from "../../components/Drawer";
 
 /** Drawer with the full order + status/payment controls. */
 function OrderDrawer({ orderId, onClose, onChanged }) {
   const toast = useToast();
+  useScrollLock();
   const [order, setOrder] = useState(null);
   const [status, setStatus] = useState("");
   const [comment, setComment] = useState("");
@@ -206,6 +208,7 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
     and the baker's notes. */
 function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
   const toast = useToast();
+  useScrollLock();
   const [status, setStatus] = useState(enquiry.status);
   const [note, setNote] = useState(enquiry.admin_note ?? "");
   const [busy, setBusy] = useState(false);

@@ -14,6 +14,7 @@ import client, { apiError } from "../../api/client";
 import { formatDateTime, money } from "../../lib/format";
 import { useToast } from "../../context/ToastContext";
 import { Loading } from "../../components/Loading";
+import Drawer from "../../components/Drawer";
 
 /* The desk's classification words and the measured loyalty tiers share a
    vocabulary but not a meaning — campaigns may select on either, and the
@@ -45,6 +46,7 @@ function CustomerPicker({ picked, onPick, idPrefix }) {
   const [open, setOpen] = useState(false);
   const [searching, setSearching] = useState(false);
   const seq = useRef(0);
+  const box = useRef(null);
 
   useEffect(() => {
     const needle = term.trim();
@@ -69,8 +71,22 @@ function CustomerPicker({ picked, onPick, idPrefix }) {
     return () => clearTimeout(timer);
   }, [term]);
 
+  // The suggestions fold away on any click outside or Escape — a dropdown
+  // that lingers past its welcome reads as a stuck page.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => box.current && !box.current.contains(e.target) && setOpen(false);
+    const onKey = (e) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
   return (
-    <div className="relative">
+    <div className="relative" ref={box}>
       {picked ? (
         <div className="flex items-center justify-between gap-2 rounded-box border border-secondary/40 bg-secondary/10 px-3 py-2">
           <span className="flex min-w-0 items-center gap-2 text-sm font-semibold">
@@ -204,12 +220,6 @@ function CampaignDrawer({ campaignId, onClose, onSent }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaignId]);
 
-  useEffect(() => {
-    const onKey = (e) => e.key === "Escape" && !busy && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
-
   const send = async () => {
     setBusy(true);
     try {
@@ -240,22 +250,14 @@ function CampaignDrawer({ campaignId, onClose, onSent }) {
   }, [detail]);
 
   return (
-    <div className="fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label="Campaign">
-      <div className="absolute inset-0 bg-black/40" onClick={() => !busy && onClose()} />
-      <div className="absolute inset-y-0 right-0 flex w-full max-w-md flex-col bg-base-100 shadow-2xl">
-        <div className="flex items-start justify-between border-b border-base-300/70 px-6 py-4">
-          <div>
-            <h2 className="font-display text-xl font-semibold">{detail?.name ?? "…"}</h2>
-            <p className="text-xs opacity-60">
-              {detail ? `${detail.subject} · ${audienceLabel(detail)}` : "Loading…"}
-            </p>
-          </div>
-          <button type="button" className="btn btn-ghost btn-sm btn-square" onClick={onClose} disabled={busy} aria-label="Close">
-            ✕
-          </button>
-        </div>
-
-        {detail === null ? (
+    <Drawer
+      title={detail?.name ?? "…"}
+      subtitle={detail ? `${detail.subject} · ${audienceLabel(detail)}` : "Loading…"}
+      label="Campaign"
+      onClose={onClose}
+      busy={busy}
+    >
+      {detail === null ? (
           <div className="flex-1 space-y-3 px-6 py-5" aria-label="Loading the campaign">
             <div className="skeleton h-4 w-full" />
             <div className="skeleton h-4 w-2/3" />
@@ -332,8 +334,7 @@ function CampaignDrawer({ campaignId, onClose, onSent }) {
             </section>
           </div>
         )}
-      </div>
-    </div>
+    </Drawer>
   );
 }
 
@@ -406,14 +407,7 @@ export default function Marketing() {
   });
 
   const runPreview = () => {
-    if (!form.name.trim() || !form.subject.trim() || !form.body) {
-      toast.info("Give the campaign a name, a subject and a body first");
-      return;
-    }
-    if (mode === "one" && !recipient) {
-      toast.info("Pick who the message is for");
-      return;
-    }
+    if (!readyToSave()) return;
     setPreviewBusy(true);
     client
       .post("/admin/marketing/campaigns/preview", payload())
@@ -422,8 +416,23 @@ export default function Marketing() {
       .finally(() => setPreviewBusy(false));
   };
 
+  // Both write paths ask the same questions — a draft must never slip out
+  // addressed to "everyone" because nobody was picked for "one customer".
+  const readyToSave = () => {
+    if (!form.name.trim() || !form.subject.trim() || !form.body) {
+      toast.info("Give the campaign a name, a subject and a body first");
+      return false;
+    }
+    if (mode === "one" && !recipient) {
+      toast.info("Pick who the message is for");
+      return false;
+    }
+    return true;
+  };
+
   const saveDraft = async (e) => {
     e.preventDefault();
+    if (!readyToSave()) return;
     setSaving(true);
     try {
       await client.post("/admin/marketing/campaigns", payload());
@@ -462,6 +471,25 @@ export default function Marketing() {
     } finally {
       setMintBusy(false);
     }
+  };
+
+  // Any change to who the message addresses retires the old count — a
+  // preview that outlives its audience is a lie waiting to be read.
+  const pickMode = (value) => {
+    setMode(value);
+    setPreview(null);
+  };
+  const toggleWord = (w) => {
+    setWords((list) => (list.includes(w) ? list.filter((x) => x !== w) : [...list, w]));
+    setPreview(null);
+  };
+  const toggleTier = (t) => {
+    setTiers((list) => (list.includes(t) ? list.filter((x) => x !== t) : [...list, t]));
+    setPreview(null);
+  };
+  const pickRecipient = (u) => {
+    setRecipient(u);
+    setPreview(null);
   };
 
   const emailVoucher = async (coupon) => {
@@ -527,7 +555,7 @@ export default function Marketing() {
               <button
                 key={value}
                 type="button"
-                onClick={() => setMode(value)}
+                onClick={() => pickMode(value)}
                 className={`btn btn-sm ${mode === value ? "btn-secondary text-secondary-content" : "btn-ghost border border-base-300"}`}
                 aria-pressed={mode === value}
               >
@@ -537,20 +565,20 @@ export default function Marketing() {
           </div>
 
           {mode === "one" ? (
-            <CustomerPicker picked={recipient} onPick={setRecipient} idPrefix="cmp" />
+            <CustomerPicker picked={recipient} onPick={pickRecipient} idPrefix="cmp" />
           ) : (
             <div className="space-y-2">
               <ChipRow
                 title="Desk's word"
                 options={WORDS}
                 values={words}
-                onToggle={(w) => setWords((list) => (list.includes(w) ? list.filter((x) => x !== w) : [...list, w]))}
+                onToggle={toggleWord}
               />
               <ChipRow
                 title="Measured loyalty"
                 options={MEASURED}
                 values={tiers}
-                onToggle={(t) => setTiers((list) => (list.includes(t) ? list.filter((x) => x !== t) : [...list, t]))}
+                onToggle={toggleTier}
               />
               <p className="text-[11px] opacity-50">
                 Both rows narrow together; leave both empty to address every consenting customer.
@@ -638,10 +666,10 @@ export default function Marketing() {
             <thead>
               <tr className="text-xs uppercase opacity-50">
                 <th>Campaign</th>
-                <th>Audience</th>
+                <th className="hidden sm:table-cell">Audience</th>
                 <th>Status</th>
                 <th className="text-right">Reach</th>
-                <th>Created</th>
+                <th className="hidden md:table-cell">Created</th>
                 <th />
               </tr>
             </thead>
@@ -652,7 +680,7 @@ export default function Marketing() {
                     <p className="font-semibold">{c.name}</p>
                     <p className="text-xs opacity-60">{c.subject}</p>
                   </td>
-                  <td className="text-xs">{audienceLabel(c)}</td>
+                  <td className="hidden text-xs sm:table-cell">{audienceLabel(c)}</td>
                   <td>
                     <span className={`badge badge-sm border ${CAMPAIGN_STATUS[c.status] ?? "badge-ghost"}`}>
                       {c.status}
@@ -661,7 +689,7 @@ export default function Marketing() {
                   <td className="text-right text-xs">
                     {c.status === "draft" ? "—" : `${c.sent_count} sent · ${c.suppressed_count} held · ${c.failed_count} failed`}
                   </td>
-                  <td className="text-xs whitespace-nowrap opacity-70">{formatDateTime(c.created_at)}</td>
+                  <td className="hidden text-xs whitespace-nowrap opacity-70 md:table-cell">{formatDateTime(c.created_at)}</td>
                   <td>
                     <div className="flex items-center justify-end gap-1">
                       <button
@@ -746,6 +774,9 @@ export default function Marketing() {
                   value={voucher.percent}
                   onChange={(e) => setVoucher((v) => ({ ...v, percent: e.target.value }))}
                 />
+                {overview.voucher_percent_cap != null && (
+                  <p className="mt-1 text-[11px] opacity-50">up to {overview.voucher_percent_cap}%</p>
+                )}
               </div>
             ) : (
               <div>
@@ -760,6 +791,9 @@ export default function Marketing() {
                   value={voucher.amount}
                   onChange={(e) => setVoucher((v) => ({ ...v, amount: e.target.value }))}
                 />
+                {overview.voucher_fixed_cap != null && (
+                  <p className="mt-1 text-[11px] opacity-50">up to {money(overview.voucher_fixed_cap)}</p>
+                )}
               </div>
             )}
             <div>
@@ -817,7 +851,7 @@ export default function Marketing() {
                 <th>Code</th>
                 <th>For</th>
                 <th>Worth</th>
-                <th>Expires</th>
+                <th className="hidden sm:table-cell">Expires</th>
                 <th className="text-right">Used</th>
                 <th />
               </tr>
@@ -834,7 +868,7 @@ export default function Marketing() {
                   <td className="text-sm font-semibold">
                     {v.fixed_amount_off != null ? `${money(v.fixed_amount_off)} off` : `${v.percent_off}% off`}
                   </td>
-                  <td className="text-xs opacity-70">
+                  <td className="hidden text-xs opacity-70 sm:table-cell">
                     {v.expires_at ? formatDateTime(v.expires_at) : "no expiry"}
                   </td>
                   <td className="text-right text-sm">
@@ -894,7 +928,7 @@ export default function Marketing() {
                 <th>Email</th>
                 <th>Reason</th>
                 <th>Note</th>
-                <th>Since</th>
+                <th className="hidden sm:table-cell">Since</th>
               </tr>
             </thead>
             <tbody>
@@ -906,7 +940,7 @@ export default function Marketing() {
                   </td>
                   <td><span className="badge badge-sm badge-ghost">{s.reason}</span></td>
                   <td className="text-xs opacity-60">{s.note ?? "—"}</td>
-                  <td className="text-xs whitespace-nowrap opacity-70">{formatDateTime(s.created_at)}</td>
+                  <td className="hidden text-xs whitespace-nowrap opacity-70 sm:table-cell">{formatDateTime(s.created_at)}</td>
                 </tr>
               ))}
               {suppression.length === 0 && (
