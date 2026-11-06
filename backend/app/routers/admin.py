@@ -87,6 +87,7 @@ from ..schemas import (
     UserOut,
     VoucherLinkRequest,
 )
+from ..loyalty import loyalty_tier as _loyalty
 from ..security import CurrentAdmin, DbSession
 from ..serialize import product_to_card, review_summary, verified_buyers
 from .. import costing
@@ -882,7 +883,24 @@ def delete_review_admin(review_id: int, admin: CurrentAdmin, db: DbSession):
 
 @router.get("/coupons", response_model=list[CouponOut])
 def all_coupons(admin: CurrentAdmin, db: DbSession):
-    return list(db.scalars(select(Coupon).order_by(Coupon.created_at.desc())))
+    """The coupon tin, each code with its honest usage count: kept orders
+    that carried it, derived in one aggregate pass — cancelled orders never
+    count as redemptions, and nothing is stored to go stale."""
+    coupons = list(db.scalars(select(Coupon).order_by(Coupon.created_at.desc())))
+    used: dict[str, int] = dict(
+        db.execute(
+            select(Order.coupon_code, func.count(Order.id))
+            .where(
+                Order.coupon_code.is_not(None),
+                Order.status != OrderStatus.CANCELLED.value,
+            )
+            .group_by(Order.coupon_code)
+        ).all()
+    )
+    return [
+        CouponOut.model_validate(c).model_copy(update={"redemptions": used.get(c.code, 0)})
+        for c in coupons
+    ]
 
 
 @router.post("/coupons", response_model=CouponOut, status_code=status.HTTP_201_CREATED)
@@ -1227,32 +1245,11 @@ def delete_coming_soon(item_id: int, admin: CurrentAdmin, db: DbSession):
 # User management — the roll, with loyalty the shop can act on
 # --------------------------------------------------------------------------
 
-# Loyalty, in words the baker can defend to a customer's face: kept orders
-# (cancelled ones never count) and a visit inside the window. Three kept
-# orders earns "loyal"; ten orders earns "vip"; anyone who earned a tier
-# and then went quiet for the window is "lapsed" — exactly who a win-back
-# voucher is for.
-LOYAL_ORDERS = 3
-VIP_ORDERS = 10
-# The spend-based VIP route needs an approved EUR threshold (VIP_SPEND_THRESHOLD).
-# The old $150 figure is not an approved EUR value, so until the owner sets
-# one, tiers ride on order counts alone — nobody is silently promoted by a
-# relabelled dollar figure.
-LOYAL_WINDOW_DAYS = 90
-
-
-def _loyalty(order_count: int, spend: float, last_order_at) -> str:
-    vip_spend = get_settings().vip_spend_threshold
-    if last_order_at is None:
-        return "regular"
-    days_since = (utcnow() - last_order_at).days
-    fresh = days_since <= LOYAL_WINDOW_DAYS
-    spend_is_vip = vip_spend is not None and spend >= float(vip_spend)
-    if spend_is_vip or order_count >= VIP_ORDERS:
-        return "vip" if fresh else "lapsed"
-    if order_count >= LOYAL_ORDERS:
-        return "loyal" if fresh else "lapsed"
-    return "regular"
+# The tier definition lives in app/loyalty.py (_loyalty above), shared with
+# the delivery rules — a VIP at checkout is a VIP on this roll, by the same
+# measure. The spend-based VIP route needs an approved EUR threshold
+# (VIP_SPEND_THRESHOLD); the old $150 figure is not an approved EUR value,
+# so until the owner sets one, tiers ride on order counts alone.
 
 
 def _customer_roll(db: DbSession) -> list[AdminCustomerOut]:

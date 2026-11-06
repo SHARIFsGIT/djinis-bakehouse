@@ -36,6 +36,19 @@ services:
           property: connectionString
       - key: SEED_DEMO_DATA
         value: "false" # catalog only — no demo customers, orders or reviews
+      # The owner's approved EUR money rules (2026-11-06): delivery €2.99,
+      # free from €25.00 (VIP regulars from €15.00), register rate 7 %.
+      # These are the fail-closed pair's approved values — while either
+      # delivery figure is missing, checkout pauses itself rather than
+      # charge an unapproved amount.
+      - key: TAX_RATE
+        value: "0.07"
+      - key: SHIPPING_FEE
+        value: "2.99"
+      - key: FREE_SHIPPING_THRESHOLD
+        value: "25.00"
+      - key: VIP_FREE_DELIVERY_THRESHOLD
+        value: "15.00"
       - key: STRIPE_SECRET_KEY
         sync: false # from the Stripe dashboard — set it and card checkout goes live (leave empty for cash-only)
       - key: STRIPE_WEBHOOK_SECRET

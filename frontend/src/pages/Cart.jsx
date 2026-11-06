@@ -171,11 +171,16 @@ export default function Cart() {
   const quote = quoteState.quote;
   const quoteLines = new Map((quote?.items ?? []).map((i) => [i.product_id, i]));
   // The free-delivery nudge is a hint, not a charge — it may run on the
-  // cached subtotal for a beat until the fresh quote arrives. While no
-  // threshold is approved (the old $50 figure is not an approved euro
-  // value) it stays hidden entirely: no number, and no "unlocked!" either.
+  // cached subtotal for a beat until the fresh quote arrives. The threshold
+  // is the shopper's own line from the quote (a VIP regular's smaller one
+  // when the shop has configured it), falling back to the shop-wide figure;
+  // with none configured it stays hidden entirely.
   const hintSubtotal = quote?.subtotal ?? subtotal;
-  const freeThreshold = shopConfig.freeShippingThreshold;
+  const freeThreshold = quote?.free_delivery_threshold ?? shopConfig.freeShippingThreshold;
+  const vipLine =
+    freeThreshold != null &&
+    shopConfig.freeShippingThreshold != null &&
+    freeThreshold < shopConfig.freeShippingThreshold;
   const remaining =
     freeThreshold != null ? Math.max(0, freeThreshold - hintSubtotal) : null;
   const progress =
@@ -322,13 +327,13 @@ export default function Cart() {
                     <span className="font-bold text-secondary">
                       {money(remaining)}
                     </span>{" "}
-                    more for free delivery
+                    more for free delivery{vipLine && " — VIP line"}
                   </span>
                 </p>
               ) : (
                 <p className="flex items-center gap-2 text-sm font-semibold text-success">
                   <Truck size={16} className="shrink-0" />
-                  You&rsquo;ve unlocked free delivery
+                  You&rsquo;ve unlocked free delivery{vipLine && " — VIP line"}
                 </p>
               ))}
             {freeThreshold != null && (

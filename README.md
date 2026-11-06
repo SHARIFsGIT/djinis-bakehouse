@@ -105,15 +105,17 @@ in the same save that restocked the shelf, so a second save can never
 answer twice.
 
 **Sale nudges (honest ones)** — the basket keeps a free-delivery progress meter
-against the $50 threshold, product cards flag "Only N left" while stock lasts,
+against the approved threshold (€25 for everyone, €15 for VIP regulars — the
+line is judged on the basket's shelf value, never moved by a coupon), product
+cards flag "Only N left" while stock lasts,
 and the basket suggests three best-rated one-tap add-ons ("Complete the box")
 that aren't already in it. A voucher board sits under the basket's tally:
 every live code with its saving, one tap to apply — and threshold vouchers
-(`FRESHBAKE15`, 15% off boxes of $40+) show a "add $X more to unlock it —
-worth $Y" meter that turns the gap into a goal instead of a rejection. The
-chosen code rides along to checkout (re-validated against the live basket and
-the threshold server-side) and quick-apply chips offer the other live codes
-there too.
+(`FRESHBAKE15`, 15% off boxes from its minimum) show a "add €X more to unlock
+it — worth €Y" meter that turns the gap into a goal instead of a rejection.
+The chosen code rides along to checkout (re-validated against the live basket
+and the threshold server-side) and quick-apply chips offer the other live
+codes there too.
 
 **Bulk & event orders** — a public `/bulk` page takes catering enquiries
 (occasion, date from tomorrow onward, headcount up to 2,000, a required
@@ -238,7 +240,10 @@ the wall's average always honest; full product CRUD with
 photo uploads from your own PC or phone, and shelves aren't a fixed list — the
 product form offers "+ New shelf…" so a category can be named on the spot (it
 lands in the navbar, the shop sidebar and the home tiles straight away);
-coupon management (create, pause, retune the percent and the minimum basket);
+coupon management on a redesigned Promotions desk (summary strip with live
+counts and honest redemptions, search and status filters, and a drawer
+editor for create/edit that floats over the page so nothing beneath it
+ever jumps);
 user management as the regulars' roll — measured loyalty tiers, tier chips,
 search, sorting and shelves of ten, with a gift button per VIP/loyal regular
 that copies the coupon code their tier earns; newsletter subscribers with CSV
@@ -310,7 +315,9 @@ images/              original photography (source of truth for the pipeline)
 | `DATABASE_URL`           | `sqlite:///./bakehouse.db`       | any SQLAlchemy URL; `postgres://` is mapped to psycopg3 automatically |
 | `SECRET_KEY`             | dev fallback                     | set your own in production  |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` / `REFRESH_TOKEN_EXPIRE_DAYS` | 30 / 30 | |
-| `TAX_RATE` / `SHIPPING_FEE` / `FREE_SHIPPING_THRESHOLD`     | 0.0875 / 5.99 / 50 |            |
+| `TAX_RATE` / `SHIPPING_FEE` / `FREE_SHIPPING_THRESHOLD` | unset (fail-closed) | the approved EUR figures — `0.07` / `2.99` / `25.00` (2026-11-06); while either delivery figure is unset, checkout pauses itself rather than charge an unapproved amount |
+| `VIP_FREE_DELIVERY_THRESHOLD` | unset | VIP regulars earn free delivery from this smaller basket (owner-approved €15); unset = everyone shares the standard line |
+| `QUOTE_RATE_LIMIT`           | 30 per minute per IP | the public basket-price endpoint's brake |
 | `CORS_ORIGINS`           | localhost:5173                   | comma-separated list        |
 | `SERVE_FRONTEND_DIST`    | `true`                           | serve `frontend/dist` from FastAPI |
 | `ENABLE_DOCS`            | `true`                           | Swagger UI at `/api/docs`   |
@@ -416,12 +423,15 @@ secret key exists, so nothing breaks in the meantime.
    endpoint at `https://<your-domain>/api/payments/webhook` with the events
    `checkout.session.completed`, `checkout.session.expired`,
    `checkout.session.async_payment_succeeded`,
+   `checkout.session.async_payment_failed`,
    `checkout.session.async_payment_expired`,
    `charge.refunded`, `charge.dispute.created`. Copy its signing secret
    (`whsec_…`) into `STRIPE_WEBHOOK_SECRET`. (The two charge events keep
    the book honest when money moves from the Stripe dashboard itself: a
    by-hand refund syncs the order's payment status, and a dispute rings
-   the desk the moment it opens.)
+   the desk the moment it opens. `async_payment_failed` returns the reserved
+   bakes to the shelf the moment a delayed payment fails, rather than
+   waiting for the session's expiry.)
 4. Buy something with a Stripe test card (`4242 4242 4242 4242`, any future
    expiry, any CVC): the order should flip to paid and email the receipt;
    abandoning the page instead should leave it payable from the order page

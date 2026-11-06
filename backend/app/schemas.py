@@ -351,6 +351,10 @@ class QuoteOut(BaseModel):
     # EUR since the 2026-11-05 owner decision — filled from the validated
     # charge currency at runtime, so the default is documentation, not logic.
     currency: str = "eur"
+    # The free-delivery threshold that applied to this quote — the standard
+    # figure, or the VIP regular's smaller one. The basket page's meter
+    # reads it from here so the shopper's own line is what they see.
+    free_delivery_threshold: float | None = None
 
 
 class OrderItemOut(ORMModel):
@@ -630,6 +634,9 @@ class CouponOut(ORMModel):
     is_active: bool
     once_per_customer: bool
     created_at: datetime
+    # Kept orders that carried the code — the desk's honest usage count,
+    # derived at read time (never stored, never stale).
+    redemptions: int = 0
 
 
 class CouponPreviewOut(BaseModel):

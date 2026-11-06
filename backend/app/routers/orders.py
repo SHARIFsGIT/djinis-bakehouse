@@ -17,6 +17,7 @@ from .. import stripe_gateway
 from ..config import get_settings
 from ..email import send_order_receipt, send_order_status_email
 from ..money import money
+from ..loyalty import loyalty_tier
 from ..notifications import notify_admin
 from ..models import (
     Address,
@@ -171,14 +172,13 @@ class BasketTotals(NamedTuple):
 def _approved_money_rules() -> tuple[float | None, float, float]:
     """The currency-bound money rules a basket may be charged by, or a 503.
 
-    Delivery pricing (SHIPPING_FEE, FREE_SHIPPING_THRESHOLD) are pending
-    owner approval as EUR figures since the 2026-11-05 EUR-only decision —
-    the old USD values must not be relabelled as euro — so while either is
-    unset, no basket can be priced or placed: checkout fails closed rather
-    than charge unapproved figures. TAX_RATE is also pending (the 8.75% US
-    sales-tax default is gone; German VAT awaits professional review), but
-    an unset tax rate is simply no tax line — it pauses nothing by itself
-    and nothing labels it as VAT.
+    Delivery pricing (SHIPPING_FEE, FREE_SHIPPING_THRESHOLD) carries the
+    owner's approved EUR figures since 2026-11-06 (€2.99 / €25.00, set in
+    the environment); while either is unset — a fresh deployment, a
+    half-finished config — no basket can be priced or placed: checkout
+    fails closed rather than charge unapproved figures. TAX_RATE is the
+    approved exclusive-mode register rate (7 %) — unset is simply no tax
+    line, it pauses nothing by itself, and nothing labels it as VAT.
     """
     if settings.shipping_fee is None or settings.free_shipping_threshold is None:
         raise HTTPException(
@@ -190,13 +190,40 @@ def _approved_money_rules() -> tuple[float | None, float, float]:
     return tax_rate, float(settings.shipping_fee), float(settings.free_shipping_threshold)
 
 
-def _price_basket(subtotal: float, coupon: Coupon | None) -> BasketTotals:
+def _delivery_threshold(db, user: User | None) -> float:
+    """The free-delivery threshold that applies to *this* shopper.
+
+    Everyone earns free delivery from the standard threshold; a VIP regular
+    (app/loyalty.py's definition — ten kept orders and a visit inside the
+    window) earns it from the smaller VIP threshold instead, when one is
+    configured. The tier is measured server-side from the order book, never
+    taken from the request.
+    """
+    _tax_rate, _shipping_fee, standard = _approved_money_rules()
+    vip_threshold = settings.vip_free_delivery_threshold
+    if user is None or vip_threshold is None:
+        return standard
+    count, last = db.execute(
+        select(func.count(Order.id), func.max(Order.created_at)).where(
+            Order.user_id == user.id, Order.status != OrderStatus.CANCELLED.value
+        )
+    ).one()
+    if loyalty_tier(int(count or 0), 0.0, last) == "vip":
+        return float(vip_threshold)
+    return standard
+
+
+def _price_basket(subtotal: float, coupon: Coupon | None, free_threshold: float) -> BasketTotals:
     """The one money recipe a basket is charged by — checkout and the quote
     endpoint share it, so what the storefront displays and what the invoice
-    says cannot drift apart. Tax is the shop's flat exclusive rate once the
-    owner approves one (None = no tax line, VAT pending professional
-    review); the VAT-inclusive engine is deliberately not consulted."""
-    tax_rate, shipping_fee, free_threshold = _approved_money_rules()
+    says cannot drift apart. Tax is the shop's flat exclusive rate (None =
+    no tax line; the VAT-inclusive engine is deliberately not consulted).
+
+    The free-delivery threshold is judged on the PRE-DISCOUNT product
+    subtotal — the shelf value of the basket — so no coupon can quietly
+    push a basket over (or under) the line, and delivery charges never
+    count toward it. This is the one definition, tested as such."""
+    tax_rate, shipping_fee, _standard = _approved_money_rules()
     discount = round(subtotal * coupon.percent_off / 100, 2) if coupon else 0.0
     taxable = round(subtotal - discount, 2)
     tax = round(taxable * tax_rate, 2)
@@ -404,7 +431,9 @@ def checkout(
 
     subtotal = round(sum(by_id[pid].current_price * qty for pid, qty in merged.items()), 2)
     coupon = _basket_coupon(db, payload.coupon_code, user, subtotal)
-    discount, _taxable, tax, shipping, total = _price_basket(subtotal, coupon)
+    discount, _taxable, tax, shipping, total = _price_basket(
+        subtotal, coupon, _delivery_threshold(db, user)
+    )
 
     # Both rails start pending: cash settles at the door, card settles when
     # Stripe confirms the payment.
@@ -547,7 +576,8 @@ def basket_quote(
     merged, by_id = _resolve_basket(db, payload.items)
     subtotal = round(sum(by_id[pid].current_price * qty for pid, qty in merged.items()), 2)
     coupon = _basket_coupon(db, payload.coupon_code, user, subtotal)
-    totals = _price_basket(subtotal, coupon)
+    free_threshold = _delivery_threshold(db, user)
+    totals = _price_basket(subtotal, coupon, free_threshold)
 
     lines = []
     for product_id, quantity in merged.items():
@@ -576,6 +606,10 @@ def basket_quote(
         # records this same validated code on every order it writes, so a
         # quote never promises a currency placement would refuse.
         currency=_charge_currency(),
+        # The free-delivery line as it applies to THIS shopper (a VIP
+        # regular's smaller threshold when one is configured) — the meter on
+        # the basket page draws itself from here, never from a guess.
+        free_delivery_threshold=free_threshold,
     )
 
 

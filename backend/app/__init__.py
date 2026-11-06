@@ -175,7 +175,7 @@ def create_limiters(settings) -> dict[str, SlidingWindowLimiter]:
         # Basket quotes — a read (nothing is stored), but public and
         # unauthenticated, so it still gets a brake. Generous on purpose:
         # the storefront re-quotes on every basket change.
-        "quote": SlidingWindowLimiter(30),
+        "quote": SlidingWindowLimiter(settings.quote_rate_limit),
     }
 
 

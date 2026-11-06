@@ -13,6 +13,9 @@ os.environ["LOGIN_RATE_LIMIT"] = "1000"
 os.environ["REGISTER_RATE_LIMIT"] = "1000"
 os.environ["FORGOT_RATE_LIMIT"] = "1000"
 os.environ["OTP_RATE_LIMIT"] = "1000"
+# The quote limiter is env-tuned like the auth brakes; the suite fires far
+# more price checks in a minute than a shopper ever would.
+os.environ["QUOTE_RATE_LIMIT"] = "1000"
 # Card checkout runs through Stripe — the suite swaps the whole gateway for
 # a fake (below), but the key must exist so checkout considers it configured.
 os.environ["STRIPE_SECRET_KEY"] = "sk_test_fake_gateway"
@@ -26,6 +29,9 @@ os.environ["STRIPE_WEBHOOK_SECRET"] = "whsec_fake"
 os.environ["TAX_RATE"] = "0.05"
 os.environ["SHIPPING_FEE"] = "3.50"
 os.environ["FREE_SHIPPING_THRESHOLD"] = "30.00"
+# The VIP regular's smaller free-delivery line (owner-approved €15; the
+# suite's standard threshold above is €30, so the VIP window is 15–29.99).
+os.environ["VIP_FREE_DELIVERY_THRESHOLD"] = "15.00"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -128,6 +134,18 @@ def expire_order_via_webhook(order_id: int) -> None:
     response = client.post(
         "/api/payments/webhook",
         json={"type": "checkout.session.expired", "data": {"object": session}},
+        headers={"stripe-signature": "t=1,v1=fake"},
+    )
+    assert response.status_code == 200
+
+
+def fail_order_via_webhook(order_id: int) -> None:
+    """Deliver Stripe's failed-delayed-payment event for an order's latest
+    session (Klarna/SEPA money that never arrived)."""
+    session = {"id": last_session_id(order_id), "metadata": {"order_id": str(order_id)}}
+    response = client.post(
+        "/api/payments/webhook",
+        json={"type": "checkout.session.async_payment_failed", "data": {"object": session}},
         headers={"stripe-signature": "t=1,v1=fake"},
     )
     assert response.status_code == 200
@@ -4240,7 +4258,11 @@ def test_quote_touches_nothing():
 
 def test_quote_serves_guests_and_rate_limits_bursts():
     """A basket can be priced before login (the voucher board works that way
-    too), but the endpoint is public — a burst hits the brake."""
+    too), but the endpoint is public — a burst hits the brake. The brake is
+    pinned to a two-shot window for the test (the suite-wide budget is
+    raised for all the other price checks)."""
+    from app import SlidingWindowLimiter
+
     croissant = get_product("butter-croissant")
     items = [{"product_id": croissant["id"], "quantity": 1}]
 
@@ -4248,12 +4270,16 @@ def test_quote_serves_guests_and_rate_limits_bursts():
     assert guest.status_code == 200
     assert guest.json()["currency"] == "eur"
 
-    throttled = None
-    for _ in range(45):
+    limiter = client.app.state.limiters
+    real = limiter["quote"]
+    limiter["quote"] = SlidingWindowLimiter(2)
+    try:
+        _quote(items)  # shot 1 of the tiny window
+        _quote(items)  # shot 2 — the window is now full
         throttled = _quote(items)
-        if throttled.status_code == 429:
-            break
-    assert throttled is not None and throttled.status_code == 429
+    finally:
+        limiter["quote"] = real
+    assert throttled.status_code == 429
     assert throttled.json()["detail"] == "That's a lot of price checks — try again in a moment."
 
 
@@ -4316,6 +4342,92 @@ def test_payment_window_expiry_emails_the_customer(caplog):
     logged = "\n".join(r.getMessage() for r in caplog.records)
     assert "Your order was cancelled" in logged
     assert placed["order_number"] in logged
+
+
+def test_failed_async_payment_cancels_and_restores_stock_exactly_once(caplog):
+    """A delayed payment that failed (Klarna, SEPA) cancels its order the
+    moment Stripe says the money won't come — under its own honest timeline
+    word, with the box back on the shelf exactly once however often Stripe
+    redelivers, and the customer told where their order went."""
+    import logging
+
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    croissant = get_product("butter-croissant")
+    shelf_before = croissant["stock"]
+
+    placed = client.post(
+        "/api/orders", json=checkout_payload(), headers=auth_header(login_customer())
+    ).json()
+    assert get_product("butter-croissant")["stock"] == shelf_before - 2  # the box left the shelf
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        fail_order_via_webhook(placed["id"])
+
+    detail = client.get(
+        f"/api/orders/{placed['id']}", headers=auth_header(login_customer())
+    ).json()
+    assert detail["status"] == "cancelled"
+    assert any("Payment failed" in e["comment"] for e in detail["timeline"])
+    assert get_product("butter-croissant")["stock"] == shelf_before  # and went back
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "Your order was cancelled" in logged
+
+    # A duplicate delivery of the same failed payment changes nothing at all
+    fail_order_via_webhook(placed["id"])
+    again = client.get(
+        f"/api/orders/{placed['id']}", headers=auth_header(login_customer())
+    ).json()
+    assert again["timeline"] == detail["timeline"]  # no second cancel event
+    assert get_product("butter-croissant")["stock"] == shelf_before  # stock restored once
+
+
+def test_failed_async_payment_leaves_a_paid_order_alone():
+    """The guard, not the event, decides: money that landed stays landed —
+    a late (or replayed) failure notice must never cancel a paid order."""
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    placed = client.post(
+        "/api/orders", json=checkout_payload(), headers=auth_header(login_customer())
+    ).json()
+    pay_order_via_webhook(placed["id"])
+
+    fail_order_via_webhook(placed["id"])  # out-of-order / duplicate delivery
+
+    detail = client.get(
+        f"/api/orders/{placed['id']}", headers=auth_header(login_customer())
+    ).json()
+    assert detail["payment_status"] == "paid"
+    assert detail["status"] == "pending"  # untouched — not cancelled
+
+
+def test_failed_async_payment_after_the_expiry_event_changes_nothing():
+    """Stripe's own real sequence can deliver both ends — the failure, then
+    the session's expiry (or vice versa). Whichever lands second finds the
+    order already cancelled and stays quiet: one cancellation, one restore."""
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    croissant = get_product("butter-croissant")
+    shelf_before = croissant["stock"]
+
+    placed = client.post(
+        "/api/orders", json=checkout_payload(), headers=auth_header(login_customer())
+    ).json()
+    expire_order_via_webhook(placed["id"])
+    cancelled_once = client.get(
+        f"/api/orders/{placed['id']}", headers=auth_header(login_customer())
+    ).json()
+    assert cancelled_once["status"] == "cancelled"
+    assert get_product("butter-croissant")["stock"] == shelf_before
+
+    fail_order_via_webhook(placed["id"])  # the second word on the same session
+
+    detail = client.get(
+        f"/api/orders/{placed['id']}", headers=auth_header(login_customer())
+    ).json()
+    assert detail["timeline"] == cancelled_once["timeline"]  # nothing new
+    assert get_product("butter-croissant")["stock"] == shelf_before  # restored once, total
 
 
 def test_restock_alert_signs_up_idempotently():
@@ -4576,3 +4688,324 @@ def test_account_deletion_scrubs_the_person_keeps_the_books():
     # deleted customer's own word does not
     listing = client.get("/api/products/butter-croissant").json()
     assert all(r["comment"] != "Heavenly" for r in listing["reviews"])
+
+
+# --------------------------------------------------------------------------
+# Approved delivery rules — VIP threshold, and the threshold's one definition
+# --------------------------------------------------------------------------
+
+def _seed_kept_orders(user_id: int, count: int, days_ago: int = 0) -> None:
+    """Give a test account `count` kept (delivered) orders, directly in the
+    book — the loyalty tier's own measure, without spending the suite's
+    stock on ten baskets."""
+    from datetime import timedelta
+
+    from app.database import SessionLocal as _Session, utcnow as _utcnow
+    from app.models import Order as _Order, OrderEvent as _Event
+
+    db = _Session()
+    try:
+        placed = _utcnow() - timedelta(days=days_ago)
+        for n in range(count):
+            order = _Order(
+                order_number=f"DJ-TIER-{user_id}-{n}",
+                user_id=user_id,
+                status="delivered",
+                payment_method="cash_on_delivery",
+                payment_status="paid",
+                subtotal=10.00,
+                total=10.00,
+                currency="eur",
+                recipient="Test Regular",
+                line1="1 Fixture Row",
+                city="Bonn",
+                state="NW",
+                postal_code="53111",
+                country="DE",
+                created_at=placed,
+                updated_at=placed,
+            )
+            db.add(order)
+            db.flush()
+            db.add(_Event(order_id=order.id, status="delivered", comment="fixture", created_at=placed))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _basket_reaching(min_value: float, max_value: float | None = None):
+    """A basket whose shelf subtotal lands in [min_value, max_value) — built
+    one of each cheapest bake until the floor is crossed, so it never
+    overfills past the line under test (the suite eats stock all day)."""
+    from app.database import SessionLocal as _Session
+    from app.models import Product as _Product
+    from sqlalchemy import select as _select
+
+    db = _Session()
+    try:
+        products = db.scalars(
+            _select(_Product).where(_Product.is_available.is_(True), _Product.stock > 0).order_by(_Product.price)
+        ).all()
+    finally:
+        db.close()
+    items = []
+    running = 0.0
+    for product in products:
+        items.append({"product_id": product.id, "quantity": 1})
+        running = round(running + float(product.current_price), 2)
+        if running >= min_value and (max_value is None or running < max_value):
+            return items
+    raise AssertionError(f"the shelf cannot build a basket reaching {min_value}")
+
+
+def test_vip_earns_free_delivery_from_the_vip_threshold():
+    """A VIP regular (ten kept orders, fresh) earns free delivery from the
+    smaller VIP line; the very same basket pays for everyone else."""
+    from app.loyalty import VIP_ORDERS
+
+    vip_token = register_and_login("vip.delivery@example.com", "VipDel123!")
+    vip_id = client.get("/api/auth/me", headers=auth_header(vip_token)).json()["id"]
+    _seed_kept_orders(vip_id, VIP_ORDERS)
+
+    # A basket inside the VIP window (€15–€29.99 under the suite's rules)
+    items = _basket_reaching(20.0, 29.0)
+    vip_quote = client.post("/api/orders/quote", json={"items": items}, headers=auth_header(vip_token))
+    assert vip_quote.status_code == 200
+    assert vip_quote.json()["shipping_fee"] == 0.0
+    assert vip_quote.json()["free_delivery_threshold"] == 15.0
+
+    guest_quote = client.post("/api/orders/quote", json={"items": items})
+    assert guest_quote.status_code == 200
+    assert guest_quote.json()["shipping_fee"] == 3.50  # below the standard €30 line
+    assert guest_quote.json()["free_delivery_threshold"] == 30.0
+
+
+def test_vip_free_delivery_places_free_at_checkout():
+    """The threshold rule reaches the invoice, not just the quote."""
+    from app.loyalty import VIP_ORDERS
+
+    vip_token = register_and_login("vip.checkout@example.com", "VipChk123!")
+    vip_id = client.get("/api/auth/me", headers=auth_header(vip_token)).json()["id"]
+    _seed_kept_orders(vip_id, VIP_ORDERS)
+
+    placed = client.post(
+        "/api/orders",
+        json=checkout_payload(
+            payment_method="cash_on_delivery",
+            items=_basket_reaching(20.0, 29.0),
+        ),
+        headers=auth_header(vip_token),
+    )
+    assert placed.status_code == 201
+    assert placed.json()["shipping_fee"] == 0.0
+    assert placed.json()["total"] == placed.json()["subtotal"] + placed.json()["tax"]
+
+
+def test_a_lapsed_vip_pays_the_standard_threshold():
+    """Tiers expire with the visit window — ten orders a season ago is
+    'lapsed', and lapsed regulars pay like everyone else."""
+    from app.loyalty import LOYAL_WINDOW_DAYS, VIP_ORDERS
+
+    token = register_and_login("lapsed.vip@example.com", "Lapsed123!")
+    user_id = client.get("/api/auth/me", headers=auth_header(token)).json()["id"]
+    _seed_kept_orders(user_id, VIP_ORDERS, days_ago=LOYAL_WINDOW_DAYS + 10)
+
+    quote = client.post(
+        "/api/orders/quote", json={"items": _basket_reaching(20.0, 29.0)}, headers=auth_header(token)
+    )
+    assert quote.json()["shipping_fee"] == 3.50
+    assert quote.json()["free_delivery_threshold"] == 30.0
+
+
+def test_the_threshold_judges_the_pre_discount_subtotal():
+    """The one definition, pinned: the free-delivery line is judged on the
+    basket's shelf value — a coupon cannot push a basket over it (or dump
+    one under it after the check), and delivery never counts toward it."""
+    admin = admin_headers()
+    minted = client.post(
+        "/api/admin/coupons",
+        json={"code": "TESTTHRESH25", "percent_off": 25, "description": "threshold fixture"},
+        headers=admin,
+    )
+    assert minted.status_code == 201
+
+    try:
+        items = _basket_reaching(31.0, 39.0)  # over the standard €30 line on shelf value
+
+        bare = client.post("/api/orders/quote", json={"items": items})
+        assert bare.json()["shipping_fee"] == 0.0
+
+        # The 25% code drops the payable below the line — delivery stays
+        # free, because the shelf value was over it when the basket was judged.
+        with_coupon = client.post(
+            "/api/orders/quote", json={"items": items, "coupon_code": "TESTTHRESH25"}
+        )
+        assert with_coupon.status_code == 200
+        assert with_coupon.json()["discount_amount"] > 0
+        assert with_coupon.json()["subtotal"] - with_coupon.json()["discount_amount"] < 30.0
+        assert with_coupon.json()["shipping_fee"] == 0.0
+
+        # And a basket under the line on shelf value pays delivery even with
+        # no coupon at all — there is no second, friendlier definition.
+        small = client.post("/api/orders/quote", json={"items": _basket_reaching(16.0, 26.0)})
+        assert small.json()["shipping_fee"] == 3.50
+    finally:
+        client.delete(f"/api/admin/coupons/{minted.json()['id']}", headers=admin)
+
+
+# --------------------------------------------------------------------------
+# Shipping VAT allocation — the owner's approved proportional rule, in the
+# engine that will price it (pure Decimal, no database needed)
+# --------------------------------------------------------------------------
+
+from decimal import Decimal as _Decimal  # noqa: E402
+
+from app.vat import RateSummary as _RateSummary, allocate_shipping as _allocate  # noqa: E402
+
+D = _Decimal
+
+
+def _summary(rate: str, net: str, vat: str, gross: str):
+    return _RateSummary(vat_rate=D(rate), net_amount=D(net), vat_amount=D(vat), gross_amount=D(gross))
+
+
+def test_shipping_vat_single_rate_carries_the_whole_charge():
+    """One rate in the basket: the delivery charge simply carries it — no
+    proportional arithmetic, nothing to lose."""
+    rows = _allocate("2.99", [_summary("7.00", "100.00", "6.54", "106.54")])
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.vat_rate == D("7.00")
+    assert row.gross_amount == D("2.99")
+    assert row.net_amount == D("2.79")
+    assert row.vat_amount == D("0.20")
+    assert row.net_amount + row.vat_amount == row.gross_amount
+
+
+def test_shipping_vat_mixed_basket_allocates_proportionally_and_reconciles():
+    """The approved rule end to end: €2.99 across a €10-net 7 % bucket and a
+    €30-net 19 % bucket — portions 0.75/2.24 by largest remainder, each
+    split at its own rate, and the cents reassemble exactly (the property a
+    refund of the charge depends on)."""
+    rows = _allocate(
+        "2.99",
+        [
+            _summary("7.00", "10.00", "0.65", "10.65"),
+            _summary("19.00", "30.00", "4.79", "34.79"),
+        ],
+    )
+    by_rate = {row.vat_rate: row for row in rows}
+    assert by_rate[D("7.00")].gross_amount == D("0.75")  # 299¢ × 10/40 = 74.75 → 75
+    assert by_rate[D("19.00")].gross_amount == D("2.24")  # 299¢ × 30/40 = 224.25 → 224
+    for row in rows:
+        assert row.net_amount + row.vat_amount == row.gross_amount
+    assert sum((row.gross_amount for row in rows), D("0.00")) == D("2.99")
+    assert sum((row.net_amount for row in rows), D("0.00")) + sum(
+        (row.vat_amount for row in rows), D("0.00")
+    ) == D("2.99")
+
+
+def test_shipping_vat_never_loses_a_cent_on_awkward_splits():
+    """One cent across three buckets, and a charge that divides evenly —
+    deterministic answers either way, and never a created or lost cent."""
+    # 1¢ across three equal buckets: biggest remainder wins it (all tie →
+    # the bigger taxable value, then the lower rate).
+    rows = _allocate(
+        "0.01",
+        [
+            _summary("7.00", "10.00", "0.65", "10.65"),
+            _summary("19.00", "10.00", "1.60", "11.60"),
+            _summary("19.00", "9.00", "1.44", "10.44"),
+        ],
+    )
+    assert sum((row.gross_amount for row in rows), D("0.00")) == D("0.01")
+    assert len(rows) == 1  # a single cent is a single bucket's to carry
+
+    # €3.00 across a 50/50 basket: exact halves, no remainder to distribute.
+    rows = _allocate(
+        "3.00",
+        [
+            _summary("7.00", "50.00", "3.27", "53.27"),
+            _summary("19.00", "50.00", "7.98", "57.98"),
+        ],
+    )
+    assert [row.gross_amount for row in rows] == [D("1.50"), D("1.50")]
+
+
+def test_free_delivery_allocates_no_shipping_vat():
+    """Free delivery is €0 of charge — no rows, no tax lines, nothing to
+    persist or refund."""
+    assert _allocate("0.00", [_summary("7.00", "10.00", "0.65", "10.65")]) == []
+
+
+def test_shipping_vat_on_a_fully_discounted_basket_stays_deterministic():
+    """A 100 % coupon zeroes every net line; the charge then allocates by
+    gross value — and a basket with neither net nor gross (impossible at
+    checkout, defended anyway) taxes the whole charge at the highest rate."""
+    rows = _allocate(
+        "2.00",
+        [
+            _summary("7.00", "0.00", "0.00", "10.00"),
+            _summary("19.00", "0.00", "0.00", "30.00"),
+        ],
+    )
+    by_rate = {row.vat_rate: row for row in rows}
+    assert by_rate[D("7.00")].gross_amount == D("0.50")  # by gross: 200¢ × 10/40
+    assert by_rate[D("19.00")].gross_amount == D("1.50")
+    assert sum((row.gross_amount for row in rows), D("0.00")) == D("2.00")
+
+    rows = _allocate(
+        "1.00",
+        [
+            _summary("7.00", "0.00", "0.00", "0.00"),
+            _summary("19.00", "0.00", "0.00", "0.00"),
+        ],
+    )
+    assert len(rows) == 1
+    assert rows[0].vat_rate == D("19.00")
+    assert rows[0].gross_amount == D("1.00")
+
+
+# --------------------------------------------------------------------------
+# The coupon tin's honest usage count
+# --------------------------------------------------------------------------
+
+def test_coupon_list_counts_kept_redemptions_only():
+    admin = admin_headers()
+    minted = client.post(
+        "/api/admin/coupons",
+        json={"code": "TESTREDEEM10", "percent_off": 10, "description": "redemption fixture"},
+        headers=admin,
+    )
+    assert minted.status_code == 201
+
+    token = register_and_login("redeem.counter@example.com", "Redeem123!")
+    headers = auth_header(token)
+    try:
+        placed = client.post(
+            "/api/orders",
+            json=checkout_payload(
+                payment_method="cash_on_delivery", coupon_code="TESTREDEEM10"
+            ),
+            headers=headers,
+        )
+        assert placed.status_code == 201
+        cancelled = client.post(
+            "/api/orders",
+            json=checkout_payload(
+                payment_method="cash_on_delivery", coupon_code="TESTREDEEM10"
+            ),
+            headers=headers,
+        )
+        assert cancelled.status_code == 201
+        assert (
+            client.post(f"/api/orders/{cancelled.json()['id']}/cancel", headers=headers).status_code
+            == 200
+        )
+
+        tin = client.get("/api/admin/coupons", headers=admin).json()
+        fixture = next(c for c in tin if c["code"] == "TESTREDEEM10")
+        # one kept order carried the code; the cancelled one never counts
+        assert fixture["redemptions"] == 1
+    finally:
+        client.delete(f"/api/admin/coupons/{minted.json()['id']}", headers=admin)

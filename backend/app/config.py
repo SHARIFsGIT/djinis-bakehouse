@@ -32,22 +32,26 @@ class Settings(BaseSettings):
 
     # Business rules
     bakery_name: str = "Djini's Bakehouse"
-    # ── Currency-bound money rules — PENDING OWNER APPROVAL (2026-11-05) ──
-    # The shop now charges euro only. The old figures below were USD values
-    # and are NOT approved EUR values, so none of them ships as a default:
-    # each stays None (checkout paused, fail-closed) until the owner sets an
-    # explicit EUR figure in the environment. Kept here for review only:
-    #   tax_rate              was 0.0875  (US sales tax; German VAT is pending
-    #                         professional tax review — setting a rate here is
-    #                         an exclusive-mode sales-tax knob, not a VAT
-    #                         decision; the VAT-inclusive engine stays off)
-    #   shipping_fee          was 5.99     (USD delivery fee)
-    #   free_shipping_threshold was 50.0   (USD free-delivery threshold)
-    #   vip_spend_threshold   was 150      (USD lifetime-spend VIP threshold)
-    # See docs/operations/EUR_MIGRATION_RUNBOOK.md for what must be confirmed.
+    # ── Currency-bound money rules — OWNER-APPROVED EUR FIGURES (2026-11-06) ──
+    # The shop charges euro only. The figures below stay unset as shipped
+    # defaults (checkout pauses fail-closed without them) and are set in the
+    # environment to the owner's approved values:
+    #   SHIPPING_FEE=2.99  FREE_SHIPPING_THRESHOLD=25.00  TAX_RATE=0.07
+    #   VIP_FREE_DELIVERY_THRESHOLD=15.00
+    # TAX_RATE remains the exclusive-mode register rate (7 % by approval) —
+    # the reduced/standard per-product classification and the VAT-inclusive
+    # engine (7/19, seeded in vat_rates) stay parked until the tax adviser
+    # clears each product, exactly as before.
+    #   vip_spend_threshold   was 150 (USD) — still unset; spend-based VIP
+    #                         stays off and tiers ride on order counts.
+    # See docs/operations/EUR_MIGRATION_RUNBOOK.md.
     tax_rate: float | None = None
     shipping_fee: float | None = None
     free_shipping_threshold: float | None = None
+    # VIP regulars earn free delivery from a smaller basket than everyone
+    # else. None = no VIP benefit configured and the standard threshold
+    # applies to everyone.
+    vip_free_delivery_threshold: float | None = None
     vip_spend_threshold: float | None = None
     # Checkout pricing mode. "exclusive" — today's behaviour: net shelf
     # prices, tax added at the register while a rate is approved (no
@@ -117,6 +121,7 @@ class Settings(BaseSettings):
     register_rate_limit: int = 5  # accounts per minute
     forgot_rate_limit: int = 5  # reset asks + redemptions per minute
     otp_rate_limit: int = 5  # sign-in-code asks per minute
+    quote_rate_limit: int = 30  # public basket price checks per minute
 
     # Outgoing email (password resets today; newsletters and marketing later).
     # Empty SMTP_HOST = the log-only fallback: messages are logged with their

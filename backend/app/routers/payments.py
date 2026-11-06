@@ -9,7 +9,9 @@ webhook row-locks, so exactly one of them sends the receipt.
 
 The webhook also listens for money the *dashboard* moves: a refund issued
 by hand at Stripe (the documented fallback when a gateway refund fails)
-syncs the order's payment status here, and a dispute rings the desk.
+syncs the order's payment status here, and a dispute rings the desk. A
+delayed payment that fails (Klarna, SEPA) cancels its order through the
+expiry path's own guards the moment Stripe reports the failure.
 """
 
 import logging
@@ -170,9 +172,17 @@ def _record_completed_payment(session: dict, background: BackgroundTasks, db) ->
         logger.info("order %s paid via Stripe session %s", order.order_number, session.get("id"))
 
 
-def _cancel_expired_session(session: dict, db, background: BackgroundTasks | None = None) -> None:
-    """The pay-by window closed with no payment: cancel the order and put
-    the stock back so the case doesn't leak reserved boxes."""
+def _cancel_expired_session(
+    session: dict,
+    db,
+    background: BackgroundTasks | None = None,
+    *,
+    comment: str = "Payment window expired — cancelled automatically",
+) -> None:
+    """The session ended unpaid — its window closed, or a delayed payment
+    (Klarna, SEPA) failed after the redirect — so cancel the order and put
+    the stock back so the case doesn't leak reserved boxes. The `comment`
+    names which of the two happened, for the timeline's sake."""
     order = _order_for_session(session, db)
     if order is None:
         return
@@ -195,9 +205,7 @@ def _cancel_expired_session(session: dict, db, background: BackgroundTasks | Non
         return  # a newer pay link superseded this session
     if order.payment_status != PaymentStatus.PENDING.value:
         return  # paid after all (raced with the completed event) — leave it
-    _cancel_order(
-        order, db, by_customer=False, comment="Payment window expired — cancelled automatically"
-    )
+    _cancel_order(order, db, by_customer=False, comment=comment)
     db.commit()
     if background is not None:
         # They asked for the bake and walked away from the pay page — the
@@ -338,6 +346,18 @@ async def stripe_webhook(request: Request, background: BackgroundTasks, db: DbSe
         await run_in_threadpool(_record_completed_payment, obj, background, db)
     elif event_type in ("checkout.session.expired", "checkout.session.async_payment_expired"):
         await run_in_threadpool(_cancel_expired_session, obj, db, background)
+    elif event_type == "checkout.session.async_payment_failed":
+        # A delayed payment failed after the redirect. The expiry path's own
+        # guards decide (a paid order stays paid, a newer pay link wins), so
+        # the box goes back the moment Stripe says the money won't come —
+        # not hours later at the session's own expiry.
+        await run_in_threadpool(
+            _cancel_expired_session,
+            obj,
+            db,
+            background,
+            comment="Payment failed — cancelled automatically",
+        )
     elif event_type == "charge.refunded":
         await run_in_threadpool(_record_external_refund, obj, db)
     elif event_type == "charge.dispute.created":

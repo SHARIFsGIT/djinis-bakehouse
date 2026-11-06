@@ -287,3 +287,78 @@ def summarize_by_rate(lines) -> list[RateSummary]:
         RateSummary(vat_rate=rate, net_amount=net, vat_amount=vat, gross_amount=gross)
         for rate, (net, vat, gross) in sorted(groups.items())
     ]
+
+
+def allocate_shipping(shipping_gross, summaries: list[RateSummary]) -> list[RateSummary]:
+    """Split a delivery charge across the basket's VAT rates, each portion
+    carrying its rate (§ 10 UStG: the ancillary delivery follows the goods).
+
+    The owner's approved rule (2026-11-06): delivery VAT follows the
+    product rates, mixed baskets allocate proportionally to each rate's
+    taxable (net) value. The allocation is deterministic and cent-exact:
+
+    * portions are decided in integer cents by largest-remainder — every
+      bucket gets its floor, the leftover cents go to the largest fractional
+      remainders (ties: bigger taxable value, then the lower rate) — so the
+      portions always reassemble the shipping amount to the cent, never
+      losing or creating one;
+    * each portion's net/VAT is then extracted at its own rate
+      (extract_vat), so net + vat == portion exactly for every row;
+    * a single-rate basket needs no arithmetic — the whole charge carries
+      that rate;
+    * a zero (free-delivery) charge allocates nothing: no rows, no tax
+      lines, nothing to persist.
+
+    Proportional basis: net amounts (the taxable values). A basket whose
+    nets are all zero (a 100 % coupon can do it) falls back to gross
+    amounts as the basis; if those are zero too, the whole charge is taxed
+    at the basket's highest rate — a documented, deterministic answer
+    rather than a guess.
+    """
+    shipping = round_cents(shipping_gross)
+    if shipping <= 0:
+        return []
+    if not summaries:
+        raise ValueError("a shipping charge needs the basket's rate summary to allocate against")
+
+    basis = [s.net_amount for s in summaries]
+    if sum(basis) == 0:
+        basis = [s.gross_amount for s in summaries]
+    if sum(basis) == 0:
+        highest = max(summaries, key=lambda s: s.vat_rate)
+        net, vat = extract_vat(shipping, highest.vat_rate)
+        return [RateSummary(vat_rate=highest.vat_rate, net_amount=net, vat_amount=vat, gross_amount=shipping)]
+
+    total_basis = sum(basis)
+    total_cents = int(shipping * HUNDRED)
+    # Exact fractional shares in cents, then floor + largest remainder.
+    floors, remainders = [], []
+    allocated = 0
+    for share in basis:
+        exact = Decimal(total_cents) * share / total_basis
+        floor_cents = int(exact)  # Decimal → int truncates toward zero; shares are >= 0
+        floors.append(floor_cents)
+        remainders.append(exact - floor_cents)
+        allocated += floor_cents
+    # Leftover cents, one per bucket, largest fractional remainder first
+    # (ties: the bigger taxable value, then the lower rate — deterministic).
+    order = sorted(
+        range(len(summaries)),
+        key=lambda i: (-remainders[i], -basis[i], summaries[i].vat_rate),
+    )
+    leftover = total_cents - allocated
+    for i in order[:leftover]:
+        floors[i] += 1
+
+    rows = []
+    for i, summary in enumerate(summaries):
+        portion = Decimal(floors[i]) / HUNDRED
+        if portion == 0:
+            continue  # a bucket too small to carry a cent carries nothing
+        net, vat = extract_vat(portion, summary.vat_rate)
+        rows.append(
+            RateSummary(vat_rate=summary.vat_rate, net_amount=net, vat_amount=vat, gross_amount=portion)
+        )
+    # The reconciliation this function promises — cents in == cents out.
+    assert sum((row.gross_amount for row in rows), Decimal("0.00")) == shipping
+    return rows
