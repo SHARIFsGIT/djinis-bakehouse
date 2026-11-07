@@ -600,8 +600,98 @@ def test_addresses():
     )
     assert updated.json()["city"] == "Los Angeles"
 
+    # The same doorstep filed again is refused in plain words — the book
+    # never grows a copy of a door it already knows.
+    duplicate = client.post(
+        "/api/auth/addresses",
+        json={
+            "label": "Work",
+            "recipient": "Addr User",
+            "line1": "123 Baker Street",
+            "city": "Los Angeles",
+            "state": "CA",
+            "postal_code": "90210",
+            "country": "USA",
+        },
+        headers=headers,
+    )
+    assert duplicate.status_code == 409
+    assert client.get("/api/auth/addresses", headers=headers).json() == [] or len(
+        client.get("/api/auth/addresses", headers=headers).json()
+    ) == 1
+
     assert client.delete(f"/api/auth/addresses/{address_id}", headers=headers).status_code == 200
     assert client.get("/api/auth/addresses", headers=headers).json() == []
+
+
+def test_checkout_reuses_the_same_doorstep_without_duplication():
+    """Retyping the same address at checkout delivers to the one already in
+    the book — placing order after order must never file copy after copy."""
+    token = login_customer()
+    headers = auth_header(token)
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+
+    def doorstep_count():
+        book = client.get("/api/auth/addresses", headers=headers).json()
+        return sum(1 for a in book if "baker street" in a["line1"].lower())
+
+    before = doorstep_count()
+    payload = checkout_payload(payment_method="cash_on_delivery")
+    # Same doorstep, retyped with different case and spacing
+    payload["new_address"]["line1"] = "  123   BAKER street "
+    placed = client.post("/api/orders", json=payload, headers=headers)
+    assert placed.status_code == 201
+    assert doorstep_count() == max(before, 1)  # known once, never twice
+
+    # A genuinely different doorstep still lands in the book
+    payload = checkout_payload(payment_method="cash_on_delivery")
+    payload["new_address"]["line1"] = "7 Wholegrain Alley"
+    placed = client.post("/api/orders", json=payload, headers=headers)
+    assert placed.status_code == 201
+    book = client.get("/api/auth/addresses", headers=headers).json()
+    assert sum(1 for a in book if "wholegrain alley" in a["line1"].lower()) == 1
+
+
+def test_status_dial_can_stay_quiet_and_the_log_speaks_plain_words(monkeypatch):
+    """The desk's notify switch gates the customer email, and the Bake log
+    timeline never shows the wire format ("out_for_delivery")."""
+    from app.routers import orders as orders_module
+
+    token = login_customer()
+    headers = auth_header(token)
+    _top_up_stock("butter-croissant")
+    _top_up_stock("beef-curry-puff")
+    order = client.post(
+        "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
+    ).json()
+
+    sent = []
+    monkeypatch.setattr(
+        orders_module, "send_order_status_email", lambda update: sent.append(update)
+    )
+    admin = admin_headers()
+
+    quiet = client.put(
+        f"/api/admin/orders/{order['id']}/status",
+        json={"status": "out_for_delivery", "notify": False},
+        headers=admin,
+    )
+    assert quiet.status_code == 200
+    assert sent == []  # the baker quieted this dial — no email left the shop
+
+    loud = client.put(
+        f"/api/admin/orders/{order['id']}/status",
+        json={"status": "delivered", "notify": True},
+        headers=admin,
+    )
+    assert loud.status_code == 200
+    assert len(sent) == 1 and sent[0]["status"] == "delivered"
+
+    detail = client.get(f"/api/orders/{order['id']}", headers=headers).json()
+    comments = " | ".join(e["comment"] for e in detail["timeline"])
+    assert "_" not in comments
+    assert "Out for delivery" in comments
 
 
 # --------------------------------------------------------------------------

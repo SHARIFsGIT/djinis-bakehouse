@@ -110,6 +110,13 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 _HEX_COLOR = re.compile(r"^#[0-9a-f]{6}$")
 
 
+def _plain_word(value: str) -> str:
+    """A status value as a person writes it — "out_for_delivery" becomes
+    "Out for delivery". The timeline (the Bake log) speaks sentences, never
+    the wire format."""
+    return str(value or "").replace("_", " ").strip().capitalize()
+
+
 def _slugify(name: str, db, table) -> str:
     """A URL-safe, unique slug for any slugged table (products, categories)."""
     base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "item"
@@ -409,7 +416,10 @@ def update_order_status(
             raise HTTPException(status_code=400, detail="Order is already cancelled")
         _cancel_order(order, db, by_customer=False, comment=payload.comment)
         db.commit()
-        queue_status_email(order, background, comment=payload.comment)
+        # The desk's own say-so: only a dial with "email the customer" on
+        # reaches the mailbox.
+        if payload.notify:
+            queue_status_email(order, background, comment=payload.comment)
         db.refresh(order)
         return _serialize(order, detailed=True, cancel_fee_preview=_late_cancel_fee(order, db))
 
@@ -428,13 +438,17 @@ def update_order_status(
         OrderEvent(
             order_id=order.id,
             status=payload.status.value,
-            comment=payload.comment or f"Status changed from {old_status} to {payload.status.value}",
+            # The Bake log speaks people words, never the wire format.
+            comment=payload.comment
+            or f"Status changed from {_plain_word(old_status)} to {_plain_word(payload.status.value)}",
         )
     )
     db.commit()
     # Every dial the desk makes is news the customer asked for when they
-    # ordered — the mailbox hears it in the same breath.
-    queue_status_email(order, background, comment=payload.comment)
+    # ordered — unless the baker has quieted this one, the mailbox hears it
+    # in the same breath.
+    if payload.notify:
+        queue_status_email(order, background, comment=payload.comment)
     db.refresh(order)
     return _serialize(order, detailed=True, cancel_fee_preview=_late_cancel_fee(order, db))
 
@@ -448,7 +462,11 @@ def update_payment_status(
         raise HTTPException(status_code=404, detail="Order not found")
     order.payment_status = payload.payment_status
     db.add(
-        OrderEvent(order_id=order.id, status=order.status, comment=f"Payment marked {payload.payment_status}")
+        OrderEvent(
+            order_id=order.id,
+            status=order.status,
+            comment=f"Payment marked {_plain_word(payload.payment_status)}",
+        )
     )
     db.commit()
     db.refresh(order)

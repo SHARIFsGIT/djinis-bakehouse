@@ -700,6 +700,10 @@ class CouponPreviewOut(BaseModel):
 class OrderStatusUpdateRequest(BaseModel):
     status: OrderStatus
     comment: str | None = None
+    # The desk decides per dial whether this change is mailbox news — a
+    # shopper mid-flurry of small corrections would otherwise get an email
+    # for every one of them.
+    notify: bool = True
 
 
 class PaymentStatusUpdateRequest(BaseModel):

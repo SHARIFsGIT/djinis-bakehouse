@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
-import { BadgeCheck, Bell, Heart, Share2, Star, Truck } from "lucide-react";
+import { BadgeCheck, Bell, Heart, Share2, Star, Truck, Wheat } from "lucide-react";
 import client, { apiError } from "../api/client";
-import { formatDate, formatPrepTime, shopConfig } from "../lib/format";
+import { formatDate, shopConfig } from "../lib/format";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
 import { useFavorites } from "../context/FavoritesContext";
@@ -109,6 +109,56 @@ function StarPicker({ value, onChange }) {
   );
 }
 
+/** The average rating, shown as stars the shopper can also *use*: hover to
+ *  preview a rating, tap to make it yours — the review form below fills in
+ *  and slides into view. Guests are walked to the login door instead. */
+function InteractiveRating({ average, count, onPick, canReview }) {
+  const [hover, setHover] = useState(0);
+  const shown = hover || Math.round(average);
+  const stars = [1, 2, 3, 4, 5].map((star) => (
+    <span
+      key={star}
+      role="button"
+      tabIndex={0}
+      onMouseEnter={() => canReview && setHover(star)}
+      onClick={() => canReview && onPick(star)}
+      onKeyDown={(e) => {
+        if (canReview && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          onPick(star);
+        }
+      }}
+      className={`text-warning ${canReview ? "cursor-pointer transition hover:scale-110" : ""}`}
+      aria-label={`${star} star${star > 1 ? "s" : ""}`}
+    >
+      {star <= shown ? (
+        <Star size={17} className="fill-current" />
+      ) : (
+        <Star size={17} className="opacity-40" />
+      )}
+    </span>
+  ));
+
+  const caption = hover
+    ? `Rate it ${hover} star${hover > 1 ? "s" : ""}`
+    : count > 0
+      ? `${average.toFixed(1)} · ${count} review${count === 1 ? "" : "s"}`
+      : "No reviews yet — tap to be the first";
+
+  return (
+    <div className="flex flex-wrap items-center gap-2.5">
+      <div
+        className="flex items-center gap-0.5"
+        onMouseLeave={() => setHover(0)}
+        title={canReview ? "Tap a star to rate this bake" : undefined}
+      >
+        {stars}
+      </div>
+      <p className="text-xs opacity-60">{caption}</p>
+    </div>
+  );
+}
+
 export default function ProductDetail() {
   const { slug } = useParams();
   const { user } = useAuth();
@@ -144,6 +194,15 @@ export default function ProductDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
+  // A returning reviewer's stars wait where they left them — the pickers
+  // (the one under the title and the form's own) open on their rating, not
+  // on a default five.
+  useEffect(() => {
+    if (!product || !user) return;
+    const own = product.reviews.find((r) => r.author_id === user.id);
+    if (own) setReviewRating(own.rating);
+  }, [product, user]);
+
   if (error) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-16 text-center">
@@ -161,11 +220,23 @@ export default function ProductDetail() {
 
   const soldOut = product.stock <= 0;
   const lowStock = !soldOut && product.stock <= 5;
-  const prep = formatPrepTime(product.prep_time_minutes);
+  // The wall shows only live reviews; a taken-down one stays with its
+  // author, inside their own form below, flagged.
+  const wall = product.reviews.filter((r) => r.is_approved);
   const mine = user
     ? product.reviews.find((r) => r.author_id === user.id)
     : null;
   const saved = isSaved(product.id);
+
+  /** A star tapped on the product itself: set the rating and bring the
+   *  review form into view, ready for the words. */
+  const pickRating = (stars) => {
+    setReviewRating(stars);
+    document.getElementById("review-form")?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+  };
 
   const shareLink = async () => {
     try {
@@ -178,7 +249,7 @@ export default function ProductDetail() {
 
   const distribution = [5, 4, 3, 2, 1].map((stars) => ({
     stars,
-    count: product.reviews.filter((r) => r.rating === stars).length,
+    count: wall.filter((r) => r.rating === stars).length,
   }));
 
   const submitReview = async (e) => {
@@ -277,12 +348,30 @@ export default function ProductDetail() {
             {product.name}
           </h1>
 
+          {/* The average, wearable: hover to preview a rating, tap to make
+              it yours — the form below fills in. */}
           <div className="mt-3">
-            <RatingStars
-              rating={product.average_rating}
-              count={product.review_count}
-              size="text-base"
-            />
+            {user ? (
+              <InteractiveRating
+                average={product.average_rating}
+                count={product.review_count}
+                onPick={pickRating}
+                canReview
+              />
+            ) : (
+              <Link
+                to="/login"
+                state={{ from: window.location.pathname }}
+                className="inline-block"
+                title="Log in to rate this bake"
+              >
+                <InteractiveRating
+                  average={product.average_rating}
+                  count={product.review_count}
+                  onPick={() => {}}
+                />
+              </Link>
+            )}
           </div>
 
           <div className="mt-5">
@@ -294,14 +383,14 @@ export default function ProductDetail() {
           </p>
 
           <div className="mt-5 flex flex-wrap gap-2 text-sm">
-            {prep && (
-              <span className="badge badge-ghost">Baked over {prep}</span>
-            )}
-            {product.allergens && (
-              <span className="badge badge-ghost">
-                Contains: {product.allergens}
-              </span>
-            )}
+            {/* Prep time and the allergen summary are gone from the badge
+                row — the allergen detail lives in its own fold below, where
+                the whole list fits. What stays is what a shopper scanning
+                the row can act on. */}
+            <span className="badge badge-ghost gap-1.5 py-2.5">
+              <Wheat size={13} className="text-accent" />
+              Baked fresh every morning
+            </span>
             {soldOut ? (
               <span className="badge badge-error badge-outline">
                 Sold out today
@@ -477,6 +566,7 @@ export default function ProductDetail() {
 
             {user ? (
               <form
+                id="review-form"
                 onSubmit={submitReview}
                 className="mt-6 rounded-box bg-base-200/60 p-5"
               >
@@ -532,12 +622,12 @@ export default function ProductDetail() {
           </div>
 
           <div className="space-y-4">
-            {product.reviews.length === 0 && (
+            {wall.length === 0 && (
               <p className="rounded-box border border-dashed border-base-300 p-6 text-center text-sm opacity-60">
                 No reviews yet — be the first to write one
               </p>
             )}
-            {product.reviews.map((r) => (
+            {wall.map((r) => (
               <article
                 key={r.id}
                 className="rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60"

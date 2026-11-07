@@ -44,6 +44,7 @@ from ..schemas import (
     QuoteRequest,
 )
 from ..security import CurrentUser, DbSession, OptionalUser, client_key
+from ..serialize import find_matching_address
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 settings = get_settings()
@@ -427,7 +428,8 @@ def checkout(
     # can't charge or report.
     charge_currency = _charge_currency()
 
-    # Resolve delivery address (existing id or a new one created on the fly)
+    # Resolve delivery address (existing id, an already-known doorstep, or a
+    # genuinely new one)
     if payload.address_id:
         address = db.scalar(
             select(Address).where(Address.id == payload.address_id, Address.user_id == user.id)
@@ -436,18 +438,28 @@ def checkout(
             raise HTTPException(status_code=400, detail="Invalid address_id")
     else:
         data = payload.new_address.model_dump()
-        has_addresses = db.scalars(select(Address.id).where(Address.user_id == user.id)).first()
-        if data["is_default"] and has_addresses:
-            # Same rule as the address book: one default at a time.
+        address = find_matching_address(db, user.id, data)
+        if address is None:
+            has_addresses = db.scalars(select(Address.id).where(Address.user_id == user.id)).first()
+            if data["is_default"] and has_addresses:
+                # Same rule as the address book: one default at a time.
+                for other in db.scalars(
+                    select(Address).where(Address.user_id == user.id, Address.is_default.is_(True))
+                ):
+                    other.is_default = False
+            # A first address becomes the default automatically
+            data["is_default"] = data["is_default"] or not has_addresses
+            address = Address(user_id=user.id, **data)
+            db.add(address)
+            db.flush()
+        elif data["is_default"] and not address.is_default:
+            # A re-typed doorstep that already exists — deliver there, and
+            # honour the default tick while we have it.
             for other in db.scalars(
                 select(Address).where(Address.user_id == user.id, Address.is_default.is_(True))
             ):
                 other.is_default = False
-        # A first address becomes the default automatically
-        data["is_default"] = data["is_default"] or not has_addresses
-        address = Address(user_id=user.id, **data)
-        db.add(address)
-        db.flush()
+            address.is_default = True
 
     # Validate items against the catalog — the server is the source of truth
     merged, by_id = _resolve_basket(db, payload.items)

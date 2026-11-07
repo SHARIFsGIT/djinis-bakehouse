@@ -192,19 +192,29 @@ export const EVENT_TYPES = [
 /* Order domain                                                        */
 /* ------------------------------------------------------------------ */
 
+/* The badge each stage wears tells the story on its own — a box's journey
+   reads amber (waiting) → blue (taken in) → gold (in the oven) → burgundy
+   (boxed) → wine (on the bike) → green (on your table), red only for the
+   one that never left the shop. */
 export const ORDER_STATUSES = [
   { value: "pending", label: "Pending", badge: "badge-warning" },
   { value: "confirmed", label: "Confirmed", badge: "badge-info" },
   { value: "baking", label: "Baking", badge: "badge-accent" },
-  { value: "ready", label: "Ready", badge: "badge-accent" },
-  { value: "out_for_delivery", label: "Out for delivery", badge: "badge-info" },
+  { value: "ready", label: "Ready", badge: "badge-primary" },
+  { value: "out_for_delivery", label: "Out for delivery", badge: "badge-secondary" },
   { value: "delivered", label: "Delivered", badge: "badge-success" },
   { value: "cancelled", label: "Cancelled", badge: "badge-error" },
 ];
 
 const STATUS_MAP = Object.fromEntries(ORDER_STATUSES.map((s) => [s.value, s]));
 
-export const statusLabel = (value) => STATUS_MAP[value]?.label ?? value;
+/** A status as a person writes it — the wire format's underscores never
+ *  reach a screen, even for a value this map doesn't know. */
+export const statusLabel = (value) =>
+  STATUS_MAP[value]?.label ??
+  String(value ?? "")
+    .replace(/_/g, " ")
+    .replace(/^./, (c) => c.toUpperCase());
 export const statusBadge = (value) => STATUS_MAP[value]?.badge ?? "badge-ghost";
 
 /** Index in the happy-path progression (cancelled breaks out of it). */

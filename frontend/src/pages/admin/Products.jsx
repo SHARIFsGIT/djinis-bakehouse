@@ -18,7 +18,6 @@ const EMPTY_FORM = {
   is_featured: false,
   is_available: true,
   stock: 0,
-  prep_time_minutes: "",
   ingredients: "",
   allergens: "",
   // VAT classification — saved through its own audited endpoint
@@ -52,7 +51,6 @@ const NUM_FIELDS = [
   ["price", "Price *", "0.01", "0.01"],
   ["sale_price", "Sale price — must be lower", "0.01", ""],
   ["stock", "Stock on hand *", "1", "0"],
-  ["prep_time_minutes", "Prep time (minutes)", "1", "0"],
 ];
 
 // Select sentinel — picking it swaps the dropdown for a "name a new shelf" box
@@ -117,7 +115,6 @@ export default function AdminProducts() {
           is_featured: data.is_featured,
           is_available: data.is_available,
           stock: data.stock,
-          prep_time_minutes: data.prep_time_minutes ?? "",
           ingredients: data.ingredients ?? "",
           allergens: data.allergens ?? "",
           vat_category: data.vat_category ?? "",
@@ -207,8 +204,6 @@ export default function AdminProducts() {
         is_featured: f.is_featured,
         is_available: f.is_available,
         stock: Number(f.stock ?? 0),
-        prep_time_minutes:
-          f.prep_time_minutes === "" ? null : Number(f.prep_time_minutes),
         ingredients: f.ingredients || null,
         allergens: f.allergens || null,
       };

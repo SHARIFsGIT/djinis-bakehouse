@@ -70,6 +70,10 @@ export default function Checkout() {
   // so) — until then cash on delivery is the one honest option.
   const [cardAvailable, setCardAvailable] = useState(false);
   const [method, setMethod] = useState("cash_on_delivery");
+  // Set when a card payment couldn't be STARTED (the provider didn't
+  // answer) — the honest state: nothing charged, basket intact, and two
+  // ways forward, right where the pay button is.
+  const [cardError, setCardError] = useState(null);
 
   const [couponInput, setCouponInput] = useState("");
   const [coupon, setCoupon] = useState(null); // { code, percent_off, description, min_subtotal }
@@ -194,6 +198,7 @@ export default function Checkout() {
     if (placing) return; // the button disables, but Enter can still submit
     if (!submittable) return; // no settled quote for *this* basket — never charge stale numbers
     setPlacing(true);
+    setCardError(null);
     try {
       const payload = {
         items: items.map((i) => ({ product_id: i.product_id, quantity: i.quantity })),
@@ -218,6 +223,13 @@ export default function Checkout() {
       navigate(`/account/orders/${order.id}?placed=1`, { replace: true });
     } catch (err) {
       toast.error(apiError(err, "Couldn't place the order"));
+      if (method === "card") {
+        // Nothing was charged and the order was rolled back server-side —
+        // say that plainly at the button, with the two ways forward.
+        setCardError(
+          apiError(err, "The card payment couldn't be started — nothing was charged."),
+        );
+      }
       if (err?.response?.status === 400) navigate("/cart");
     } finally {
       setPlacing(false);
@@ -530,6 +542,38 @@ export default function Checkout() {
               <div className="skeleton h-4 w-full" />
               <div className="skeleton h-4 w-2/3" />
               <div className="skeleton h-6 w-1/2" />
+            </div>
+          )}
+          {/* A card payment that couldn't start — honest words and two ways
+              forward, not a dead end. */}
+          {cardError && method === "card" && (
+            <div className="alert alert-warning mt-5 text-sm" role="alert">
+              <span>
+                <p className="font-semibold">The card payment didn&rsquo;t start</p>
+                <p className="opacity-80">
+                  {cardError} Your basket is exactly as you left it — try
+                  again, or pay cash at the door.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-xs text-secondary-content"
+                    onClick={() => setCardError(null)}
+                  >
+                    Try the card again
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    onClick={() => {
+                      setMethod("cash_on_delivery");
+                      setCardError(null);
+                    }}
+                  >
+                    Pay cash on delivery
+                  </button>
+                </div>
+              </span>
             </div>
           )}
           <button type="submit" className="btn btn-secondary btn-lg mt-6 w-full text-secondary-content" disabled={placing || !submittable}>

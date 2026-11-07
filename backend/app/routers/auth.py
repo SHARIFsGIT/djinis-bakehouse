@@ -25,6 +25,7 @@ from ..models import (
     utcnow,
 )
 from ..notifications import notify_admin
+from ..serialize import find_matching_address
 from ..schemas import (
     AccessTokenResponse,
     AccountDeleteRequest,
@@ -682,10 +683,18 @@ def list_addresses(user: CurrentUser, db: DbSession):
 
 @router.post("/addresses", response_model=AddressOut, status_code=status.HTTP_201_CREATED)
 def create_address(payload: AddressCreate, user: CurrentUser, db: DbSession):
+    data = payload.model_dump()
+    if find_matching_address(db, user.id, data) is not None:
+        # The book already has this doorstep — say so rather than file a
+        # second copy of it (checkout quietly reuses; the book, where the
+        # customer is looking at the list, deserves the plain word).
+        raise HTTPException(
+            status_code=409,
+            detail="This address is already in your book — edit it instead of adding it again",
+        )
     if payload.is_default:
         _unset_defaults(db, user)
     # First address becomes the default automatically
-    data = payload.model_dump()
     data["is_default"] = payload.is_default or not user.addresses
     address = Address(user_id=user.id, **data)
     db.add(address)

@@ -1,10 +1,44 @@
 """Shared model -> schema helpers used by several routers."""
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .models import Order, OrderItem, Product, Review, User
+from .models import Address, Order, OrderItem, Product, Review, User
 from .schemas import ProductCard, ReviewOut
+
+# The fields that make a delivery address the *same doorstep* — label and
+# default flag deliberately excluded (they're bookkeeping, not place).
+_ADDRESS_MATCH_FIELDS = (
+    "recipient",
+    "line1",
+    "line2",
+    "city",
+    "state",
+    "postal_code",
+    "country",
+)
+
+
+def _normalized(value) -> str:
+    """Case- and whitespace-blind comparison form: '12  Crumb Lane' and
+    '12 crumb lane' are the same door."""
+    return " ".join(str(value or "").lower().split())
+
+
+def find_matching_address(db: Session, user_id: int, data: dict) -> Address | None:
+    """The address in this user's book that is already this doorstep, or None.
+
+    Checkout and the address book both ask before filing a new row, so
+    placing orders can never grow the book a copy at a time.
+    """
+    addresses = db.scalars(select(Address).where(Address.user_id == user_id)).all()
+    for address in addresses:
+        if all(
+            _normalized(getattr(address, field)) == _normalized(data.get(field))
+            for field in _ADDRESS_MATCH_FIELDS
+        ):
+            return address
+    return None
 
 
 def review_summary(db: Session, product_ids: list[int]) -> dict[int, tuple[float, int]]:

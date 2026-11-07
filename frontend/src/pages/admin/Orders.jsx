@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { CalendarHeart, Send, Trash2, Users } from "lucide-react";
+import { CalendarHeart, Mail, Send, Trash2, Users } from "lucide-react";
 import client, { apiError } from "../../api/client";
 import {
   BULK_STATUSES,
@@ -28,6 +28,8 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
   const [order, setOrder] = useState(null);
   const [status, setStatus] = useState("");
   const [comment, setComment] = useState("");
+  // Whether this dial is mailbox news — the baker's call, per change.
+  const [notify, setNotify] = useState(true);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -49,7 +51,11 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
     );
   }
 
-  const payment = PAYMENT_STATUSES[order.payment_status] ?? { label: order.payment_status, badge: "badge-ghost" };
+  const payment =
+    PAYMENT_STATUSES[order.payment_status] ?? {
+      label: statusLabel(order.payment_status),
+      badge: "badge-ghost",
+    };
 
   const applyStatus = async (e) => {
     e.preventDefault();
@@ -58,11 +64,14 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
       const { data } = await client.put(`/admin/orders/${order.id}/status`, {
         status,
         comment: comment.trim() || null,
+        notify,
       });
       setOrder(data);
       setComment("");
       onChanged();
-      toast.success(`Order moved to “${statusLabel(data.status)}”`);
+      toast.success(
+        `Order moved to “${statusLabel(data.status)}”${notify ? " — customer emailed" : ""}`
+      );
     } catch (err) {
       toast.error(apiError(err));
     } finally {
@@ -75,7 +84,9 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
       const { data } = await client.put(`/admin/orders/${order.id}/payment`, { payment_status });
       setOrder(data);
       onChanged();
-      toast.success(`Payment marked ${payment_status}`);
+      toast.success(
+        `Payment marked ${PAYMENT_STATUSES[payment_status]?.label ?? statusLabel(payment_status)}`
+      );
     } catch (err) {
       toast.error(apiError(err));
     }
@@ -159,27 +170,43 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
 
       {/* Controls */}
       <div className="space-y-3 border-t border-base-300 bg-base-200/60 p-5">
-        <form onSubmit={applyStatus} className="flex flex-wrap items-center gap-2">
-          <select
-            className="select select-bordered select-sm w-44"
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            aria-label="New status"
-          >
-            {ORDER_STATUSES.map((s) => (
-              <option key={s.value} value={s.value}>{s.label}</option>
-            ))}
-          </select>
-          <input
-            className="input input-bordered input-sm min-w-36 flex-1"
-            placeholder="Note for the log (optional)"
-            maxLength={200}
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-          />
-          <button type="submit" className="btn btn-primary btn-sm" disabled={busy || status === order.status}>
-            {busy ? <span className="loading loading-spinner loading-xs" /> : "Update status"}
-          </button>
+        <form onSubmit={applyStatus} className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              className="select select-bordered select-sm w-44"
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              aria-label="New status"
+            >
+              {ORDER_STATUSES.map((s) => (
+                <option key={s.value} value={s.value}>{s.label}</option>
+              ))}
+            </select>
+            <input
+              className="input input-bordered input-sm min-w-36 flex-1"
+              placeholder="Note for the log (optional)"
+              maxLength={200}
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+            />
+            <button type="submit" className="btn btn-primary btn-sm" disabled={busy || status === order.status}>
+              {busy ? <span className="loading loading-spinner loading-xs" /> : "Update status"}
+            </button>
+          </div>
+          {/* The mailbox switch — one dial per change, no hidden memory of
+              the last one. */}
+          <label className="label cursor-pointer justify-start gap-3 py-0 text-xs">
+            <input
+              type="checkbox"
+              className="toggle toggle-secondary toggle-sm"
+              checked={notify}
+              onChange={(e) => setNotify(e.target.checked)}
+            />
+            <span className="label-text flex items-center gap-1.5 text-sm">
+              <Mail size={14} className="shrink-0 text-secondary" />
+              {notify ? "Email the customer about this change" : "Quiet change — no email"}
+            </span>
+          </label>
         </form>
         <div className="flex items-center gap-2 text-sm">
           <span className="opacity-60">Payment:</span>
@@ -545,7 +572,7 @@ function OrdersTab() {
                     </td>
                     <td className="text-xs">
                       <span className={`badge badge-sm ${PAYMENT_STATUSES[o.payment_status]?.badge ?? "badge-ghost"}`}>
-                        {o.payment_status}
+                        {PAYMENT_STATUSES[o.payment_status]?.label ?? statusLabel(o.payment_status)}
                       </span>
                     </td>
                     <td className="text-right font-bold">{money(o.total, o.currency)}</td>

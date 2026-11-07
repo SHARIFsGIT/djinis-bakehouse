@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
   Bike,
@@ -50,8 +50,26 @@ export default function OrderDetail() {
   const [cancelling, setCancelling] = useState(false);
   const [reordering, setReordering] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [checking, setChecking] = useState(false);
+
+  // Reconcile with the gateway on demand — the button's word is true: it
+  // asks Stripe directly, so a webhook still in flight can't hold the
+  // answer hostage. Idempotent and row-locked server-side.
+  const checkPayment = useCallback(async () => {
+    setChecking(true);
+    try {
+      const { data } = await client.post(`/payments/confirm/${id}`);
+      setOrder(data);
+    } catch {
+      // The gateway didn't answer — the honest "still landing" line stays,
+      // and the button stays for another go.
+    } finally {
+      setChecking(false);
+    }
+  }, [id]);
 
   useEffect(() => {
+    let retryTimer = null;
     client
       .get(`/orders/${id}`)
       .then(({ data }) => {
@@ -64,14 +82,16 @@ export default function OrderDetail() {
           data.payment_method === "card" &&
           data.payment_status === "pending"
         ) {
-          client
-            .post(`/payments/confirm/${id}`)
-            .then(({ data: fresh }) => setOrder(fresh))
-            .catch(() => {});
+          checkPayment();
+          // Stripe's own bookkeeping can land a beat after the redirect —
+          // one quiet retry catches it without the customer lifting a
+          // finger.
+          retryTimer = setTimeout(checkPayment, 4000);
         }
       })
       .catch((e) => setError(apiError(e, "Order not found")));
-  }, [id, params]);
+    return () => clearTimeout(retryTimer);
+  }, [id, params, checkPayment]);
 
   if (error) {
     return (
@@ -164,13 +184,25 @@ export default function OrderDetail() {
         <div className={`alert animate-pop mb-6 shadow-md ${order.payment_status === "paid" ? "alert-success" : "alert-info"}`}>
           <div>
             <p className="font-bold">Order confirmed</p>
-            <p className="text-sm">
-              {order.payment_method === "card"
-                ? order.payment_status === "paid"
-                  ? "Paid — your receipt was emailed to you."
-                  : "Payment is still landing — give it a moment, then check below."
-                : "Pay the courier at the door — cash only, please."}
-            </p>
+            {order.payment_method === "card" ? (
+              order.payment_status === "paid" ? (
+                <p className="text-sm">Paid — your receipt was emailed to you.</p>
+              ) : (
+                <div className="text-sm">
+                  <p>Payment is still landing — it usually takes a moment.</p>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-xs mt-2"
+                    onClick={checkPayment}
+                    disabled={checking}
+                  >
+                    {checking ? "Checking…" : "Check again"}
+                  </button>
+                </div>
+              )
+            ) : (
+              <p className="text-sm">Pay the courier at the door — cash only, please.</p>
+            )}
             <Link
               to={`/account/orders/${order.id}/receipt`}
               className="link link-secondary mt-1 inline-block text-sm font-semibold"

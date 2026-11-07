@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { Camera, Download, ShieldAlert, Trash2 } from "lucide-react";
+import { Camera, ShieldAlert, Trash2 } from "lucide-react";
 import client, { apiError, tokens } from "../../api/client";
 import PasswordInput from "../../components/PasswordInput";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { formatDate, todayISO } from "../../lib/format";
+import { formatDate } from "../../lib/format";
 import { shrinkImage } from "../../lib/imageResize";
 
 export default function Profile() {
@@ -84,21 +84,6 @@ export default function Profile() {
       toast.error(apiError(err));
     } finally {
       setSavingPassword(false);
-    }
-  };
-
-  const downloadMyData = async () => {
-    try {
-      const { data } = await client.get("/auth/me/export", { responseType: "blob" });
-      const url = URL.createObjectURL(data);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `bakehouse-my-data-${todayISO()}.json`;
-      link.click();
-      URL.revokeObjectURL(url);
-      toast.success("Your data is downloading");
-    } catch (err) {
-      toast.error(apiError(err));
     }
   };
 
@@ -235,19 +220,15 @@ export default function Profile() {
         </form>
       </section>
 
-      {/* Your data — see it whole, or take it back */}
+      {/* Your account — close it, on your own say-so */}
       <section className="h-fit rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
-        <h2 className="font-display text-2xl font-semibold">Your data</h2>
+        <h2 className="font-display text-2xl font-semibold">Close your account</h2>
         <p className="mt-1 text-sm opacity-60">
-          Everything this shop holds on you — profile, addresses, orders,
-          reviews — in one file you can keep. Or close the account entirely:
-          your personal details are scrubbed and only anonymized invoices
-          remain, as the law requires.
+          Closing the account erases your personal details — only anonymized
+          invoices remain, as the law requires. Your password confirms it&rsquo;s
+          really you.
         </p>
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <button type="button" className="btn btn-outline btn-sm" onClick={downloadMyData}>
-            <Download size={16} /> Download my data
-          </button>
+        <div className="mt-4">
           <button
             type="button"
             className="btn btn-ghost btn-sm text-error"
