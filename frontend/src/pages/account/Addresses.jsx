@@ -13,20 +13,22 @@ const EMPTY_FORM = {
   city: "",
   state: "",
   postal_code: "",
-  country: "USA",
+  country: "",
   is_default: false,
 };
 
 const FIELDS = [
-  ["label", "Label (Home, Work…)", true, ""],
-  ["recipient", "Recipient name", true, ""],
-  ["phone", "Phone", false, ""],
-  ["line1", "Street address", true, "sm:col-span-2"],
-  ["line2", "Apartment, suite… (optional)", false, "sm:col-span-2"],
-  ["city", "City", true, ""],
-  ["state", "State", true, ""],
-  ["postal_code", "ZIP / postal code", true, ""],
-  ["country", "Country", true, ""],
+  ["label", "Label (Home, Work…)", true, "", ""],
+  ["recipient", "Recipient name", true, "", ""],
+  ["phone", "Phone", false, "", ""],
+  ["line1", "Street address", true, "sm:col-span-2", ""],
+  ["line2", "Apartment, suite… (optional)", false, "sm:col-span-2", ""],
+  ["city", "City", true, "", ""],
+  ["state", "State", true, "", ""],
+  ["postal_code", "ZIP / postal code", true, "", ""],
+  // No default country — the customer writes where they actually live,
+  // nothing is pre-filled on their behalf.
+  ["country", "Country", true, "", "Germany"],
 ];
 
 export default function Addresses() {
@@ -105,13 +107,14 @@ export default function Addresses() {
             {editing.id ? `Edit “${editing.form.label}”` : "New address"}
           </p>
           <div className="grid gap-3 sm:grid-cols-2">
-            {FIELDS.map(([key, label, required, span]) => (
+            {FIELDS.map(([key, label, required, span, placeholder]) => (
               <div key={key} className={span}>
                 <label className="label text-xs">{label}</label>
                 <input
                   className="input input-bordered w-full"
                   required={required}
                   maxLength={key === "label" ? 50 : 255}
+                  placeholder={placeholder}
                   value={editing.form[key] ?? ""}
                   onChange={(e) =>
                     setEditing((s) => ({ ...s, form: { ...s.form, [key]: e.target.value } }))

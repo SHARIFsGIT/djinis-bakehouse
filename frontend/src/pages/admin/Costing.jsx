@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { History, Plus, Trash2 } from "lucide-react";
+import { BadgeEuro, History, Hourglass, Plus, Trash2 } from "lucide-react";
 import client, { apiError } from "../../api/client";
 import { formatDate, money } from "../../lib/format";
 import {
@@ -1796,6 +1796,23 @@ function BatchesTab({ products }) {
 /* Overhead & labour — the shop-wide figures                           */
 /* ------------------------------------------------------------------ */
 
+/** The desk's stat tile, drawn the same way the Dashboard's are, so the two
+ *  hourly figures costing runs on read as one system with the rest. */
+function RateTile({ label, Icon, value, sub }) {
+  return (
+    <div className="glass rounded-box p-5 shadow-sm ring-1 ring-base-300/60">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-bold tracking-widest uppercase opacity-50">{label}</p>
+        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-secondary/15 text-secondary">
+          <Icon size={16} />
+        </span>
+      </div>
+      <p className="font-display mt-2 text-2xl font-bold">{value}</p>
+      {sub && <p className="mt-1 text-xs opacity-60">{sub}</p>}
+    </div>
+  );
+}
+
 function OverheadTab() {
   const toast = useToast();
   const [months, setMonths] = useState(null);
@@ -1934,36 +1951,33 @@ function OverheadTab() {
     <div className="space-y-6">
       {/* The tab's headline — the two rates costing runs on */}
       <div className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-box glass px-4 py-3 shadow-sm ring-1 ring-base-300/60">
-          <p className="text-xs font-semibold uppercase tracking-widest opacity-50">Overhead per hour</p>
-          <p className="mt-0.5 font-display text-2xl font-bold">
-            {overheadHourly != null ? money(overheadHourly, latestMonth.currency) : "—"}
-            <span className="ml-2 text-xs font-normal opacity-60">
-              {latestMonth ? `${latestMonth.month.slice(0, 7)} forecast` : "no month recorded yet"}
-            </span>
-          </p>
-        </div>
-        <div className="rounded-box glass px-4 py-3 shadow-sm ring-1 ring-base-300/60">
-          <p className="text-xs font-semibold uppercase tracking-widest opacity-50">Labour per hour</p>
-          <p className="mt-0.5 font-display text-2xl font-bold">
-            {rate ? money(rate.rate, rate.currency) : "—"}
-            <span className="ml-2 text-xs font-normal opacity-60">
-              {rate?.source === "table"
-                ? `from ${formatDate(rate.valid_from)}`
-                : rate
-                  ? "default fallback"
-                  : ""}
-            </span>
-          </p>
-        </div>
+        <RateTile
+          Icon={Hourglass}
+          label="Overhead per hour"
+          value={overheadHourly != null ? money(overheadHourly, latestMonth.currency) : "—"}
+          sub={
+            latestMonth
+              ? `${latestMonth.month.slice(0, 7)} forecast · ${money(latestMonth.fixed_overhead_total, latestMonth.currency)} over ${latestMonth.forecast_hours} h`
+              : "no month recorded yet"
+          }
+        />
+        <RateTile
+          Icon={BadgeEuro}
+          label="Labour per hour"
+          value={rate ? money(rate.rate, rate.currency) : "—"}
+          sub={
+            rate?.source === "table"
+              ? `from ${formatDate(rate.valid_from)}`
+              : rate
+                ? "default fallback"
+                : "no rate recorded yet"
+          }
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
       {/* Overhead months */}
       <div className="space-y-6">
-        {/* Two-by-two fields with a full-width button — this column is only
-            half the page wide at xl, so five-across crams the button past
-            the card edge. */}
         <form
           onSubmit={saveMonth}
           className="grid grid-cols-2 gap-3 rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60"
@@ -2000,10 +2014,6 @@ function OverheadTab() {
               ))}
             </select>
           </Field>
-          <button type="submit" className="btn btn-primary btn-sm col-span-2 w-full" disabled={busyMonth}>
-            {busyMonth && <span className="loading loading-spinner loading-xs" />}
-            Save month
-          </button>
           <div className="col-span-2">
             <Field label="Included categories (one per line)">
               <textarea
@@ -2014,6 +2024,10 @@ function OverheadTab() {
               />
             </Field>
           </div>
+          <button type="submit" className="btn btn-primary btn-sm col-span-2 w-full" disabled={busyMonth}>
+            {busyMonth && <span className="loading loading-spinner loading-xs" />}
+            Save month
+          </button>
         </form>
 
         {months === null ? (
@@ -2023,91 +2037,37 @@ function OverheadTab() {
             No overhead months yet — costing needs one before it can allocate.
           </p>
         ) : (
-          <div className="space-y-2">
-            {months.map((m) => {
-              const ratePerHour = overheadRatePerHour(m.fixed_overhead_total, m.forecast_hours);
-              return (
-                <Card key={m.id}>
-                  {editingMonthId === m.id ? (
-                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                      <Field label="Fixed total">
-                        <input
-                          type="number" min="0" step="any" className={inputCls}
-                          value={monthEdit.fixed_overhead_total}
-                          onChange={(e) => setMonthEdit((d) => ({ ...d, fixed_overhead_total: e.target.value }))}
-                        />
-                      </Field>
-                      <Field label="Forecast hours">
-                        <input
-                          type="number" min="0.1" step="any" className={inputCls}
-                          value={monthEdit.forecast_hours}
-                          onChange={(e) => setMonthEdit((d) => ({ ...d, forecast_hours: e.target.value }))}
-                        />
-                      </Field>
-                      <Field label="Actual total">
-                        <input
-                          type="number" min="0" step="any" className={inputCls}
-                          value={monthEdit.actual_total}
-                          onChange={(e) => setMonthEdit((d) => ({ ...d, actual_total: e.target.value }))}
-                        />
-                      </Field>
-                      <Field label="Actual hours">
-                        <input
-                          type="number" min="0" step="any" className={inputCls}
-                          value={monthEdit.actual_hours}
-                          onChange={(e) => setMonthEdit((d) => ({ ...d, actual_hours: e.target.value }))}
-                        />
-                      </Field>
-                      <Field label="Confidence">
-                        <select
-                          className={selectCls}
-                          value={monthEdit.confidence}
-                          onChange={(e) => setMonthEdit((d) => ({ ...d, confidence: e.target.value }))}
-                        >
-                          {CONFIDENCE.map((c) => (
-                            <option key={c} value={c}>{c}</option>
-                          ))}
-                        </select>
-                      </Field>
-                      <div className="col-span-2 sm:col-span-1">
-                        <Field label="Variance note">
-                          <input
-                            className={inputCls} maxLength={2000}
-                            value={monthEdit.variance_note}
-                            onChange={(e) => setMonthEdit((d) => ({ ...d, variance_note: e.target.value }))}
-                          />
-                        </Field>
-                      </div>
-                      <div className="col-span-2 flex gap-2 sm:col-span-3">
-                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => saveMonthEdit(m)}>
-                          Save
-                        </button>
-                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditingMonthId(null)}>
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-                      <div>
-                        <p className="font-display font-semibold">
-                          {m.month.slice(0, 7)}
-                          <EstBadge isEstimate={m.is_estimate} />
-                        </p>
-                        <p className="text-xs opacity-60">
-                          {money(m.fixed_overhead_total, m.currency)} over {m.forecast_hours} h
-                          {ratePerHour != null && ` · ${money(ratePerHour, m.currency)}/h`}
-                          {m.actual_total != null && ` · actual ${money(m.actual_total, m.currency)} / ${m.actual_hours ?? "—"} h`}
-                        </p>
-                      </div>
-                      <button type="button" className="btn btn-ghost btn-xs" onClick={() => startMonthEdit(m)}>
-                        Edit
-                      </button>
-                    </div>
-                  )}
-                </Card>
-              );
-            })}
+          <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
+            <table className="table table-sm">
+              <thead>
+                <tr className="text-xs uppercase opacity-50">
+                  <th>Month</th>
+                  <th className="text-right">Fixed total</th>
+                  <th className="text-right">Forecast h</th>
+                  <th className="text-right">Per hour</th>
+                  <th>Actuals</th>
+                  <th className="text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {months.map((m) => {
+                  const ratePerHour = overheadRatePerHour(m.fixed_overhead_total, m.forecast_hours);
+                  return (
+                    <MonthRow
+                      key={m.id}
+                      m={m}
+                      ratePerHour={ratePerHour}
+                      editing={editingMonthId === m.id}
+                      monthEdit={monthEdit}
+                      setMonthEdit={setMonthEdit}
+                      onEdit={() => startMonthEdit(m)}
+                      onCancel={() => setEditingMonthId(null)}
+                      onSave={() => saveMonthEdit(m)}
+                    />
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
@@ -2117,7 +2077,7 @@ function OverheadTab() {
         {/* The rate in force headlines the tab above; this card is the
             history the append-only table keeps. */}
         {rate !== null && rate.history?.length > 0 && (
-          <Card>
+          <div className="rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60">
             <h3 className="font-display text-base font-semibold">Rate history</h3>
             <div className="mt-2 overflow-x-auto">
                 <table className="table table-xs">
@@ -2139,7 +2099,7 @@ function OverheadTab() {
                   </tbody>
                 </table>
             </div>
-          </Card>
+          </div>
         )}
 
         <form
@@ -2189,5 +2149,74 @@ function OverheadTab() {
       </div>
       </div>
     </div>
+  );
+}
+
+/** One overhead month in the ledger — a read row, or the same row opened
+ *  into an edit grid, exactly like an ingredient line. */
+function MonthRow({ m, ratePerHour, editing, monthEdit, setMonthEdit, onEdit, onCancel, onSave }) {
+  const set = (key) => (e) => setMonthEdit((d) => ({ ...d, [key]: e.target.value }));
+  return (
+    <>
+      <tr className="hover:bg-base-200/50">
+        <td className="font-semibold">
+          {m.month.slice(0, 7)}
+          <EstBadge isEstimate={m.is_estimate} />
+        </td>
+        <td className="text-right whitespace-nowrap">{money(m.fixed_overhead_total, m.currency)}</td>
+        <td className="text-right">{m.forecast_hours}</td>
+        <td className="text-right font-bold whitespace-nowrap">
+          {ratePerHour != null ? `${money(ratePerHour, m.currency)}/h` : "—"}
+        </td>
+        <td className="whitespace-nowrap text-xs opacity-70" title={m.variance_note ?? undefined}>
+          {m.actual_total != null
+            ? `${money(m.actual_total, m.currency)} / ${m.actual_hours ?? "—"} h`
+            : "—"}
+        </td>
+        <td className="text-right whitespace-nowrap">
+          <button type="button" className="btn btn-ghost btn-xs" onClick={onEdit}>
+            Edit
+          </button>
+        </td>
+      </tr>
+      {editing && (
+        <tr className="bg-base-200/40">
+          <td colSpan={6}>
+            <div className="grid grid-cols-2 gap-3 p-2 sm:grid-cols-3 lg:grid-cols-6">
+              <Field label="Fixed total">
+                <input type="number" min="0" step="any" className={inputCls} value={monthEdit.fixed_overhead_total} onChange={set("fixed_overhead_total")} />
+              </Field>
+              <Field label="Forecast hours">
+                <input type="number" min="0.1" step="any" className={inputCls} value={monthEdit.forecast_hours} onChange={set("forecast_hours")} />
+              </Field>
+              <Field label="Actual total">
+                <input type="number" min="0" step="any" className={inputCls} value={monthEdit.actual_total} onChange={set("actual_total")} />
+              </Field>
+              <Field label="Actual hours">
+                <input type="number" min="0" step="any" className={inputCls} value={monthEdit.actual_hours} onChange={set("actual_hours")} />
+              </Field>
+              <Field label="Confidence">
+                <select className={selectCls} value={monthEdit.confidence} onChange={set("confidence")}>
+                  {CONFIDENCE.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Variance note">
+                <input className={inputCls} maxLength={2000} value={monthEdit.variance_note} onChange={set("variance_note")} />
+              </Field>
+              <div className="col-span-2 flex gap-2 sm:col-span-3 lg:col-span-6">
+                <button type="button" className="btn btn-secondary btn-sm" onClick={onSave}>
+                  Save
+                </button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }

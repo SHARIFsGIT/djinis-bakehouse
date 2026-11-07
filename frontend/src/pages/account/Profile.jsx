@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { Camera, Download, ShieldAlert, Trash2 } from "lucide-react";
 import client, { apiError, tokens } from "../../api/client";
+import PasswordInput from "../../components/PasswordInput";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { formatDate, todayISO } from "../../lib/format";
@@ -210,32 +211,24 @@ export default function Profile() {
       <section className="h-fit rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
         <h2 className="font-display text-2xl font-semibold">Change password</h2>
         <form onSubmit={changePassword} className="mt-5 space-y-4">
-          <div>
-            <label className="label text-xs" htmlFor="cur-pass">Current password</label>
-            <input
-              id="cur-pass"
-              type="password"
-              className="input input-bordered w-full"
-              autoComplete="current-password"
-              required
-              value={passwords.current_password}
-              onChange={(e) => setPasswords((p) => ({ ...p, current_password: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="label text-xs" htmlFor="new-pass">New password</label>
-            <input
-              id="new-pass"
-              type="password"
-              className="input input-bordered w-full"
-              placeholder="At least 8 characters"
-              autoComplete="new-password"
-              required
-              minLength={8}
-              value={passwords.new_password}
-              onChange={(e) => setPasswords((p) => ({ ...p, new_password: e.target.value }))}
-            />
-          </div>
+          <PasswordInput
+            id="cur-pass"
+            label="Current password"
+            autoComplete="current-password"
+            required
+            value={passwords.current_password}
+            onChange={(e) => setPasswords((p) => ({ ...p, current_password: e.target.value }))}
+          />
+          <PasswordInput
+            id="new-pass"
+            label="New password"
+            placeholder="At least 8 characters"
+            autoComplete="new-password"
+            required
+            minLength={8}
+            value={passwords.new_password}
+            onChange={(e) => setPasswords((p) => ({ ...p, new_password: e.target.value }))}
+          />
           <button type="submit" className="btn btn-secondary btn-sm text-secondary-content" disabled={savingPassword}>
             {savingPassword ? "Updating…" : "Update password"}
           </button>
@@ -279,16 +272,17 @@ export default function Profile() {
               undone — confirm with your password.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
-              <input
-                type="password"
-                required
-                autoComplete="current-password"
-                placeholder="Your password"
-                className="input input-bordered input-sm w-full max-w-xs"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                aria-label="Confirm with your password"
-              />
+              <div className="w-full max-w-xs">
+                <PasswordInput
+                  required
+                  autoComplete="current-password"
+                  placeholder="Your password"
+                  className="input-sm"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  aria-label="Confirm with your password"
+                />
+              </div>
               <button type="submit" className="btn btn-error btn-sm" disabled={deleting}>
                 {deleting ? "Deleting…" : "Delete everything"}
               </button>

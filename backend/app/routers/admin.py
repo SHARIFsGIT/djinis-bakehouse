@@ -106,6 +106,9 @@ from .orders import (
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
+# A brand colour is exactly "#rrggbb" — six hex digits, nothing else.
+_HEX_COLOR = re.compile(r"^#[0-9a-f]{6}$")
+
 
 def _slugify(name: str, db, table) -> str:
     """A URL-safe, unique slug for any slugged table (products, categories)."""
@@ -309,6 +312,17 @@ def update_shop_settings(payload: StoreSettingsUpdate, admin: CurrentAdmin, db: 
     if payload.marquee_items is not None:
         # Empty clears the strip on purpose — the band hides until refilled
         settings.marquee_items = payload.marquee_items.strip()
+    if payload.brand_color is not None:
+        # The brand colour: "#rrggbb", or empty to return to the shipped
+        # burgundy. Anything half-formed is refused in plain words rather
+        # than silently painting the shop a colour the baker never picked.
+        value = payload.brand_color.strip().lower()
+        if value and not _HEX_COLOR.fullmatch(value):
+            raise HTTPException(
+                status_code=400,
+                detail="Pick a colour as a six-digit hex code, like #7f2230",
+            )
+        settings.brand_color = value or None
     for field in ("contact_address", "contact_phone", "contact_email", "opening_hours"):
         value = getattr(payload, field)
         if value is not None:

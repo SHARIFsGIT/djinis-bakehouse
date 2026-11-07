@@ -147,8 +147,8 @@ def forgot_password(
     """
     _check_rate_limit(request, "forgot")
     message = {
-        "message": f"If that email is with us, a reset link is on its way — "
-        f"it works for {RESET_TOKEN_MINUTES} minutes."
+        "message": f"If that email is with us, the link is on its way — "
+        f"valid for {RESET_TOKEN_MINUTES} minutes."
     }
     user = db.scalar(
         select(User).where(User.email == payload.email.lower(), User.is_active.is_(True))

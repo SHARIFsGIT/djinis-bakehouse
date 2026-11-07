@@ -1,7 +1,7 @@
-import { Eye, EyeOff } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import client, { apiError } from "../api/client";
+import PasswordInput from "../components/PasswordInput";
 import { useToast } from "../context/ToastContext";
 
 export default function ResetPassword() {
@@ -12,7 +12,6 @@ export default function ResetPassword() {
 
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -59,37 +58,22 @@ export default function ResetPassword() {
           </div>
         ) : (
           <form onSubmit={submit} className="mt-6 space-y-4">
+            <PasswordInput
+              id="new-password"
+              label="New password"
+              placeholder="At least 8 characters"
+              autoComplete="new-password"
+              required
+              minLength={8}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
             <div>
-              <label className="label text-xs" htmlFor="new-password">New password</label>
-              <div className="relative">
-                <input
-                  id="new-password"
-                  type={showPassword ? "text" : "password"}
-                  className="input input-bordered w-full pr-11"
-                  placeholder="At least 8 characters"
-                  autoComplete="new-password"
-                  required
-                  minLength={8}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-xs btn-square absolute top-1/2 right-1.5 -translate-y-1/2"
-                  onClick={() => setShowPassword((v) => !v)}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </div>
-            <div>
-              <label className="label text-xs" htmlFor="confirm-password">Confirm password</label>
-              <input
+              <PasswordInput
                 id="confirm-password"
-                type={showPassword ? "text" : "password"}
-                className={`input input-bordered w-full ${mismatch ? "input-error" : ""}`}
+                label="Confirm password"
                 placeholder="Once more"
+                className={mismatch ? "input-error" : ""}
                 autoComplete="new-password"
                 required
                 minLength={8}

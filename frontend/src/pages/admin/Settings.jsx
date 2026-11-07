@@ -6,17 +6,25 @@ import {
   Clock,
   ImagePlus,
   Megaphone,
+  Palette,
   Percent,
   Plus,
   Quote,
+  Star,
   Trash2,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import client, { apiError } from "../../api/client";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import { Loading } from "../../components/Loading";
 import { useToast } from "../../context/ToastContext";
 import { shrinkImage } from "../../lib/imageResize";
+import {
+  DEFAULT_BRAND_COLOR,
+  applyBrandColor,
+  cacheHeroImage,
+  previewBrandColor,
+} from "../../lib/theme";
 
 /** One card's heading — an icon in the shop's accent so each section of the
  *  rulebook is recognizable at a glance, no extra words needed. */
@@ -311,7 +319,38 @@ function ComingSoonManager() {
 /* Testimonials — the home page's "Word around the neighborhood"       */
 /* ------------------------------------------------------------------ */
 
-const EMPTY_TESTIMONIAL = { name: "", role: "", quote: "", avatar_url: "", rating: "", is_active: true };
+const EMPTY_TESTIMONIAL = { name: "", role: "", quote: "", avatar_url: "", rating: 0, is_active: true };
+
+/** Stars chosen by eye, not typed into a number spinner — tap a star to
+ *  rate, tap it again to clear. Same gold-on-grey look the home page wears. */
+function StarPicker({ value = 0, onChange }) {
+  return (
+    <div>
+      <label className="label text-xs">Stars (optional)</label>
+      <div className="flex items-center gap-0.5" role="radiogroup" aria-label="Star rating">
+        {[1, 2, 3, 4, 5].map((n) => (
+          <button
+            key={n}
+            type="button"
+            role="radio"
+            aria-checked={value === n}
+            aria-label={`${n} star${n > 1 ? "s" : ""}`}
+            className={`btn btn-xs btn-square ${n <= value ? "" : "btn-ghost"}`}
+            onClick={() => onChange(value === n ? 0 : n)}
+          >
+            <Star
+              size={18}
+              className={n <= value ? "fill-accent text-accent" : "text-base-300"}
+            />
+          </button>
+        ))}
+        <span className="ml-2 text-xs opacity-60">
+          {value ? `${value} of 5` : "no stars"}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 function TestimonialsManager() {
   const toast = useToast();
@@ -417,17 +456,10 @@ function TestimonialsManager() {
                 onChange={(e) => setForm({ ...form, quote: e.target.value })}
               />
             </div>
-            <div>
-              <label className="label text-xs">Stars (1–5, optional)</label>
-              <input
-                type="number"
-                min="1"
-                max="5"
-                className="input input-bordered input-sm w-full"
-                value={form.rating}
-                onChange={(e) => setForm({ ...form, rating: e.target.value })}
-              />
-            </div>
+            <StarPicker
+              value={Number(form.rating) || 0}
+              onChange={(rating) => setForm({ ...form, rating })}
+            />
             <div>
               <label className="label text-xs">Avatar URL (optional)</label>
               <input
@@ -545,6 +577,99 @@ function TestimonialsManager() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Brand colour — the palette the shop wears                           */
+/* ------------------------------------------------------------------ */
+
+/* Curated hues that keep cream text readable in every seat the theme's
+   scaffolding paints (buttons, badges, links). The first swatch is not a
+   colour but the absence of one: the burgundy the logo itself wears. */
+const BRAND_SWATCHES = [
+  { name: "Burgundy — the mark's own", value: null, dot: DEFAULT_BRAND_COLOR },
+  { name: "Wine rose", value: "#b23a5e" },
+  { name: "Plum", value: "#71368c" },
+  { name: "Ocean", value: "#2f5fa8" },
+  { name: "Teal", value: "#1e7d74" },
+  { name: "Forest", value: "#2e7d4f" },
+  { name: "Copper", value: "#a85a2a" },
+  { name: "Cocoa", value: "#7a4a2b" },
+  { name: "Slate", value: "#4a5a6e" },
+];
+
+function BrandColorCard({ brand, savedBrand, dirty, saving, onPick, onSave }) {
+  return (
+    <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
+      <CardHead icon={Palette} title="Brand colour" />
+      <p className="mt-1 text-sm opacity-70">
+        The mark&rsquo;s burgundy runs through every button, badge and headline.
+        Pick the colour the shop wears — the shade is tuned automatically so
+        text stays readable.
+      </p>
+
+      <div className="mt-5 flex flex-wrap items-center gap-3">
+        {BRAND_SWATCHES.map(({ name, value, dot }) => {
+          const active = (brand ?? null) === value;
+          return (
+            <button
+              key={name}
+              type="button"
+              title={name}
+              aria-label={name}
+              aria-pressed={active}
+              onClick={() => onPick(value)}
+              className={`h-10 w-10 rounded-full shadow-sm transition hover:scale-110 ${
+                active ? "ring-2 ring-base-content ring-offset-2 ring-offset-base-100" : "ring-1 ring-base-300"
+              }`}
+              style={{ backgroundColor: dot ?? value }}
+            />
+          );
+        })}
+        {/* Any colour at all — the swatches are shortcuts, not the limit */}
+        <label
+          className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-full bg-base-200 text-base-content shadow-sm ring-1 ring-base-300 transition hover:scale-110"
+          title="Pick any colour"
+        >
+          <Plus size={16} />
+          <input
+            type="color"
+            className="sr-only"
+            aria-label="Pick a custom colour"
+            value={brand ?? DEFAULT_BRAND_COLOR}
+            onChange={(e) => onPick(e.target.value.toLowerCase())}
+          />
+        </label>
+      </div>
+
+      <p className="mt-3 text-xs opacity-60">
+        Now wearing: <span className="font-semibold">{brand ?? "the original burgundy"}</span>
+        {dirty && " · previewing, not saved yet"}
+      </p>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          onClick={onSave}
+          disabled={!dirty || saving !== ""}
+        >
+          {saving === "brand" ? "Saving…" : "Save colour"}
+        </button>
+        {dirty && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => onPick(savedBrand)}
+            disabled={saving !== ""}
+          >
+            Discard
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+
+/* ------------------------------------------------------------------ */
 /* The Settings page itself                                            */
 /* ------------------------------------------------------------------ */
 
@@ -555,10 +680,15 @@ export default function Settings() {
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState("");
   const [heroBusy, setHeroBusy] = useState(false);
+  // The brand colour draft: "#rrggbb", or null for the shipped burgundy.
+  const [brand, setBrand] = useState(null);
+  const savedBrandRef = useRef(null);
 
   useEffect(() => {
     client.get("/admin/settings").then(({ data }) => {
       setSaved(data);
+      savedBrandRef.current = data.brand_color ?? null;
+      setBrand(data.brand_color ?? null);
       setForm({
         fee: String(data.late_cancel_fee_percent),
         announcement: data.announcement ?? "",
@@ -572,12 +702,22 @@ export default function Settings() {
     });
   }, []);
 
+  // Live preview: the whole console re-tints the moment a colour is tapped —
+  // nothing waits for a save. The preview never touches the local cache, so
+  // an abandoned experiment cannot outlive the visit: leaving the page puts
+  // the persisted colour straight back.
+  useEffect(() => {
+    previewBrandColor(brand);
+  }, [brand]);
+  useEffect(() => () => applyBrandColor(savedBrandRef.current), []);
+
   if (!saved || !form) return <Loading label="Opening the rulebook…" />;
 
   const parsed = Number(form.fee);
   const feeValid =
     form.fee !== "" && Number.isFinite(parsed) && parsed >= 0 && parsed <= 100;
   const feeDirty = feeValid && parsed !== saved.late_cancel_fee_percent;
+  const brandDirty = (brand ?? null) !== (saved.brand_color ?? null);
   const copyDirty =
     form.announcement !== (saved.announcement ?? "") ||
     form.today_note !== (saved.today_note ?? "") ||
@@ -627,6 +767,28 @@ export default function Settings() {
     }
   };
 
+  const saveBrand = async () => {
+    setSaving("brand");
+    try {
+      // An empty string is "back to the original burgundy" server-side.
+      const { data } = await client.put("/admin/settings", {
+        brand_color: brand ?? "",
+      });
+      setSaved(data);
+      savedBrandRef.current = data.brand_color ?? null;
+      setBrand(data.brand_color ?? null);
+      // Committed: paint it for real, and cache it for the next boot.
+      applyBrandColor(savedBrandRef.current);
+      toast.success(
+        data.brand_color ? "Brand colour saved" : "Back to the original burgundy",
+      );
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setSaving("");
+    }
+  };
+
   const pickHero = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = ""; // lets the same file be picked again after a change of mind
@@ -644,6 +806,9 @@ export default function Settings() {
         hero_image: uploaded.url,
       });
       setSaved(data);
+      // The baker checks the home page right after uploading — remember the
+      // new photo so their very next visit paints it, not the shipped one.
+      cacheHeroImage(data.hero_image || null);
       toast.success("Home page photo updated");
     } catch (err) {
       toast.error(apiError(err));
@@ -657,6 +822,7 @@ export default function Settings() {
     try {
       const { data } = await client.put("/admin/settings", { hero_image: "" });
       setSaved(data);
+      cacheHeroImage(null); // the shipped photo is the fallback, never cached
       toast.info("Back to the original counter photo");
     } catch (err) {
       toast.error(apiError(err));
@@ -703,6 +869,15 @@ export default function Settings() {
           </div>
         </div>
       </section>
+
+      <BrandColorCard
+        brand={brand}
+        savedBrand={saved.brand_color ?? null}
+        dirty={brandDirty}
+        saving={saving}
+        onPick={setBrand}
+        onSave={saveBrand}
+      />
 
       <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
         <CardHead icon={Megaphone} title="Storefront copy" />

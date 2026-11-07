@@ -83,6 +83,8 @@ def storefront(db: DbSession):
         contact_phone=settings.contact_phone,
         contact_email=settings.contact_email,
         opening_hours=settings.opening_hours,
+        # The baker's brand pick, or None for the shipped burgundy
+        brand_color=settings.brand_color,
         # The money rules behind every basket estimate the storefront quotes.
         currency=chargeable_currency,
         tax_rate=get_settings().tax_rate,

@@ -5,6 +5,7 @@ import Footer from "./components/Footer";
 import { AdminRoute, ProtectedRoute } from "./components/RouteGuards";
 import client from "./api/client";
 import { applyShopConfig } from "./lib/format";
+import { applyBrandColor } from "./lib/theme";
 
 import Home from "./pages/Home";
 import Products from "./pages/Products";
@@ -62,11 +63,16 @@ export default function App() {
   // The shop's money rules (currency, tax, delivery) before the first basket
   // is tallied — one fetch, mirrored into format.js so every estimate the
   // storefront quotes stays the server's own numbers. A failed fetch leaves
-  // the defaults, which match the server's .env.
+  // the defaults, which match the server's .env. The same answer carries the
+  // baker's brand colour: painting it here (and caching it for the next
+  // boot's pre-paint) keeps every visitor's theme the server's own pick.
   useEffect(() => {
     client
       .get("/store")
-      .then(({ data }) => applyShopConfig(data))
+      .then(({ data }) => {
+        applyShopConfig(data);
+        applyBrandColor(data.brand_color ?? null);
+      })
       .catch(() => {});
   }, []);
 

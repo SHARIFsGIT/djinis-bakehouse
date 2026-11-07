@@ -1608,6 +1608,23 @@ def test_storefront_copy_settings():
         == 403
     )
 
+    # the brand colour ships unset and only ever accepts a real hex code
+    assert client.get("/api/store").json()["brand_color"] is None
+    coloured = client.put(
+        "/api/admin/settings", json={"brand_color": " #1E7D74 "}, headers=admin
+    ).json()
+    assert coloured["brand_color"] == "#1e7d74"
+    assert client.get("/api/store").json()["brand_color"] == "#1e7d74"
+    for bad in ("1e7d74", "#1e7dg8", "#1e7d", "red"):
+        rejected = client.put(
+            "/api/admin/settings", json={"brand_color": bad}, headers=admin
+        )
+        assert rejected.status_code == 400, bad
+    # empty returns the shop to the shipped burgundy
+    cleared = client.put("/api/admin/settings", json={"brand_color": "  "}, headers=admin).json()
+    assert cleared["brand_color"] is None
+    assert client.get("/api/store").json()["brand_color"] is None
+
     # put the shipped lines back
     client.put(
         "/api/admin/settings",

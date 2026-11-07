@@ -96,6 +96,7 @@ _ADDITIVE_COLUMNS = {
         "contact_phone": "ALTER TABLE store_settings ADD COLUMN contact_phone VARCHAR(50)",
         "contact_email": "ALTER TABLE store_settings ADD COLUMN contact_email VARCHAR(255)",
         "opening_hours": "ALTER TABLE store_settings ADD COLUMN opening_hours TEXT",
+        "brand_color": "ALTER TABLE store_settings ADD COLUMN brand_color VARCHAR(7)",
     },
     "coupons": {
         "min_subtotal": "ALTER TABLE coupons ADD COLUMN min_subtotal NUMERIC(10,2)",

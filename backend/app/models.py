@@ -737,6 +737,10 @@ class StoreSetting(Base):
     marquee_items: Mapped[str | None] = mapped_column(Text)
     # The photo above the today note; NULL/empty falls back to the shipped one.
     hero_image: Mapped[str | None] = mapped_column(String(255))
+    # The brand colour the baker picks from the Settings tab, as "#rrggbb".
+    # NULL (never set) keeps the shipped burgundy the logo wears — the
+    # storefront derives its theme seats from this one value.
+    brand_color: Mapped[str | None] = mapped_column(String(7))
     # Real-world contact lines for the footer — set from the Settings tab.
     # NULL/empty means "not filled in yet", so nothing false ships publicly.
     contact_address: Mapped[str | None] = mapped_column(String(255))

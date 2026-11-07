@@ -6,9 +6,11 @@ import { ProductGridSkeleton } from "../components/Loading";
 import PhotoTile from "../components/PhotoTile";
 import ProductCard from "../components/ProductCard";
 import { money, productInitial, shopConfig } from "../lib/format";
-
-// Shown until /store answers (and whenever the admin hasn't picked one)
-const DEFAULT_HERO = "/static/site/baker.jpg";
+import {
+  DEFAULT_HERO_IMAGE as DEFAULT_HERO,
+  cacheHeroImage,
+  cachedHeroImage,
+} from "../lib/theme";
 
 // The strip's shipped phrases — the admin's own list takes over once /store
 // answers (an intentionally cleared list hides the band).
@@ -100,7 +102,12 @@ export default function Home() {
   const [categories, setCategories] = useState([]);
   const [featured, setFeatured] = useState(null);
   const [todayNote, setTodayNote] = useState("");
-  const [heroImage, setHeroImage] = useState(DEFAULT_HERO);
+  // The hero starts as whatever this browser last confirmed from the server
+  // (null on a first visit) — never the shipped default. Painting baker.jpg
+  // while /store is in flight is exactly the few-seconds-of-old-photo the
+  // baker complained about: the frame holds a quiet skeleton until the real
+  // photo is known, then shows it.
+  const [heroImage, setHeroImage] = useState(cachedHeroImage);
   const [testimonials, setTestimonials] = useState([]);
   const [comingSoon, setComingSoon] = useState([]);
   const [marquee, setMarquee] = useState(DEFAULT_MARQUEE);
@@ -119,9 +126,12 @@ export default function Home() {
       .then(({ data }) => {
         setTodayNote(data.today_note);
         setHeroImage(data.hero_image || DEFAULT_HERO);
+        cacheHeroImage(data.hero_image || null);
         setMarquee(data.marquee);
       })
-      .catch(() => {});
+      // The API is unreachable — fall back to the shipped photo rather than
+      // a permanent skeleton (a cached custom photo stays; it was real once).
+      .catch(() => setHeroImage((current) => current ?? DEFAULT_HERO));
     // The baker's two curatable bands — empty lists simply hide the sections
     client
       .get("/testimonials")
@@ -184,13 +194,24 @@ export default function Home() {
           <div className="relative mx-auto w-full max-w-sm md:max-w-none">
             {/* One frame: the photo with the today-note attached as its own
                 bottom piece — the strip is part of the picture, not a sticker
-                floating over it */}
+                floating over it. While the photo itself is still unknown the
+                frame holds a same-shaped skeleton, so no wrong photo ever
+                flashes and the layout never jumps. */}
             <div className="overflow-hidden rounded-box shadow-xl ring-1 ring-base-300/60">
-              <img
-                src={heroImage}
-                alt="Djini behind the counter in her chef's coat"
-                className="aspect-6/5 w-full object-cover"
-              />
+              {heroImage ? (
+                <img
+                  src={heroImage}
+                  alt="Fresh from the bakery counter"
+                  fetchPriority="high"
+                  decoding="async"
+                  className="aspect-6/5 w-full object-cover"
+                />
+              ) : (
+                <div
+                  className="aspect-6/5 w-full animate-pulse bg-base-200"
+                  aria-hidden="true"
+                />
+              )}
               {todayNote && (
                 <div className="brand-gradient text-primary-content">
                   <div className="flex items-center gap-3 px-5 py-3.5">

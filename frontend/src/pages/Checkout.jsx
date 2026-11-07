@@ -38,19 +38,20 @@ const EMPTY_ADDRESS = {
   city: "",
   state: "",
   postal_code: "",
-  country: "USA",
+  country: "",
   is_default: true,
 };
 
 const ADDRESS_FIELDS = [
-  ["recipient", "Recipient name", true],
-  ["phone", "Phone", false],
-  ["line1", "Street address", true],
-  ["line2", "Apartment, suite (optional)", false],
-  ["city", "City", true],
-  ["state", "State", true],
-  ["postal_code", "ZIP / postal code", true],
-  ["country", "Country", true],
+  ["recipient", "Recipient name", true, ""],
+  ["phone", "Phone", false, ""],
+  ["line1", "Street address", true, ""],
+  ["line2", "Apartment, suite (optional)", false, ""],
+  ["city", "City", true, ""],
+  ["state", "State", true, ""],
+  ["postal_code", "ZIP / postal code", true, ""],
+  // No default country — nothing is filled in on the customer's behalf.
+  ["country", "Country", true, "Germany"],
 ];
 
 export default function Checkout() {
@@ -293,12 +294,13 @@ export default function Checkout() {
                     maxLength={50}
                   />
                 </div>
-                {ADDRESS_FIELDS.map(([key, label, required]) => (
+                {ADDRESS_FIELDS.map(([key, label, required, placeholder]) => (
                   <div key={key} className={key === "line1" ? "sm:col-span-2" : ""}>
                     <label className="label text-xs">{label}</label>
                     <input
                       className="input input-bordered w-full"
                       required={required}
+                      placeholder={placeholder}
                       value={newAddress[key] ?? ""}
                       onChange={(e) => setField(key, e.target.value)}
                     />

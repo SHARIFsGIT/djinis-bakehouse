@@ -160,7 +160,9 @@ class AddressBase(BaseModel):
     city: str = Field(min_length=1, max_length=100)
     state: str = Field(min_length=1, max_length=100)
     postal_code: str = Field(min_length=1, max_length=20)
-    country: str = Field(default="USA", max_length=100)
+    # Required, like every other line of the address — no country is ever
+    # filled in on the customer's behalf ("USA" default removed 2026-11-07).
+    country: str = Field(min_length=1, max_length=100)
     is_default: bool = False
 
 
@@ -445,6 +447,7 @@ class StoreSettingsOut(ORMModel):
     contact_phone: str | None = None
     contact_email: str | None = None
     opening_hours: str | None = None
+    brand_color: str | None = None
     updated_at: datetime
 
 
@@ -458,6 +461,10 @@ class StoreSettingsUpdate(BaseModel):
     contact_phone: str | None = Field(default=None, max_length=50)
     contact_email: str | None = Field(default=None, max_length=255)
     opening_hours: str | None = Field(default=None, max_length=500)
+    # "#rrggbb" or empty to return to the shipped burgundy. Shape (and any
+    # padding) is checked in the route itself so a bad pick gets the
+    # shop-language message, not a pydantic field error.
+    brand_color: str | None = None
 
 
 class StorefrontOut(BaseModel):
@@ -481,6 +488,10 @@ class StorefrontOut(BaseModel):
     contact_phone: str | None = None
     contact_email: str | None = None
     opening_hours: str | None = None
+    # The brand colour the baker picked ("#rrggbb"); None keeps the shipped
+    # burgundy the logo wears. The storefront re-tints its theme seats from
+    # this one value before first paint.
+    brand_color: str | None = None
     # The shop's money rules, straight from the environment — the storefront's
     # basket arithmetic, labels and currency symbol consume these instead of
     # keeping a second copy, so what a customer estimates can never drift from
