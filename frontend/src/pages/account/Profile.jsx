@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { Camera, ShieldAlert, Trash2 } from "lucide-react";
 import client, { apiError, tokens } from "../../api/client";
 import PasswordInput from "../../components/PasswordInput";
@@ -119,7 +119,7 @@ export default function Profile() {
             />
           ) : (
             <span className="brand-gradient flex h-16 w-16 items-center justify-center rounded-full text-xl font-bold text-secondary-content">
-              {user.first_name.charAt(0)}
+              {(user.first_name || user.email || "?").charAt(0).toUpperCase()}
             </span>
           )}
           <div className="space-y-1.5">
@@ -157,11 +157,11 @@ export default function Profile() {
               />
             </div>
             <div>
+              {/* Optional, as at sign-up: one name is a whole name. */}
               <label className="label text-xs" htmlFor="p-last">Last name</label>
               <input
                 id="p-last"
                 className="input input-bordered w-full"
-                required
                 maxLength={100}
                 value={form.last_name}
                 onChange={(e) => setForm((f) => ({ ...f, last_name: e.target.value }))}
@@ -227,6 +227,11 @@ export default function Profile() {
           Closing the account erases your personal details — only anonymized
           invoices remain, as the law requires. Your password confirms it&rsquo;s
           really you.
+        </p>
+        <p className="mt-2 text-xs opacity-60">
+          Signed up with Facebook and never set a password? Use{" "}
+          <Link to="/forgot-password" className="link link-secondary">forgot password</Link>{" "}
+          to choose one first.
         </p>
         <div className="mt-4">
           <button

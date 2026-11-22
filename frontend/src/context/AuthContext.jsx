@@ -37,6 +37,26 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener("auth:logout", onForcedLogout);
   }, []);
 
+  // Signing in or out in one tab is signing in or out in all of them. The
+  // browser tells every *other* tab when the stored session changes; this
+  // one follows, instead of showing an account that is no longer there
+  // (or a login button to someone who just signed in next door).
+  useEffect(() => {
+    const onStorage = (event) => {
+      if (event.key !== null && event.key !== tokens.accessKey) return;
+      if (!tokens.access) {
+        setUser(null);
+        return;
+      }
+      client
+        .get("/auth/me")
+        .then(({ data }) => setUser(data))
+        .catch(() => {});
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
   const applyTokens = useCallback((data) => {
     tokens.save(data.access_token, data.refresh_token);
     setUser(data.user);

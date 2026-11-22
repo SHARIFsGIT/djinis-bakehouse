@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Ban,
   Copy,
+  Download,
   Eye,
   MailCheck,
   MailX,
@@ -9,11 +10,13 @@ import {
   Search,
   Send,
   TicketPercent,
+  Trash2,
 } from "lucide-react";
 import client, { apiError } from "../../api/client";
 import { formatDateTime, money } from "../../lib/format";
 import { useToast } from "../../context/ToastContext";
-import { Loading } from "../../components/Loading";
+import ConfirmDialog from "../../components/ConfirmDialog";
+import { LoadError, Loading } from "../../components/Loading";
 import Drawer from "../../components/Drawer";
 
 /* The desk's classification words and the measured loyalty tiers share a
@@ -338,6 +341,186 @@ function CampaignDrawer({ campaignId, onClose, onSent }) {
   );
 }
 
+const SIGNUPS_PER_PAGE = 25;
+
+/* The footer's sign-up list — addresses people typed in themselves to hear
+   about the weekend case. It is its own list: being on it is not the
+   campaign consent recorded per customer above, so campaigns never draw on
+   it, and it has its own export for whatever tool sends the newsletter. */
+function NewsletterList({ total, onChanged }) {
+  const toast = useToast();
+  const [rows, setRows] = useState(null);
+  const [failed, setFailed] = useState(false);
+  const [page, setPage] = useState(1);
+  const [removing, setRemoving] = useState(null);
+  const [removeBusy, setRemoveBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const seq = useRef(0);
+  const pages = Math.max(1, Math.ceil(total / SIGNUPS_PER_PAGE));
+
+  const load = (p = page) => {
+    const ticket = ++seq.current;
+    setFailed(false);
+    return client
+      .get("/admin/newsletter", { params: { page: p, per_page: SIGNUPS_PER_PAGE } })
+      .then(({ data }) => ticket === seq.current && setRows(data))
+      .catch(() => ticket === seq.current && setFailed(true));
+  };
+
+  useEffect(() => {
+    load(page);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
+
+  const remove = async () => {
+    if (removeBusy || !removing) return;
+    setRemoveBusy(true);
+    try {
+      await client.delete(`/admin/newsletter/${removing.id}`);
+      toast.info(`${removing.email} is off the list`);
+      setRemoving(null);
+      // The last row of the last page leaves an empty page behind — step back.
+      if (rows.length === 1 && page > 1) setPage(page - 1);
+      else await load(page);
+      onChanged();
+    } catch (err) {
+      toast.error(apiError(err));
+    } finally {
+      setRemoveBusy(false);
+    }
+  };
+
+  const exportCsv = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const res = await client.get("/admin/newsletter/export", { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "bakehouse-newsletter.csv";
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error(apiError(err, "Export failed"));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-display text-2xl font-semibold">
+          Newsletter sign-ups <span className="text-base font-normal opacity-50">· {total}</span>
+        </h2>
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          onClick={exportCsv}
+          disabled={exporting || total === 0}
+        >
+          <Download size={15} aria-hidden="true" />
+          {exporting ? "Preparing…" : "Export CSV"}
+        </button>
+      </div>
+      <p className="text-xs opacity-55">
+        Addresses typed into the footer&rsquo;s sign-up box. This is a separate list from campaign
+        consent — the campaigns above never mail it. The export is for your newsletter tool.
+      </p>
+
+      {failed && rows === null ? (
+        <LoadError message="The sign-up list didn't load." onRetry={() => load(page)} />
+      ) : rows === null ? (
+        <Loading label="Fetching the sign-ups…" />
+      ) : (
+        <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
+          <table className="table table-sm">
+            <thead>
+              <tr className="text-xs uppercase opacity-50">
+                <th>Email</th>
+                <th className="hidden sm:table-cell">Signed up</th>
+                <th className="hidden sm:table-cell">From</th>
+                <th>
+                  <span className="sr-only">Remove</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((s) => (
+                <tr key={s.id} className="hover:bg-base-200/50">
+                  <td className="text-sm break-all">{s.email}</td>
+                  <td className="hidden text-xs whitespace-nowrap opacity-70 sm:table-cell">
+                    {formatDateTime(s.created_at)}
+                  </td>
+                  <td className="hidden text-xs opacity-60 sm:table-cell">{s.source ?? "—"}</td>
+                  <td>
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs btn-square text-error"
+                        onClick={() => setRemoving(s)}
+                        aria-label={`Remove ${s.email} from the list`}
+                        title="Remove from the list"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="py-10 text-center text-sm opacity-60">
+                    Nobody has signed up yet — the box lives in the footer of every page.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {pages > 1 && (
+        <div className="flex items-center justify-center gap-3 text-xs">
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => setPage(page - 1)}
+            disabled={page <= 1}
+          >
+            Newer
+          </button>
+          <span className="opacity-60">
+            Page {page} of {pages}
+          </span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => setPage(page + 1)}
+            disabled={page >= pages}
+          >
+            Older
+          </button>
+        </div>
+      )}
+
+      {removing && (
+        <ConfirmDialog
+          title="Take this address off the list?"
+          confirmLabel="Yes, remove it"
+          busy={removeBusy}
+          onConfirm={remove}
+          onCancel={() => setRemoving(null)}
+        >
+          <span className="break-all font-semibold">{removing.email}</span> stops being on the
+          sign-up list. They can sign up again in the footer whenever they like.
+        </ConfirmDialog>
+      )}
+    </section>
+  );
+}
+
 const EMPTY_CAMPAIGN = { name: "", subject: "", body: "" };
 
 export default function Marketing() {
@@ -372,16 +555,29 @@ export default function Marketing() {
   const [mintBusy, setMintBusy] = useState(false);
   const [sendBusyId, setSendBusyId] = useState(null);
 
+  // Set when any of the desk's four lists refused to load — the page then
+  // says so and offers another go, instead of a loader that never ends.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const warned = useRef(false);
+
   const load = () => {
-    client.get("/admin/marketing/overview").then(({ data }) => setOverview(data)).catch((e) => toast.error(apiError(e)));
-    client.get("/admin/marketing/campaigns").then(({ data }) => setCampaigns(data)).catch((e) => toast.error(apiError(e)));
+    setLoadFailed(false);
+    warned.current = false;
+    const failed = (e) => {
+      setLoadFailed(true);
+      if (warned.current) return; // one toast for one bad connection, not four
+      warned.current = true;
+      toast.error(apiError(e));
+    };
+    client.get("/admin/marketing/overview").then(({ data }) => setOverview(data)).catch(failed);
+    client.get("/admin/marketing/campaigns").then(({ data }) => setCampaigns(data)).catch(failed);
     // Personal vouchers are coupons restricted to one account — the coupon
     // tin carries them with their honest redemption counts.
     client
       .get("/admin/coupons")
       .then(({ data }) => setVouchers(data.filter((c) => c.restricted_to_user_id != null)))
-      .catch((e) => toast.error(apiError(e)));
-    client.get("/admin/marketing/suppression").then(({ data }) => setSuppression(data)).catch((e) => toast.error(apiError(e)));
+      .catch(failed);
+    client.get("/admin/marketing/suppression").then(({ data }) => setSuppression(data)).catch(failed);
   };
 
   useEffect(() => {
@@ -516,7 +712,11 @@ export default function Marketing() {
   };
 
   if (campaigns === null || overview === null || vouchers === null || suppression === null) {
-    return <Loading label="Opening the marketing desk…" />;
+    return loadFailed ? (
+      <LoadError message="The marketing desk didn't load." onRetry={load} />
+    ) : (
+      <Loading label="Opening the marketing desk…" />
+    );
   }
 
   return (
@@ -954,6 +1154,9 @@ export default function Marketing() {
           </table>
         </div>
       </section>
+
+      {/* ----------------------------------------------- NEWSLETTER ---- */}
+      <NewsletterList total={overview.newsletter_subscribers ?? 0} onChanged={load} />
 
       {drawerId !== null && (
         <CampaignDrawer

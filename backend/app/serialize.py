@@ -131,3 +131,12 @@ def review_to_out(review: Review, verified_purchase: bool = False) -> ReviewOut:
         verified_purchase=verified_purchase,
         is_approved=review.is_approved,
     )
+
+
+def like_term(text: str) -> str:
+    """A person's search words as a LIKE pattern that matches them
+    literally. "%" and "_" typed into a search box are characters, not
+    wildcards — unescaped, a search for "100%" matched the whole catalog.
+    Use with `.ilike(term, escape="\\")`."""
+    escaped = text.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"

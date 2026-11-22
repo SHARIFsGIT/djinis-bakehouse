@@ -16,8 +16,8 @@ import logging
 from decimal import Decimal
 
 from . import ledger, paypal_gateway, stripe_gateway
-from .config import get_settings
 from .models import Order, PaymentMethod, PaymentRefund, PaymentStatus, PaymentTransaction
+from .security import site_base
 
 logger = logging.getLogger("bakery.payments")
 
@@ -122,8 +122,7 @@ def public_base(request) -> str:
     """The address providers send the customer back to: the shop's own
     configured public address when there is one, else the address this
     request arrived on (as it always was)."""
-    configured = get_settings().public_base_url.strip().rstrip("/")
-    return configured or str(request.base_url).rstrip("/")
+    return site_base(request)
 
 
 def open_pay_page(db, order: Order, base_url: str) -> str:

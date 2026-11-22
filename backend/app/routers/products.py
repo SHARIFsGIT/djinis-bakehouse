@@ -17,12 +17,16 @@ from ..schemas import (
     SortOption,
 )
 from ..notifications import notify_review
-from ..security import CurrentUser, DbSession, OptionalUser, client_key
-from ..serialize import product_to_card, review_summary, review_to_out, verified_buyers
+from ..security import CurrentUser, DbSession, OptionalUser, account_brake, client_key
+from ..serialize import (
+    like_term,
+    product_to_card,
+    review_summary,
+    review_to_out,
+    verified_buyers,
+)
 
 router = APIRouter(prefix="/api/products", tags=["products"])
-
-VALID_SORTS = [s.value for s in SortOption]
 
 
 @router.get("/categories", response_model=list[CategoryOut])
@@ -172,10 +176,13 @@ def list_products(
             raise HTTPException(status_code=404, detail="Category not found")
         query = query.where(Product.category_id == cat.id)
 
-    if search:
-        term = f"%{search.strip()}%"
+    if search and search.strip():
+        term = like_term(search)
         query = query.where(
-            or_(Product.name.ilike(term), Product.description.ilike(term))
+            or_(
+                Product.name.ilike(term, escape="\\"),
+                Product.description.ilike(term, escape="\\"),
+            )
         )
 
     effective_price = func.coalesce(Product.sale_price, Product.price)
@@ -271,6 +278,10 @@ def product_detail(slug: str, db: DbSession, user: OptionalUser):
                 Product.id != product.id,
                 Product.is_available.is_(True),
             )
+            # In stock first, then newest — and always the same four: with
+            # no order at all the database was free to pick differently on
+            # every visit.
+            .order_by((Product.stock > 0).desc(), Product.created_at.desc(), Product.id.desc())
             .limit(4)
         ).all()
         related_ratings = review_summary(db, [p.id for p in related])
@@ -285,6 +296,7 @@ def add_review(
     payload: ReviewCreate,
     user: CurrentUser,
     db: DbSession,
+    request: Request,
     response: Response,
     background: BackgroundTasks,
 ):
@@ -293,8 +305,13 @@ def add_review(
     Either way the baker's bell rings — a changed review deserves a second
     look as much as a fresh one."""
     product = db.get(Product, product_id)
-    if product is None:
+    if product is None or not product.is_available:
         raise HTTPException(status_code=404, detail="Product not found")
+    # Every review (and every edit of one) emails the desk — so an account
+    # gets a handful an hour, not a script's worth.
+    account_brake(
+        request, "reviews", user, "That's a lot of reviews in one hour — try again a little later."
+    )
 
     review = db.scalar(
         select(Review).where(Review.product_id == product_id, Review.user_id == user.id)

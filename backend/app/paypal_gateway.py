@@ -64,9 +64,6 @@ WEBHOOK_EVENTS = (
     "CUSTOMER.DISPUTE.RESOLVED",
 )
 
-# PayPal order states in which the customer can still approve the payment.
-AWAITING_APPROVAL = ("CREATED", "SAVED", "PAYER_ACTION_REQUIRED")
-
 
 class GatewayUnavailable(Exception):
     """PayPal could not be reached, or answered with a server error — no

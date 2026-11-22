@@ -8,6 +8,7 @@ next — password resets today, newsletters and marketing later.
 
 import logging
 import smtplib
+import ssl
 from email.message import EmailMessage
 from html import escape
 
@@ -29,9 +30,39 @@ def _one_line(value: str) -> str:
     return " ".join(str(value).split())
 
 
-def send_email(to: str, subject: str, html: str, text: str) -> None:
+# Where a closed account's address is parked (routers/auth.delete_my_account
+# rewrites the email to deleted-account-<id>@ this domain). Nobody reads
+# mail there, so nothing is ever sent to it.
+DELETED_ACCOUNT_DOMAIN = "deleted.djinisbakehouse.com"
+
+
+def _deliverable(to: str) -> str:
+    """The recipients worth writing to: `to` (one address, or several
+    comma-separated) without any closed account's parked address."""
+    kept = [
+        address.strip()
+        for address in str(to or "").split(",")
+        if address.strip() and not address.strip().lower().endswith("@" + DELETED_ACCOUNT_DOMAIN)
+    ]
+    return ", ".join(kept)
+
+
+def send_email(to: str, subject: str, html: str, text: str) -> bool:
+    """Send one message. True when it was handed to the mail server (or,
+    with no server configured, written to the log in its place); False when
+    it was not sent — nobody left to send it to, or the mail server refused.
+
+    Never raises: a mail outage must not take down the request or the
+    background task that sends this. Callers that keep a record of what was
+    delivered (campaigns) read the answer; everyone else may ignore it."""
     settings = get_settings()
     subject = _one_line(subject)
+    to = _deliverable(to)
+    if not to:
+        # An order update or receipt for an account that has since been
+        # closed — there is no mailbox behind it any more.
+        logger.info("email not sent — the account behind it was closed (%s)", subject)
+        return False
     if not settings.smtp_host:
         logger.warning(
             "SMTP_HOST is not set — email to %s logged, not sent", to,
@@ -43,7 +74,7 @@ def send_email(to: str, subject: str, html: str, text: str) -> None:
             logger.info("email to %s | %s (body withheld in production)", to, subject)
         else:
             logger.info("email to %s | %s\n%s", to, subject, text)
-        return
+        return True
 
     message = EmailMessage()
     message["From"] = settings.smtp_from
@@ -51,16 +82,26 @@ def send_email(to: str, subject: str, html: str, text: str) -> None:
     message["Subject"] = subject
     message.set_content(text)
     message.add_alternative(html, subtype="html")
+    # The server's certificate is checked, always: without that, whoever
+    # sits between the shop and its mail provider could read the password.
+    context = ssl.create_default_context()
     try:
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as server:
-            server.starttls()
+        if settings.smtp_port == 465:
+            # Port 465 speaks TLS from the first byte (no STARTTLS upgrade).
+            server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=15, context=context)
+        else:
+            server = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15)
+        with server:
+            if settings.smtp_port != 465:
+                server.starttls(context=context)
             if settings.smtp_user:
                 server.login(settings.smtp_user, settings.smtp_password)
             server.send_message(message)
     except Exception:
-        # A mail outage must never take down the request (or the background
-        # task that sends this) — say it loud in the log instead.
+        # Said loud in the log instead of raised (see the docstring).
         logger.exception("sending email to %s failed (subject: %s)", to, subject)
+        return False
+    return True
 
 
 def reset_password_email(first_name: str, link: str, minutes: int) -> tuple[str, str, str]:

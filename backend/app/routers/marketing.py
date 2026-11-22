@@ -3,11 +3,12 @@ catering leads and the voucher board."""
 
 import csv
 import io
-from datetime import date, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from ..models import (
     DEFAULT_ANNOUNCEMENT,
@@ -34,9 +35,17 @@ from ..config import get_settings
 from ..database import utcnow
 from ..email import bulk_enquiry_ack_email, send_email
 from ..notifications import notify_admin
-from ..security import CurrentAdmin, DbSession, OptionalUser, client_key
+from ..security import CurrentAdmin, DbSession, OptionalUser, client_key, site_base
 from ..serialize import csv_safe
-from .. import facebook_gateway, payment_ops, paypal_gateway, sms_gateway, stripe_gateway
+from ..delivery import parse_area
+from .. import (
+    facebook_gateway,
+    payment_ops,
+    paypal_gateway,
+    shoptime,
+    sms_gateway,
+    stripe_gateway,
+)
 
 router = APIRouter(prefix="/api", tags=["storefront"])
 
@@ -90,12 +99,29 @@ def storefront(db: DbSession):
         opening_hours=settings.opening_hours,
         # The baker's brand pick, or None for the shipped burgundy
         brand_color=settings.brand_color,
+        legal_notice_published=bool((settings.legal_notice or "").strip()),
+        delivery_postal_codes=parse_area(settings.delivery_postal_codes),
         # The money rules behind every basket estimate the storefront quotes.
         currency=chargeable_currency,
         tax_rate=get_settings().tax_rate,
         shipping_fee=get_settings().shipping_fee,
         free_shipping_threshold=get_settings().free_shipping_threshold,
     )
+
+
+@router.get("/legal-notice")
+def legal_notice(db: DbSession):
+    """The shop's legal notice (its "Impressum") as the baker published it,
+    with the contact lines from Settings beside it. `text` is null until
+    one is published — the page then says so instead of inventing one."""
+    settings = get_store_setting(db)
+    return {
+        "text": (settings.legal_notice or "").strip() or None,
+        "contact_address": settings.contact_address,
+        "contact_phone": settings.contact_phone,
+        "contact_email": settings.contact_email,
+        "updated_at": settings.updated_at,
+    }
 
 
 @router.post("/newsletter", response_model=NewsletterResponse, status_code=status.HTTP_201_CREATED)
@@ -113,7 +139,14 @@ def subscribe(payload: NewsletterRequest, db: DbSession, request: Request, respo
         return NewsletterResponse(email=email, already_subscribed=True)
 
     db.add(Subscriber(email=email, source=payload.source))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # The same address signed up twice at the same instant (a double
+        # tap) — the other request wrote it first. Still just enthusiasm.
+        db.rollback()
+        response.status_code = status.HTTP_200_OK
+        return NewsletterResponse(email=email, already_subscribed=True)
     return NewsletterResponse(email=email, already_subscribed=False)
 
 
@@ -131,12 +164,13 @@ def create_bulk_enquiry(
     if not limiter.allow(client_key(request)):
         raise HTTPException(status_code=429, detail="That's a few too many enquiries. Try again shortly.")
 
-    if payload.event_date < date.today() + timedelta(days=1):
+    today = shoptime.shop_today()  # the shop's own date, not the server's
+    if payload.event_date < today + timedelta(days=1):
         raise HTTPException(
             status_code=400,
             detail="Give us at least a day's notice — pick a date from tomorrow onward",
         )
-    if payload.event_date > date.today() + timedelta(days=365):
+    if payload.event_date > today + timedelta(days=365):
         raise HTTPException(status_code=400, detail="That date is a little far ahead — talk to us closer to the time")
 
     enquiry = BulkEnquiry(
@@ -198,7 +232,8 @@ def public_vouchers(user: OptionalUser, db: DbSession):
     )
     now = utcnow()
     coupons = [c for c in coupons if not (c.expires_at is not None and c.expires_at <= now)]
-    coupons = [c for c in coupons if c.code not in _fully_redeemed_codes(db, coupons)]
+    spent = _fully_redeemed_codes(db, coupons)  # one query, not one per code
+    coupons = [c for c in coupons if c.code not in spent]
     if user is not None:
         used = set(
             db.scalars(
@@ -252,6 +287,18 @@ def list_subscribers(
     )
 
 
+@router.delete("/admin/newsletter/{subscriber_id}")
+def remove_subscriber(subscriber_id: int, admin: CurrentAdmin, db: DbSession):
+    """Take one address off the sign-up list — how "please remove me",
+    said by reply or at the counter, is honoured."""
+    subscriber = db.get(Subscriber, subscriber_id)
+    if subscriber is None:
+        raise HTTPException(status_code=404, detail="That address is not on the list")
+    db.delete(subscriber)
+    db.commit()
+    return {"message": "Removed from the list"}
+
+
 @router.get("/admin/newsletter/export")
 def export_subscribers(admin: CurrentAdmin, db: DbSession):
     """CSV of the mailing list, newest first — for the newsletter tool."""
@@ -261,7 +308,11 @@ def export_subscribers(admin: CurrentAdmin, db: DbSession):
     for s in db.scalars(select(Subscriber).order_by(Subscriber.created_at.desc())):
         # Both text columns come from the public signup form (csv_safe).
         writer.writerow(
-            [csv_safe(s.email), s.created_at.strftime("%Y-%m-%d %H:%M"), csv_safe(s.source or "")]
+            [
+                csv_safe(s.email),
+                shoptime.in_shop_time(s.created_at).strftime("%Y-%m-%d %H:%M"),
+                csv_safe(s.source or ""),
+            ]
         )
     return StreamingResponse(
         iter([buffer.getvalue()]),
@@ -480,6 +531,7 @@ def marketing_overview(admin: CurrentAdmin, db: DbSession):
         voucher_percent_cap=cap["percent"] if cap else None,
         voucher_fixed_cap=float(cap["fixed_amount"]) if cap else None,
         costed_products=cap["costed_products"] if cap else 0,
+        newsletter_subscribers=db.scalar(select(func.count(Subscriber.id))) or 0,
     )
 
 
@@ -596,13 +648,21 @@ def _deliver_campaign(campaign_id: int, base_url: str) -> None:
                 }
             )
             try:
-                send_email(user.email, subject, html, text)
+                delivered = send_email(user.email, subject, html, text)
+            except Exception:
+                delivered = False
+            if delivered:
                 delivery.status = "sent"
                 sent += 1
-            except Exception:
+            else:
+                # The mail server refused it (send_email says so rather
+                # than raising) — "sent" is only ever what was handed over.
                 delivery.status = "failed"
                 delivery.reason = "send failed — see the application log"
                 failed += 1
+            # Written down one at a time: a restart halfway through leaves
+            # an honest ledger of who was reached, not a blank one.
+            db.commit()
         campaign.sent_count = (campaign.sent_count or 0) + sent
         campaign.failed_count = (campaign.failed_count or 0) + failed
         campaign.status = "sent"
@@ -788,7 +848,7 @@ def _send_campaign_row(db: DbSession, campaign: MarketingCampaign, background: B
     campaign.recipient_count = len(sendable)
     campaign.suppressed_count = len(held)
     db.commit()
-    background.add_task(_deliver_campaign, campaign.id, str(request.base_url))
+    background.add_task(_deliver_campaign, campaign.id, site_base(request))
     db.refresh(campaign)
     return _campaign_out(db, campaign)
 

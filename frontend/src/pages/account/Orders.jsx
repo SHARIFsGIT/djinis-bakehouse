@@ -1,27 +1,32 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import client from "../../api/client";
+import client, { apiError } from "../../api/client";
 import { formatDate, money, ORDER_STATUSES, statusBadge, statusLabel } from "../../lib/format";
 import EmptyState from "../../components/EmptyState";
-import { Loading } from "../../components/Loading";
+import { LoadError, Loading } from "../../components/Loading";
 
 export default function Orders() {
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(1);
   const [data, setData] = useState(null);
+  const [failed, setFailed] = useState(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     setData(null);
+    setFailed(null);
     let stale = false;
     const query = { per_page: 10, page };
     if (status) query.status = status;
     client
       .get("/orders", { params: query })
-      .then(({ data }) => !stale && setData(data));
+      .then(({ data }) => !stale && setData(data))
+      // Never a loader that spins forever: say it failed, offer another go.
+      .catch((e) => !stale && setFailed(apiError(e, "Your orders didn't load.")));
     return () => {
       stale = true;
     };
-  }, [status, page]);
+  }, [status, page, attempt]);
 
   const changeStatus = (value) => {
     setStatus(value);
@@ -50,7 +55,9 @@ export default function Orders() {
         ))}
       </div>
 
-      {data === null ? (
+      {failed ? (
+        <LoadError message={failed} onRetry={() => setAttempt((n) => n + 1)} />
+      ) : data === null ? (
         <Loading label="Checking the order book…" />
       ) : data.orders.length === 0 ? (
         <EmptyState title="No orders here yet" hint="Once you order, every box gets tracked on this shelf.">

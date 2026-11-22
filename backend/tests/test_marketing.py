@@ -981,3 +981,51 @@ def live_user_id() -> int:
         ) or 1
     finally:
         db.close()
+
+
+def test_a_campaign_email_the_mail_server_refuses_is_recorded_as_failed(monkeypatch):
+    """send_email reports a refusal instead of raising. The delivery ledger
+    used to wait for an exception that never came — and wrote "sent"
+    against every email the mail server had turned away."""
+    from app.routers import marketing as marketing_router
+
+    _, lucky_id = register_with_id(f"mkt.delivered{DOMAIN}")
+    _, unlucky_id = register_with_id(f"mkt.refused{DOMAIN}")
+    for user_id in (lucky_id, unlucky_id):
+        grant_consent(user_id)
+        set_classification(user_id, "regular")
+    headers = admin_headers()
+
+    def picky_mail_server(to, subject, html, text):
+        return "refused" not in to  # False = it did not leave
+
+    monkeypatch.setattr(marketing_router, "send_email", picky_mail_server)
+    created = client.post(
+        "/api/admin/marketing/campaigns",
+        json={"name": "Regulars", "subject": "News", "body": "Hi {{first_name}}",
+              "segment": {"classifications": ["regular"]}},
+        headers=headers,
+    ).json()
+    assert client.post(f"/api/admin/marketing/campaigns/{created['id']}/send", headers=headers).status_code == 200
+
+    detail = client.get(f"/api/admin/marketing/campaigns/{created['id']}", headers=headers).json()
+    by_email = {row["email"]: row["status"] for row in detail["deliveries"]}
+    assert by_email[f"mkt.delivered{DOMAIN}"] == "sent"
+    assert by_email[f"mkt.refused{DOMAIN}"] == "failed"
+    assert (detail["sent_count"], detail["failed_count"]) == (1, 1)
+
+
+def test_the_voucher_board_asks_the_order_book_once_not_once_per_code(monkeypatch):
+    from app.routers import marketing as marketing_router
+
+    calls = []
+    real = marketing_router._fully_redeemed_codes
+
+    def counting(db, coupons):
+        calls.append(len(coupons))
+        return real(db, coupons)
+
+    monkeypatch.setattr(marketing_router, "_fully_redeemed_codes", counting)
+    board = client.get("/api/coupons")
+    assert board.status_code == 200 and len(board.json()) >= 2
+    assert len(calls) == 1

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import client, { apiError } from "../../api/client";
 import { useToast } from "../../context/ToastContext";
+import ConfirmDialog from "../../components/ConfirmDialog";
 import EmptyState from "../../components/EmptyState";
-import { Loading } from "../../components/Loading";
+import { LoadError, Loading } from "../../components/Loading";
 
 const EMPTY_FORM = {
   label: "Home",
@@ -17,27 +18,41 @@ const EMPTY_FORM = {
   is_default: false,
 };
 
+/* [key, label, required, grid span, placeholder, autocomplete, max length].
+   The lengths are the server's own (schemas.AddressBase) — the box stops
+   where the API would, instead of letting a long line be typed and then
+   refused. Autocomplete tokens let the browser offer the customer's saved
+   address in one tap. */
 const FIELDS = [
-  ["label", "Label (Home, Work…)", true, "", ""],
-  ["recipient", "Recipient name", true, "", ""],
-  ["phone", "Phone", false, "", ""],
-  ["line1", "Street address", true, "sm:col-span-2", ""],
-  ["line2", "Apartment, suite… (optional)", false, "sm:col-span-2", ""],
-  ["city", "City", true, "", ""],
-  ["state", "State", true, "", ""],
-  ["postal_code", "ZIP / postal code", true, "", ""],
+  ["label", "Label (Home, Work…)", true, "", "", "off", 50],
+  ["recipient", "Recipient name", true, "", "", "name", 150],
+  ["phone", "Phone", false, "", "", "tel", 30],
+  ["line1", "Street address", true, "sm:col-span-2", "", "address-line1", 255],
+  ["line2", "Apartment, suite… (optional)", false, "sm:col-span-2", "", "address-line2", 255],
+  ["city", "City", true, "", "", "address-level2", 100],
+  ["state", "State / region", true, "", "", "address-level1", 100],
+  ["postal_code", "Postal code", true, "", "", "postal-code", 20],
   // No default country — the customer writes where they actually live,
   // nothing is pre-filled on their behalf.
-  ["country", "Country", true, "", "Germany"],
+  ["country", "Country", true, "", "Germany", "country-name", 100],
 ];
 
 export default function Addresses() {
   const toast = useToast();
   const [addresses, setAddresses] = useState(null);
+  const [failed, setFailed] = useState(null);
   const [editing, setEditing] = useState(null); // null | {} (new) | address (edit)
   const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(null); // the address awaiting a yes
+  const [removeBusy, setRemoveBusy] = useState(false);
 
-  const load = () => client.get("/auth/addresses").then(({ data }) => setAddresses(data));
+  const load = () => {
+    setFailed(null);
+    return client
+      .get("/auth/addresses")
+      .then(({ data }) => setAddresses(data))
+      .catch((e) => setFailed(apiError(e, "Your address book didn't load.")));
+  };
 
   useEffect(() => {
     load();
@@ -45,7 +60,7 @@ export default function Addresses() {
 
   const setDefault = async (address) => {
     try {
-      await client.put(`/auth/addresses/${address.id}`, { ...address, is_default: true });
+      await client.put(`/auth/addresses/${address.id}`, { is_default: true });
       await load();
       toast.success(`“${address.label}” is now your default`);
     } catch (err) {
@@ -53,18 +68,24 @@ export default function Addresses() {
     }
   };
 
-  const remove = async (address) => {
+  const remove = async () => {
+    if (removeBusy || !removing) return;
+    setRemoveBusy(true);
     try {
-      await client.delete(`/auth/addresses/${address.id}`);
+      await client.delete(`/auth/addresses/${removing.id}`);
       await load();
-      toast.info(`Removed “${address.label}”`);
+      toast.info(`Removed “${removing.label}”`);
+      setRemoving(null);
     } catch (err) {
       toast.error(apiError(err));
+    } finally {
+      setRemoveBusy(false);
     }
   };
 
   const save = async (e) => {
     e.preventDefault();
+    if (busy) return;
     setBusy(true);
     try {
       if (editing.id) {
@@ -83,6 +104,7 @@ export default function Addresses() {
     }
   };
 
+  if (failed && addresses === null) return <LoadError message={failed} onRetry={load} />;
   if (addresses === null) return <Loading label="Fetching your address book…" />;
 
   return (
@@ -107,14 +129,18 @@ export default function Addresses() {
             {editing.id ? `Edit “${editing.form.label}”` : "New address"}
           </p>
           <div className="grid gap-3 sm:grid-cols-2">
-            {FIELDS.map(([key, label, required, span, placeholder]) => (
+            {FIELDS.map(([key, label, required, span, placeholder, autoComplete, maxLength]) => (
               <div key={key} className={span}>
-                <label className="label text-xs">{label}</label>
+                {/* Tied to its input by id — a screen reader announces the
+                    field, and a tap on the label focuses it. */}
+                <label className="label text-xs" htmlFor={`book-${key}`}>{label}</label>
                 <input
+                  id={`book-${key}`}
                   className="input input-bordered w-full"
                   required={required}
-                  maxLength={key === "label" ? 50 : 255}
+                  maxLength={maxLength}
                   placeholder={placeholder}
+                  autoComplete={autoComplete}
                   value={editing.form[key] ?? ""}
                   onChange={(e) =>
                     setEditing((s) => ({ ...s, form: { ...s.form, [key]: e.target.value } }))
@@ -173,6 +199,7 @@ export default function Addresses() {
                   type="button"
                   className="btn btn-ghost btn-xs"
                   onClick={() => setEditing({ id: a.id, form: { ...a } })}
+                  aria-label={`Edit the address “${a.label}”`}
                 >
                   Edit
                 </button>
@@ -184,7 +211,8 @@ export default function Addresses() {
                 <button
                   type="button"
                   className="btn btn-ghost btn-xs text-error"
-                  onClick={() => remove(a)}
+                  onClick={() => setRemoving(a)}
+                  aria-label={`Remove the address “${a.label}”`}
                 >
                   Remove
                 </button>
@@ -192,6 +220,20 @@ export default function Addresses() {
             </div>
           ))}
         </div>
+      )}
+
+      {removing && (
+        <ConfirmDialog
+          title={`Remove “${removing.label}”?`}
+          confirmLabel="Yes, remove it"
+          cancelLabel="Keep it"
+          busy={removeBusy}
+          onConfirm={remove}
+          onCancel={() => setRemoving(null)}
+        >
+          {removing.line1}, {removing.postal_code} {removing.city}. Orders already placed keep
+          their own copy of the address — only your book changes.
+        </ConfirmDialog>
       )}
     </div>
   );

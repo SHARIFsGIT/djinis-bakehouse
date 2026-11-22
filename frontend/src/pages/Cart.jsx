@@ -11,7 +11,7 @@ import { useCart } from "../context/CartContext";
 import { useToast } from "../context/ToastContext";
 import useBasketQuote from "../hooks/useBasketQuote";
 import { getStoredCoupon, storeCoupon } from "../lib/coupon";
-import { money, shopConfig, taxLabel } from "../lib/format";
+import { MAX_LINE_QUANTITY, money, shopConfig, taxLabel } from "../lib/format";
 
 /** One live voucher: the saving it offers and whether this basket earns it. */
 function VoucherCard({ voucher, subtotal, applied, onApply, onRemove }) {
@@ -191,6 +191,15 @@ export default function Cart() {
   const progress =
     freeThreshold != null ? Math.min(100, (hintSubtotal / freeThreshold) * 100) : null;
 
+  // A line the shelf can't honour any more (sold out, taken off the menu,
+  // fewer left than asked for): the server names it, and the basket offers
+  // the fix right there instead of "check the items".
+  const refusal = quoteState.status === "error" ? quoteState.error?.response?.headers : null;
+  const refused = refusal
+    ? items.find((i) => i.product_id === Number(refusal["x-basket-product"]))
+    : null;
+  const refusedLeft = refused ? Number(refusal["x-basket-available"]) || 0 : 0;
+
   const inCart = new Set(items.map((i) => i.product_id));
   const picks = bestRated
     .filter((p) => p.is_available && p.stock > 0 && !inCart.has(p.id))
@@ -236,17 +245,24 @@ export default function Cart() {
                 <p className="text-sm opacity-60">
                   {money(item.unit_price)} each
                 </p>
-                {item.stock <= 5 && (
-                  <p className="text-xs font-semibold text-secondary">
-                    Only {item.stock} in stock
+                {refused?.product_id === item.product_id ? (
+                  <p className="text-xs font-semibold text-error">
+                    {refusedLeft > 0 ? `Only ${refusedLeft} left` : "Not available right now"}
                   </p>
+                ) : (
+                  item.stock > 0 &&
+                  item.stock <= 5 && (
+                    <p className="text-xs font-semibold text-secondary">
+                      Only {item.stock} in stock
+                    </p>
+                  )
                 )}
               </div>
               <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-end sm:gap-4">
                 <QuantityInput
                   value={item.quantity}
                   onChange={(q) => setQuantity(item.product_id, q)}
-                  max={item.stock || 99}
+                  max={Math.min(item.stock || MAX_LINE_QUANTITY, MAX_LINE_QUANTITY)}
                 />
                 <p className="text-right font-bold sm:w-20">
                   {money(quoteLines.get(item.product_id)?.line_total ?? item.unit_price * item.quantity)}
@@ -401,12 +417,40 @@ export default function Cart() {
           ) : quoteState.status === "error" ? (
             <div className="dash-divider mt-5 pt-5">
               <div className="alert alert-warning text-sm" role="alert">
-                <span>
-                  {apiError(quoteState.error, "This basket can't be priced right now")}
-                  {/* A pause is the shop's own doing — its message already
-                      says what's wrong; item-checking advice would not. */}
-                  {!checkoutPaused(quoteState.error) && " — check the items and try again."}
-                </span>
+                {refused ? (
+                  <span>
+                    <p>
+                      {refusedLeft > 0
+                        ? `Only ${refusedLeft} left of ${refused.name}.`
+                        : `${refused.name} can't be ordered right now.`}
+                    </p>
+                    <span className="mt-2 flex flex-wrap gap-2">
+                      {refusedLeft > 0 && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-xs text-secondary-content"
+                          onClick={() => setQuantity(refused.product_id, refusedLeft, refusedLeft)}
+                        >
+                          Take the {refusedLeft} that {refusedLeft === 1 ? "is" : "are"} left
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={() => remove(refused.product_id)}
+                      >
+                        Remove it from the basket
+                      </button>
+                    </span>
+                  </span>
+                ) : (
+                  <span>
+                    {apiError(quoteState.error, "This basket can't be priced right now")}
+                    {/* A pause is the shop's own doing — its message already
+                        says what's wrong; item-checking advice would not. */}
+                    {!checkoutPaused(quoteState.error) && " — check the items and try again."}
+                  </span>
+                )}
               </div>
             </div>
           ) : (
@@ -442,8 +486,12 @@ export default function Cart() {
             </div>
           )}
 
+          {/* The way back rides in router state — that is where the login
+              page looks for it (it used to be a ?from= the page never read,
+              and a guest who logged in to pay landed on the home page). */}
           <Link
-            to={user ? "/checkout" : "/login?from=/checkout"}
+            to={user ? "/checkout" : "/login"}
+            state={user ? undefined : { from: "/checkout" }}
             className="btn btn-primary btn-lg mt-6 w-full"
           >
             {user ? "Checkout" : "Log in to checkout"}

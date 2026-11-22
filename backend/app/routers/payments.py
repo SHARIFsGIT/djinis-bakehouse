@@ -54,7 +54,7 @@ from ..routers.orders import (
     refund_payment_on_cancelled_order,
 )
 from ..schemas import OrderDetailOut
-from ..security import CurrentUser, DbSession
+from ..security import CurrentUser, DbSession, account_brake
 
 logger = logging.getLogger("bakery.payments")
 
@@ -1265,8 +1265,13 @@ def reconcile_stale_card_orders() -> None:
 # The customer's side
 # --------------------------------------------------------------------------
 
+_PAYMENT_BRAKE = "Too many payment checks in a row — wait a moment and try again."
+
+
 @router.post("/confirm/{order_id}", response_model=OrderDetailOut)
-def confirm_payment(order_id: int, user: CurrentUser, db: DbSession, background: BackgroundTasks):
+def confirm_payment(
+    order_id: int, user: CurrentUser, db: DbSession, background: BackgroundTasks, request: Request
+):
     """The customer is back from the pay page: reconcile the order with its
     provider right now, so what they read next is true even when the
     webhook is still in flight. For PayPal this is also where the approved
@@ -1278,6 +1283,8 @@ def confirm_payment(order_id: int, user: CurrentUser, db: DbSession, background:
     """
     order = _get_order_for(order_id, user, db)
     if order.payment_status == PaymentStatus.PENDING.value and ledger.provider_for(order):
+        # Each check is a call to the provider — braked per account.
+        account_brake(request, "payment_actions", user, _PAYMENT_BRAKE)
         try:
             reconcile_order(order, background, db)
         except (stripe_gateway.GatewayUnavailable, paypal_gateway.GatewayUnavailable):
@@ -1313,6 +1320,7 @@ def new_payment_session(
     provider = ledger.provider_for(order)
     if provider is None:
         raise HTTPException(status_code=400, detail="This order isn't paid online")
+    account_brake(request, "payment_actions", user, _PAYMENT_BRAKE)
     if order.status == OrderStatus.CANCELLED.value or order.payment_status != PaymentStatus.PENDING.value:
         raise HTTPException(status_code=400, detail="This order has no payment to complete")
     if not payment_ops.available(order.payment_method):

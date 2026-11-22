@@ -19,6 +19,10 @@ python-multipart>=0.0.9
 # (PayPal needs no package: app/paypal_gateway.py speaks its REST API with
 # the standard library.)
 stripe>=16.1,<17
+# The IANA time zone database for SHOP_TIMEZONE (app/shoptime.py). Linux
+# hosts usually carry their own copy; Windows and slim containers do not —
+# with this installed the shop's clock is right everywhere.
+tzdata>=2024.1
 # Postgres driver for production DATABASE_URLs (dev uses SQLite; the
 # psycopg3 dialect is what postgres:// URLs are normalized to in config.py)
 psycopg[binary]>=3.1

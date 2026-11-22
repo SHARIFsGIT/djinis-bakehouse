@@ -6,6 +6,7 @@ import { ProductGridSkeleton } from "../components/Loading";
 import PhotoTile from "../components/PhotoTile";
 import ProductCard from "../components/ProductCard";
 import { money, productInitial, shopConfig } from "../lib/format";
+import { fetchStore } from "../lib/store";
 import {
   DEFAULT_HERO_IMAGE as DEFAULT_HERO,
   cacheHeroImage,
@@ -121,9 +122,8 @@ export default function Home() {
       .get("/products/featured", { params: { limit: 8 } })
       .then(({ data }) => setFeatured(data))
       .catch(() => setFeatured([]));
-    client
-      .get("/store")
-      .then(({ data }) => {
+    fetchStore()
+      .then((data) => {
         setTodayNote(data.today_note);
         setHeroImage(data.hero_image || DEFAULT_HERO);
         cacheHeroImage(data.hero_image || null);

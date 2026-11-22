@@ -182,9 +182,13 @@ class _FakeSMTP:
     """Just enough of smtplib.SMTP to catch what would have been sent."""
 
     sent: list = []
+    # How each connection was secured: ("starttls" | "implicit", verified?)
+    secured: list = []
 
-    def __init__(self, host, port, timeout=None):
-        pass
+    def __init__(self, host, port, timeout=None, context=None):
+        self.port = port
+        if context is not None:  # SMTP_SSL: TLS from the first byte
+            _FakeSMTP.secured.append(("implicit", context.verify_mode.name == "CERT_REQUIRED"))
 
     def __enter__(self):
         return self
@@ -192,8 +196,10 @@ class _FakeSMTP:
     def __exit__(self, *exc):
         return False
 
-    def starttls(self):
-        pass
+    def starttls(self, context=None):
+        _FakeSMTP.secured.append(
+            ("starttls", context is not None and context.verify_mode.name == "CERT_REQUIRED")
+        )
 
     def login(self, user, password):
         pass
@@ -661,3 +667,686 @@ def test_a_product_edit_keeps_sales_made_while_the_form_was_open():
         f"/api/admin/products/{created['id']}", headers=admin, json=_product_form(opened, stock=7)
     )
     assert absolute.json()["stock"] == 7
+
+
+# --------------------------------------------------------------------------
+# Mail: what "sent" means, and who is never written to
+# --------------------------------------------------------------------------
+
+def test_the_mail_server_is_always_asked_for_a_certificate_on_either_port(monkeypatch):
+    """Port 587 upgrades with STARTTLS, port 465 speaks TLS from the first
+    byte — and on both the server's certificate is checked, or whoever sits
+    in between could read the shop's mail password."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "smtp_host", "smtp.test.invalid")
+    monkeypatch.setattr(email_module.smtplib, "SMTP", _FakeSMTP)
+    monkeypatch.setattr(email_module.smtplib, "SMTP_SSL", _FakeSMTP)
+    _FakeSMTP.sent, _FakeSMTP.secured = [], []
+
+    monkeypatch.setattr(settings, "smtp_port", 587)
+    assert email_module.send_email("a@example.com", "Hello", "<p>hi</p>", "hi") is True
+    monkeypatch.setattr(settings, "smtp_port", 465)
+    assert email_module.send_email("a@example.com", "Hello", "<p>hi</p>", "hi") is True
+
+    assert _FakeSMTP.secured == [("starttls", True), ("implicit", True)]
+    assert len(_FakeSMTP.sent) == 2
+
+
+def test_send_email_says_whether_the_message_left(monkeypatch, caplog):
+    settings = get_settings()
+
+    class _Refusing(_FakeSMTP):
+        def send_message(self, message):
+            raise OSError("550 mailbox unavailable")
+
+    monkeypatch.setattr(settings, "smtp_host", "smtp.test.invalid")
+    monkeypatch.setattr(email_module.smtplib, "SMTP", _Refusing)
+    with caplog.at_level(logging.ERROR, logger="bakery.email"):
+        assert email_module.send_email("a@example.com", "Hello", "<p>hi</p>", "hi") is False
+    assert "sending email to a@example.com failed" in caplog.text  # loud, but never raised
+
+    # with no mail server at all (dev), the log is the delivery
+    monkeypatch.setattr(settings, "smtp_host", "")
+    assert email_module.send_email("a@example.com", "Hello", "<p>hi</p>", "hi") is True
+
+
+def test_nothing_is_ever_mailed_to_a_closed_accounts_parked_address(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "smtp_host", "smtp.test.invalid")
+    monkeypatch.setattr(email_module.smtplib, "SMTP", _FakeSMTP)
+    _FakeSMTP.sent = []
+    parked = f"deleted-account-7@{email_module.DELETED_ACCOUNT_DOMAIN}"
+
+    assert email_module.send_email(parked, "Your order moved", "<p>x</p>", "x") is False
+    assert _FakeSMTP.sent == []
+
+    # among several recipients, only the parked one is dropped
+    assert email_module.send_email(f"desk@example.com, {parked}", "Desk ping", "<p>x</p>", "x") is True
+    assert [m["To"] for m in _FakeSMTP.sent] == ["desk@example.com"]
+
+
+def test_an_order_update_for_a_closed_account_goes_nowhere(caplog):
+    """The customer closed their account while a box was on its way. The
+    order is still delivered from its own address snapshot — but there is
+    no mailbox left to write to."""
+    token = api.register_and_login("closing-mid-order@hardening.example.com", "Closing123!")
+    headers = auth_header(token)
+    api._top_up_stock("butter-croissant")
+    api._top_up_stock("beef-curry-puff")
+    order = client.post(
+        "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
+    ).json()
+    assert client.post("/api/auth/me/delete", json={"password": "Closing123!"}, headers=headers).status_code == 200
+
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        moved = client.put(
+            f"/api/admin/orders/{order['id']}/status", json={"status": "confirmed"}, headers=admin_headers()
+        )
+    assert moved.status_code == 200
+    assert "deleted-account-" not in caplog.text.replace("the account behind it was closed", "")
+    assert "the account behind it was closed" in caplog.text
+
+
+# --------------------------------------------------------------------------
+# Accounts: the corners
+# --------------------------------------------------------------------------
+
+def test_the_shops_only_admin_cannot_close_their_own_account():
+    """The Users desk already refuses to leave the shop with no admin. The
+    admin's own profile page has a "close my account" button too."""
+    headers = admin_headers()
+    refused = client.post("/api/auth/me/delete", json={"password": "Admin123!"}, headers=headers)
+    assert refused.status_code == 400
+    assert "only admin" in refused.json()["detail"]
+    # still there, still an admin, still signed in
+    me = client.get("/api/auth/me", headers=headers).json()
+    assert (me["role"], me["is_active"]) == ("admin", True)
+
+
+def test_a_customer_with_a_single_name_can_still_save_their_profile():
+    """Sign-up takes one "Your name" field, so a last name may be empty.
+    Saving the profile used to demand one."""
+    registered = client.post(
+        "/api/auth/register",
+        json={"email": "mononym@hardening.example.com", "password": "Mononym123!", "first_name": "Sukarno"},
+    )
+    assert registered.status_code == 201 and registered.json()["user"]["last_name"] == ""
+    headers = auth_header(registered.json()["access_token"])
+
+    saved = client.put(
+        "/api/auth/me", json={"first_name": "Sukarno", "last_name": "", "phone": "+49 176 5550199"}, headers=headers
+    )
+    assert saved.status_code == 200, saved.text
+    assert (saved.json()["last_name"], saved.json()["phone"]) == ("", "+491765550199")
+
+
+def test_an_address_edit_with_a_required_line_sent_as_null_changes_nothing_and_never_500s():
+    headers = auth_header(api.register_and_login("null-address@hardening.example.com", "Address123!"))
+    created = client.post(
+        "/api/auth/addresses",
+        json={"recipient": "Null Tester", "line1": "Backstr. 1", "line2": "2. OG", "city": "Berlin",
+              "state": "Berlin", "postal_code": "10115", "country": "Germany", "phone": "+49 30 1234"},
+        headers=headers,
+    ).json()
+
+    edited = client.put(
+        f"/api/auth/addresses/{created['id']}",
+        json={"line1": None, "city": None, "country": None, "line2": None, "phone": None, "recipient": "Renamed"},
+        headers=headers,
+    )
+    assert edited.status_code == 200, edited.text
+    body = edited.json()
+    assert (body["line1"], body["city"], body["country"]) == ("Backstr. 1", "Berlin", "Germany")  # kept
+    assert (body["line2"], body["phone"], body["recipient"]) == (None, None, "Renamed")  # cleared / changed
+
+
+# --------------------------------------------------------------------------
+# Links that leave the server
+# --------------------------------------------------------------------------
+
+def test_a_reset_link_points_at_the_shops_own_address_not_at_the_request(monkeypatch, caplog):
+    """A password-reset link built from the request's Host header can be
+    aimed at someone else's site by whoever asks for the reset. With the
+    shop's public address configured, the request has no say."""
+    api.register_and_login("reset-link@hardening.example.com", "ResetLink123!")
+    settings = get_settings()
+
+    monkeypatch.setattr(settings, "public_base_url", "https://shop.example.test/")
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        asked = client.post(
+            "/api/auth/forgot-password",
+            json={"email": "reset-link@hardening.example.com"},
+            headers={"host": "evil.example"},
+        )
+    assert asked.status_code == 200
+    assert asked.json()["reset_link"].startswith("https://shop.example.test/reset-password?token=")
+    assert "evil.example" not in caplog.text
+
+    # and the sitemap speaks the same address
+    sitemap = client.get("/sitemap.xml", headers={"host": "evil.example"}).text
+    assert "https://shop.example.test/products" in sitemap and "evil.example" not in sitemap
+
+
+# --------------------------------------------------------------------------
+# Search and catalog
+# --------------------------------------------------------------------------
+
+def test_a_percent_sign_in_a_search_is_a_character_not_a_wildcard():
+    everything = client.get("/api/products", params={"per_page": 48}).json()["pagination"]["total_items"]
+    assert everything > 5
+    for odd in ("100%", "_", "%", "50%_"):
+        found = client.get("/api/products", params={"search": odd, "per_page": 48}).json()
+        assert found["pagination"]["total_items"] == 0, odd  # nothing is literally named that
+    # an ordinary word still finds its bakes, in any letter case
+    assert client.get("/api/products", params={"search": "CROISSANT"}).json()["pagination"]["total_items"] >= 1
+    # the desk's order search follows the same rule
+    orders = client.get("/api/admin/orders", params={"search": "%"}, headers=admin_headers()).json()
+    assert orders["pagination"]["total_items"] == 0
+
+
+def test_related_bakes_are_the_same_ones_on_every_visit():
+    def related(slug):
+        return [p["id"] for p in client.get(f"/api/products/{slug}").json()["related"]]
+
+    # any bake that shares its shelf with others (the suite reshuffles shelves)
+    catalog = client.get("/api/products", params={"per_page": 48}).json()["products"]
+    slug = next(p["slug"] for p in catalog if len(related(p["slug"])) >= 2)
+    first = related(slug)
+    for _ in range(3):
+        assert related(slug) == first
+
+
+# --------------------------------------------------------------------------
+# Brakes on what one account can do
+# --------------------------------------------------------------------------
+
+def test_an_account_cannot_place_orders_or_post_reviews_without_end(monkeypatch):
+    """Every order reserves stock and rings the desk; every review emails
+    it. A script with one login must run out of road."""
+    limiters = client.app.state.limiters
+    monkeypatch.setitem(limiters, "orders", SlidingWindowLimiter(2, window=3600.0))
+    monkeypatch.setitem(limiters, "reviews", SlidingWindowLimiter(2, window=3600.0))
+    headers = auth_header(api.register_and_login("flood@hardening.example.com", "Flood123!"))
+    other = auth_header(api.register_and_login("patient@hardening.example.com", "Patient123!"))
+    api._top_up_stock("butter-croissant")
+    api._top_up_stock("beef-curry-puff")
+    stock = api.get_product("butter-croissant")["stock"]
+    cash = checkout_payload(payment_method="cash_on_delivery")
+
+    assert [client.post("/api/orders", json=cash, headers=headers).status_code for _ in range(3)] == [201, 201, 429]
+    assert api.get_product("butter-croissant")["stock"] == stock - 4  # the third reserved nothing
+    # the brake is the account's own — the next customer is not held up by it
+    assert client.post("/api/orders", json=cash, headers=other).status_code == 201
+
+    croissant = api.get_product("butter-croissant")["id"]
+    review = {"rating": 5, "comment": "again"}
+    codes = [
+        client.post(f"/api/products/{croissant}/reviews", json=review, headers=headers).status_code
+        for _ in range(3)
+    ]
+    assert codes == [201, 200, 429]
+
+
+def test_the_same_press_replayed_does_not_use_up_the_order_budget(monkeypatch):
+    monkeypatch.setitem(client.app.state.limiters, "orders", SlidingWindowLimiter(1, window=3600.0))
+    headers = auth_header(api.register_and_login("replay-budget@hardening.example.com", "Replay123!"))
+    api._top_up_stock("butter-croissant")
+    api._top_up_stock("beef-curry-puff")
+    press = {**headers, "Idempotency-Key": "press-budget-0001"}
+    cash = checkout_payload(payment_method="cash_on_delivery")
+
+    assert client.post("/api/orders", json=cash, headers=press).status_code == 201
+    # the same press arriving again is the same order — not a second one, and not a refusal
+    for _ in range(3):
+        assert client.post("/api/orders", json=cash, headers=press).status_code == 200
+
+
+# --------------------------------------------------------------------------
+# Settings that arrive blank
+# --------------------------------------------------------------------------
+
+def test_a_blank_number_or_switch_in_the_environment_is_the_default_not_a_crash():
+    """A dashboard field left empty arrives as "". That once stopped the
+    whole shop from booting (SMTP_PORT)."""
+    from app.config import Settings
+
+    blank = Settings(
+        smtp_port="", tax_rate="", shipping_fee=" ", login_rate_limit="", enable_docs="",
+        seed_demo_data="", order_rate_limit="",
+    )
+    assert (blank.smtp_port, blank.tax_rate, blank.shipping_fee) == (587, None, None)
+    assert (blank.login_rate_limit, blank.enable_docs, blank.seed_demo_data) == (10, True, None)
+    assert blank.order_rate_limit == 12
+    # text settings keep their empty string — that is how mail is switched off
+    assert Settings(smtp_host="").smtp_host == ""
+    # and a real value is still read as one
+    assert Settings(smtp_port="2525", tax_rate="0.19").smtp_port == 2525
+
+
+# --------------------------------------------------------------------------
+# The shop's own clock
+# --------------------------------------------------------------------------
+
+def test_the_shops_clock_is_the_shops_not_the_servers(monkeypatch):
+    from datetime import datetime
+
+    from app import shoptime
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "shop_timezone", "Europe/Berlin")
+    # winter time is UTC+1, summer time UTC+2 — the receipt says which
+    assert shoptime.stamp(datetime(2026, 11, 22, 9, 14)) == "Nov 22, 2026, 10:14 AM CET"
+    assert shoptime.stamp(datetime(2026, 7, 1, 9, 14)) == "Jul 01, 2026, 11:14 AM CEST"
+    # half past midnight in Berlin already belongs to the new day
+    assert shoptime.in_shop_time(datetime(2026, 11, 22, 23, 30)).date() == date(2026, 11, 23)
+
+    # a zone this system has never heard of is UTC, said loudly — never a crash
+    monkeypatch.setattr(settings, "shop_timezone", "Mars/Olympus_Mons")
+    assert shoptime.stamp(datetime(2026, 11, 22, 9, 14)) == "Nov 22, 2026, 09:14 AM UTC"
+
+    # "local" follows the server's own clock, as the shop always did
+    monkeypatch.setattr(settings, "shop_timezone", "local")
+    assert shoptime.shop_today() == date.today()
+
+
+def test_a_receipt_states_its_time_in_the_shops_zone(monkeypatch, caplog):
+    monkeypatch.setattr(get_settings(), "shop_timezone", "Europe/Berlin")
+    headers = auth_header(api.register_and_login("clock@hardening.example.com", "Clock123!"))
+    api._top_up_stock("butter-croissant")
+    api._top_up_stock("beef-curry-puff")
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        placed = client.post(
+            "/api/orders", json=checkout_payload(payment_method="cash_on_delivery"), headers=headers
+        )
+    assert placed.status_code == 201
+    receipt = caplog.text
+    assert f"Receipt {placed.json()['order_number']}" in receipt
+    assert " CET" in receipt or " CEST" in receipt  # a time with its zone on it
+
+
+def test_tomorrow_in_the_shop_is_judged_by_the_shops_date(monkeypatch):
+    """A delivery date is refused or accepted by the shop's calendar. Pin
+    the shop's "today" a day ahead of this machine's and the same request
+    flips from fine to refused."""
+    from app import shoptime
+
+    headers = auth_header(api.register_and_login("midnight@hardening.example.com", "Midnight123!"))
+    api._top_up_stock("butter-croissant")
+    api._top_up_stock("beef-curry-puff")
+    today = date.today()
+    payload = checkout_payload(payment_method="cash_on_delivery", delivery_date=today.isoformat())
+
+    assert client.post("/api/orders", json=payload, headers=headers).status_code == 201
+    monkeypatch.setattr(shoptime, "shop_today", lambda: today + timedelta(days=1))
+    late = client.post("/api/orders", json=payload, headers=headers)
+    assert late.status_code == 400 and "past" in late.json()["detail"]
+
+
+# --------------------------------------------------------------------------
+# The legal notice (Impressum)
+# --------------------------------------------------------------------------
+
+def _settings(**fields):
+    response = client.put("/api/admin/settings", json=fields, headers=admin_headers())
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_the_legal_notice_is_published_only_once_the_baker_writes_one():
+    notice = "Djini's Bakehouse\nInhaberin: D. Example\nBackstr. 1, 10115 Berlin\nUSt-IdNr.: DE000000000"
+    try:
+        assert client.get("/api/store").json()["legal_notice_published"] is False
+        assert client.get("/api/legal-notice").json()["text"] is None
+        assert "/imprint" not in client.get("/sitemap.xml").text
+
+        saved = _settings(legal_notice=f"  {notice}  ")
+        assert saved["legal_notice"] == notice  # as written, edges trimmed
+
+        assert client.get("/api/store").json()["legal_notice_published"] is True
+        published = client.get("/api/legal-notice").json()
+        assert published["text"] == notice and published["updated_at"]
+        assert "/imprint" in client.get("/sitemap.xml").text
+
+        # other settings saved without it leave it exactly where it is
+        _settings(today_note="Croffles out at 8, doughnuts at 9")
+        assert client.get("/api/legal-notice").json()["text"] == notice
+    finally:
+        _settings(legal_notice="")
+    assert client.get("/api/store").json()["legal_notice_published"] is False
+
+    # the desk's alone to write
+    customer = auth_header(api.register_and_login("notice@hardening.example.com", "Notice123!"))
+    assert client.put("/api/admin/settings", json={"legal_notice": "x"}, headers=customer).status_code == 403
+
+
+# --------------------------------------------------------------------------
+# The delivery area
+# --------------------------------------------------------------------------
+
+def test_postal_codes_and_areas_match_the_way_people_write_them():
+    from app import delivery
+
+    area = delivery.parse_area("10115, 101*;12 043\n\n13353 , 10115")
+    assert area == ["10115", "101*", "12043", "13353"]  # normalised, de-duplicated, in order
+    assert delivery.invalid_entries(area) == []
+    for inside in ("10115", " 10119 ", "12043", "12 043", "13353"):
+        assert delivery.delivers_to(inside, area), inside
+    for outside in ("80331", "1001", "", None, "12044", "20101"):
+        assert not delivery.delivers_to(outside, area), outside
+    assert delivery.delivers_to("80331", [])  # no list, no limit
+    # spaces are read as they are meant: several all-digit codes are a list,
+    # a code with letters keeps its own space
+    assert delivery.parse_area("10115 10117 102*") == ["10115", "10117", "102*"]
+    assert delivery.parse_area("SW1A 1AA; 1011 AB") == ["SW1A1AA", "1011AB"]
+    assert delivery.invalid_entries(delivery.parse_area("10115, 10*5, *, Mitte!")) == ["10*5", "*", "MITTE!"]
+    assert delivery.delivers_to("sw1a 1aa", delivery.parse_area("SW1A*"))
+
+
+def test_an_address_outside_the_delivery_area_is_refused_before_anything_moves():
+    headers = auth_header(api.register_and_login("far-away@hardening.example.com", "FarAway123!"))
+    api._top_up_stock("butter-croissant")
+    api._top_up_stock("beef-curry-puff")
+    stock = api.get_product("butter-croissant")["stock"]
+
+    def order_to(postal_code):
+        address = {"recipient": "Far Away", "line1": "Hauptstr. 1", "city": "Somewhere", "state": "DE",
+                   "postal_code": postal_code, "country": "Germany"}
+        return client.post(
+            "/api/orders",
+            json=checkout_payload(payment_method="cash_on_delivery", address_id=None, new_address=address),
+            headers=headers,
+        )
+
+    try:
+        assert _settings(delivery_postal_codes="10115, 101*\n12 043")["delivery_postal_codes"] == "10115, 101*, 12043"
+        assert client.get("/api/store").json()["delivery_postal_codes"] == ["10115", "101*", "12043"]
+
+        refused = order_to("80331")
+        assert refused.status_code == 400
+        assert "don't deliver to 80331" in refused.json()["detail"]
+        assert api.get_product("butter-croissant")["stock"] == stock  # nothing reserved
+        # and the address was not quietly filed in their book either
+        assert client.get("/api/auth/addresses", headers=headers).json() == []
+
+        inside = order_to("10119")
+        assert inside.status_code == 201
+        # an address already in the book is judged the same way
+        book = client.post(
+            "/api/auth/addresses",
+            json={"recipient": "Far Away", "line1": "Fernweg 9", "city": "München", "state": "BY",
+                  "postal_code": "80331", "country": "Germany"},
+            headers=headers,
+        ).json()
+        from_book = client.post(
+            "/api/orders",
+            json=checkout_payload(payment_method="cash_on_delivery", address_id=book["id"], new_address=None),
+            headers=headers,
+        )
+        assert from_book.status_code == 400
+
+        # a list the desk mistyped is named back, not stored
+        bad = client.put(
+            "/api/admin/settings", json={"delivery_postal_codes": "10115, Mitte!"}, headers=admin_headers()
+        )
+        assert bad.status_code == 400 and "MITTE!" in bad.json()["detail"]
+        assert client.get("/api/store").json()["delivery_postal_codes"] == ["10115", "101*", "12043"]
+    finally:
+        _settings(delivery_postal_codes="")
+
+    assert client.get("/api/store").json()["delivery_postal_codes"] == []
+    assert order_to("80331").status_code == 201  # no list, no limit — as it always was
+
+
+# --------------------------------------------------------------------------
+# The newsletter sign-up list at the desk
+# --------------------------------------------------------------------------
+
+def test_the_desk_can_count_and_prune_the_newsletter_list():
+    admin = admin_headers()
+    before = client.get("/api/admin/marketing/overview", headers=admin).json()["newsletter_subscribers"]
+    assert client.post(
+        "/api/newsletter", json={"email": "leaving@hardening.example.com", "source": "footer"}
+    ).status_code == 201
+    assert client.get("/api/admin/marketing/overview", headers=admin).json()["newsletter_subscribers"] == before + 1
+
+    listed = client.get("/api/admin/newsletter", headers=admin).json()
+    row = next(s for s in listed if s["email"] == "leaving@hardening.example.com")
+
+    customer = auth_header(api.register_and_login("nosy@hardening.example.com", "Nosy123!"))
+    assert client.delete(f"/api/admin/newsletter/{row['id']}", headers=customer).status_code == 403
+    assert client.delete(f"/api/admin/newsletter/{row['id']}").status_code == 401
+
+    assert client.delete(f"/api/admin/newsletter/{row['id']}", headers=admin).status_code == 200
+    assert client.delete(f"/api/admin/newsletter/{row['id']}", headers=admin).status_code == 404
+    assert client.get("/api/admin/marketing/overview", headers=admin).json()["newsletter_subscribers"] == before
+    # gone means gone: signing up again is a fresh sign-up, not "already subscribed"
+    again = client.post("/api/newsletter", json={"email": "leaving@hardening.example.com", "source": "footer"})
+    assert again.status_code == 201 and again.json()["already_subscribed"] is False
+
+
+# --------------------------------------------------------------------------
+# A basket line the shelf can't honour: which one, and what is left
+# --------------------------------------------------------------------------
+
+def _shelve(name: str, **fields) -> dict:
+    created = client.post(
+        "/api/admin/products", headers=admin_headers(), json={"name": name, "price": 3.5, **fields}
+    )
+    assert created.status_code == 201
+    return created.json()
+
+
+def test_a_refused_basket_line_names_itself_and_what_is_left():
+    """The basket page offers the fix — remove the line, or take what is
+    left. For that it has to be told which line was refused and how many
+    remain, not left to read it out of a sentence."""
+    short = _shelve("Three Left Loaf", stock=3)
+    empty = _shelve("Gone By Noon Bun", stock=0)
+    hidden = _shelve("Resting Recipe Roll", stock=9, is_available=False)
+
+    def quote(product, quantity):
+        return client.post(
+            "/api/orders/quote", json={"items": [{"product_id": product["id"], "quantity": quantity}]}
+        )
+
+    try:
+        tight = quote(short, 5)
+        assert tight.status_code == 400
+        assert tight.json()["detail"] == "Only 3 left of Three Left Loaf"
+        assert tight.headers["x-basket-product"] == str(short["id"])
+        assert tight.headers["x-basket-available"] == "3"
+
+        sold_out = quote(empty, 1)
+        assert sold_out.status_code == 400
+        assert sold_out.json()["detail"] == "Gone By Noon Bun is sold out"  # not "Only 0 left of …"
+        assert sold_out.headers["x-basket-product"] == str(empty["id"])
+        assert sold_out.headers["x-basket-available"] == "0"
+
+        off = quote(hidden, 1)
+        assert off.status_code == 400
+        # by its name — "Product 41 is not available" told a shopper nothing
+        assert off.json()["detail"] == "Resting Recipe Roll is not available right now"
+        assert off.headers["x-basket-product"] == str(hidden["id"])
+        assert off.headers["x-basket-available"] == "0"
+
+        # a basket that prices carries neither header
+        fine = quote(short, 3)
+        assert fine.status_code == 200
+        assert "x-basket-product" not in fine.headers
+    finally:
+        for product in (short, empty, hidden):
+            client.delete(f"/api/admin/products/{product['id']}", headers=admin_headers())
+
+
+def test_losing_the_race_for_the_last_ones_is_told_what_is_left_now(monkeypatch):
+    """Two shoppers reach for the same shelf. The one who loses used to be
+    told the figure read *before* the other took theirs — "Only 4 left"
+    to someone who had asked for three."""
+    from sqlalchemy import text
+
+    from app.routers import orders as orders_router
+
+    headers = auth_header(api.register_and_login("second-in-line@hardening.example.com", "Second123!"))
+    loaf = _shelve("Last Four Loaf", stock=4)
+    check = orders_router._resolve_basket
+
+    def someone_else_gets_there_first(db, items):
+        resolved = check(db, items)  # passes: four on the shelf, three wanted
+        # ...and before the shelf is actually decremented, three of them go.
+        # (Plain SQL, so the products already loaded keep their stale count.)
+        db.execute(text("UPDATE products SET stock = 1 WHERE id = :id"), {"id": loaf["id"]})
+        return resolved
+
+    monkeypatch.setattr(orders_router, "_resolve_basket", someone_else_gets_there_first)
+    try:
+        lost = client.post(
+            "/api/orders",
+            json=checkout_payload(
+                payment_method="cash_on_delivery", items=[{"product_id": loaf["id"], "quantity": 3}]
+            ),
+            headers=headers,
+        )
+        assert lost.status_code == 400
+        assert lost.json()["detail"] == "Only 1 left of Last Four Loaf"
+        assert lost.headers["x-basket-product"] == str(loaf["id"])
+        assert lost.headers["x-basket-available"] == "1"
+        monkeypatch.undo()
+        # The refusal rolled everything back, the stand-in "other shopper" included.
+        assert api.get_product(loaf["slug"])["stock"] == 4
+        assert client.get("/api/orders", headers=headers).json()["orders"] == []
+    finally:
+        monkeypatch.undo()
+        client.delete(f"/api/admin/products/{loaf['id']}", headers=admin_headers())
+
+
+# --------------------------------------------------------------------------
+# A required line of only spaces is an empty line
+# --------------------------------------------------------------------------
+
+def test_whitespace_is_not_a_name_an_address_or_a_bake():
+    """`min_length=1` used to be satisfied by a space, which the handlers
+    then trimmed away: a customer called "", an address in the city of " ",
+    a bake with no name filed under the slug "item"."""
+    nameless = client.post(
+        "/api/auth/register",
+        json={"email": "spaces@hardening.example.com", "password": "Spaces123!", "first_name": "   "},
+    )
+    assert nameless.status_code == 422
+
+    made = client.post(
+        "/api/auth/register",
+        json={
+            "email": "padded@hardening.example.com",
+            "password": "Padded123!",
+            "first_name": "  Amara ",
+            "last_name": " Okafor  ",
+        },
+    )
+    assert made.status_code == 201
+    headers = auth_header(made.json()["access_token"])
+    me = client.get("/api/auth/me", headers=headers).json()
+    assert (me["first_name"], me["last_name"]) == ("Amara", "Okafor")
+
+    assert client.put("/api/auth/me", json={"first_name": "  "}, headers=headers).status_code == 422
+    assert client.get("/api/auth/me", headers=headers).json()["first_name"] == "Amara"
+
+    address = {
+        "label": "  ",
+        "recipient": " Amara Okafor ",
+        "line1": " Backweg 3 ",
+        "city": " Berlin ",
+        "state": "BE",
+        "postal_code": " 10115 ",
+        "country": "Germany",
+    }
+    saved = client.post("/api/auth/addresses", json=address, headers=headers)
+    assert saved.status_code == 201
+    book = saved.json()
+    assert book["label"] == "Home"  # a blank label is "Home", never a row with no name
+    assert (book["recipient"], book["line1"], book["city"], book["postal_code"]) == (
+        "Amara Okafor", "Backweg 3", "Berlin", "10115",
+    )
+    for field in ("recipient", "line1", "city", "state", "postal_code", "country"):
+        blanked = {**address, field: "   "}
+        assert client.post("/api/auth/addresses", json=blanked, headers=headers).status_code == 422, field
+        edit = client.put(f"/api/auth/addresses/{book['id']}", json={field: "  "}, headers=headers)
+        assert edit.status_code == 422, field
+    relabelled = client.put(f"/api/auth/addresses/{book['id']}", json={"label": " "}, headers=headers)
+    assert relabelled.status_code == 200 and relabelled.json()["label"] == "Home"
+    # nothing above changed the address that was saved
+    kept = client.get("/api/auth/addresses", headers=headers).json()
+    assert [(a["recipient"], a["city"]) for a in kept] == [("Amara Okafor", "Berlin")]
+
+    # the same at checkout, where an address is typed for the first time
+    api._top_up_stock("butter-croissant")
+    api._top_up_stock("beef-curry-puff")
+    nowhere = client.post(
+        "/api/orders",
+        json=checkout_payload(
+            payment_method="cash_on_delivery", new_address={**address, "label": "Home", "city": "  "}
+        ),
+        headers=headers,
+    )
+    assert nowhere.status_code == 422
+
+    # and at the desk: a bake or a shelf nobody could name
+    admin = admin_headers()
+    assert client.post("/api/admin/products", headers=admin, json={"name": "   ", "price": 3.5}).status_code == 422
+    assert client.post("/api/admin/categories", headers=admin, json={"name": "  "}).status_code == 422
+    # a catering lead from nobody
+    lead = client.post(
+        "/api/bulk-orders",
+        json={
+            "name": "  ",
+            "email": "nobody@hardening.example.com",
+            "phone": "+491765550100",
+            "event_date": str(date.today() + timedelta(days=30)),
+            "event_type": "birthday",
+            "guests": 20,
+        },
+    )
+    assert lead.status_code == 422
+
+
+# --------------------------------------------------------------------------
+# The same sign-up, twice at once
+# --------------------------------------------------------------------------
+
+def test_a_sign_up_that_loses_the_race_for_its_email_is_a_409_not_a_500(monkeypatch):
+    """Two requests for one address can both pass the "is it taken?" check;
+    the unique rule on the column stops the second at its insert. That
+    surfaced as a 500 — a double tap on "Create account" looked like the
+    shop had broken."""
+    from sqlalchemy import func, select
+
+    from app.models import User
+
+    email = "double-tap@hardening.example.com"
+    hash_password = auth_router.hash_password
+
+    def the_other_request_lands_first(password):
+        # Runs after this request's own check and before its insert.
+        db = SessionLocal()
+        try:
+            db.add(User(email=email, password_hash=hash_password(password), first_name="Double", last_name="Tap"))
+            db.commit()
+        finally:
+            db.close()
+        return hash_password(password)
+
+    monkeypatch.setattr(auth_router, "hash_password", the_other_request_lands_first)
+    second = client.post(
+        "/api/auth/register",
+        json={"email": email, "password": "DoubleTap123!", "first_name": "Double", "last_name": "Tap"},
+    )
+    monkeypatch.undo()
+    assert second.status_code == 409
+    assert second.json()["detail"] == "An account with this email already exists"
+
+    db = SessionLocal()
+    try:
+        assert db.scalar(select(func.count(User.id)).where(User.email == email)) == 1
+    finally:
+        db.close()
+    # ...and the account that won is a working one
+    assert client.post("/api/auth/login", json={"email": email, "password": "DoubleTap123!"}).status_code == 200

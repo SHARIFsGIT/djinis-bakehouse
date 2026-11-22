@@ -73,6 +73,7 @@ from ..schemas import (
     RecipeUpsertRequest,
 )
 from ..security import CurrentAdmin, DbSession
+from ..serialize import like_term
 
 router = APIRouter(prefix="/api/admin/costing", tags=["costing"])
 
@@ -242,9 +243,14 @@ def list_ingredients(
     per_page: int = Query(default=15, ge=1, le=100),
 ):
     query = select(Ingredient)
-    if search:
-        term = f"%{search.strip()}%"
-        query = query.where(or_(Ingredient.name.ilike(term), Ingredient.invoice_ref.ilike(term)))
+    if search and search.strip():
+        term = like_term(search)
+        query = query.where(
+            or_(
+                Ingredient.name.ilike(term, escape="\\"),
+                Ingredient.invoice_ref.ilike(term, escape="\\"),
+            )
+        )
     if category_id is not None:
         query = query.where(Ingredient.category_id == category_id)
     ingredients = list(db.scalars(query.order_by(Ingredient.name)))

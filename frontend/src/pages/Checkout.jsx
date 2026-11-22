@@ -8,6 +8,8 @@ import { useCart } from "../context/CartContext";
 import { useToast } from "../context/ToastContext";
 import useBasketQuote from "../hooks/useBasketQuote";
 import { getStoredCoupon, storeCoupon } from "../lib/coupon";
+import { deliversTo, describeArea } from "../lib/delivery";
+import { fetchStore } from "../lib/store";
 import {
   couponSaving,
   formatDate,
@@ -126,6 +128,9 @@ export default function Checkout() {
   // ways forward, right where the pay button is.
   const [cardError, setCardError] = useState(null);
   const pressKey = useRef(newPressKey());
+  // Where the van goes (postal codes and areas from Settings; empty = no
+  // limit). The server is the judge — this is the early word.
+  const [deliveryArea, setDeliveryArea] = useState([]);
 
   const [couponInput, setCouponInput] = useState("");
   const [coupon, setCoupon] = useState(null); // { code, percent_off, description, min_subtotal }
@@ -207,9 +212,9 @@ export default function Checkout() {
   // Which ways of paying does this shop really have? Card first when it
   // exists, then PayPal — cash stays the fallback that always works.
   useEffect(() => {
-    client
-      .get("/store")
-      .then(({ data }) => {
+    fetchStore()
+      .then((data) => {
+        setDeliveryArea(data.delivery_postal_codes ?? []);
         const card = Boolean(data.card_payments);
         const paypal = Boolean(data.paypal_payments);
         setRails({
@@ -272,6 +277,12 @@ export default function Checkout() {
   );
   const chosen = offered.find((option) => option.value === method) ?? offered.at(-1);
 
+  // The postal code this order would go to, and whether the van reaches it.
+  const chosenAddress = mode === "saved" ? addresses.find((a) => a.id === addressId) : null;
+  const postalCode = (mode === "saved" ? chosenAddress?.postal_code : newAddress.postal_code) ?? "";
+  const outsideArea =
+    deliveryArea.length > 0 && postalCode.trim() !== "" && !deliversTo(postalCode, deliveryArea);
+
   const applyCoupon = async (codeArg) => {
     const code = (codeArg ?? couponInput).trim();
     if (!code) return;
@@ -285,6 +296,11 @@ export default function Checkout() {
     e.preventDefault();
     if (placing) return; // the button disables, but Enter can still submit
     if (!submittable) return; // no settled quote for *this* basket — never charge stale numbers
+    if (outsideArea) {
+      toast.error(`Sorry — we don't deliver to ${postalCode.trim()} yet`);
+      document.getElementById("delivery-area-note")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
     setPlacing(true);
     setCardError(null);
     try {
@@ -318,14 +334,23 @@ export default function Checkout() {
       // trying again is a new one. (No answer at all keeps the name — the
       // order may exist, and the retry must find it rather than repeat it.)
       if (err?.response) pressKey.current = newPressKey();
-      if (method !== "cash_on_delivery") {
-        // Nothing was charged and the order was rolled back server-side —
-        // say that plainly at the button, with the ways forward.
+      const status = err?.response?.status;
+      // A 4xx is the shop saying no to something the customer can change —
+      // the address, the day, the code, a line of the basket, the pace.
+      // The toast has said which; no payment was attempted, so the
+      // "payment didn't start" panel would only point at the wrong thing.
+      const refused = status >= 400 && status < 500;
+      if (method !== "cash_on_delivery" && !refused) {
+        // The provider didn't answer (or the shop didn't): nothing was
+        // charged and the order was rolled back server-side — say that
+        // plainly at the button, with the ways forward.
         setCardError(
           apiError(err, "The payment couldn't be started — nothing was charged."),
         );
       }
-      if (err?.response?.status === 400) navigate("/cart");
+      // A basket line the shelf can't cover is mended on the basket page
+      // (the server names the line); everything else is fixed right here.
+      if (err?.response?.headers?.["x-basket-product"]) navigate("/cart");
     } finally {
       setPlacing(false);
     }
@@ -430,6 +455,21 @@ export default function Checkout() {
                   <span className="label-text text-sm">Save as my default address</span>
                 </label>
               </div>
+            )}
+
+            {deliveryArea.length > 0 && (
+              <p
+                id="delivery-area-note"
+                className={`mt-4 rounded-lg px-3 py-2 text-xs ${
+                  outsideArea ? "bg-error/10 font-semibold text-error" : "bg-base-200/70 opacity-80"
+                }`}
+                role={outsideArea ? "alert" : undefined}
+              >
+                {outsideArea
+                  ? `Sorry — we don't deliver to ${postalCode.trim()} yet. `
+                  : ""}
+                We deliver to postal codes {describeArea(deliveryArea)}.
+              </p>
             )}
           </section>
 
@@ -640,6 +680,12 @@ export default function Checkout() {
                   {!checkoutPaused(quoteState.error) && " — check your basket and try again."}
                 </span>
               </div>
+              {/* The basket page is where a line can be fixed or removed. */}
+              {!checkoutPaused(quoteState.error) && (
+                <Link to="/cart" className="btn btn-outline btn-sm mt-3 w-full">
+                  Back to your basket
+                </Link>
+              )}
             </div>
           ) : (
             <div className="mt-4 space-y-2" aria-label="Pricing your basket">
@@ -690,6 +736,17 @@ export default function Checkout() {
           <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-xs opacity-60">
             <Lock size={16} className="shrink-0" aria-hidden="true" />
             {chosen.lock}
+          </p>
+          {/* What pressing the button agrees to, with each document one tap
+              away (new tabs — a half-filled checkout is not thrown away). */}
+          <p className="mt-3 text-center text-xs opacity-60">
+            By ordering you accept our{" "}
+            <Link to="/terms" target="_blank" rel="noopener" className="link">terms</Link> and{" "}
+            <Link to="/refunds" target="_blank" rel="noopener" className="link">
+              refunds &amp; cancellations
+            </Link>
+            . See also the{" "}
+            <Link to="/privacy" target="_blank" rel="noopener" className="link">privacy policy</Link>.
           </p>
         </aside>
       </form>

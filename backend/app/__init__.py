@@ -118,6 +118,10 @@ _ADDITIVE_COLUMNS = {
         "contact_email": "ALTER TABLE store_settings ADD COLUMN contact_email VARCHAR(255)",
         "opening_hours": "ALTER TABLE store_settings ADD COLUMN opening_hours TEXT",
         "brand_color": "ALTER TABLE store_settings ADD COLUMN brand_color VARCHAR(7)",
+        # Both nullable, both NULL on arrival: no notice is published and no
+        # delivery limit applies until the baker writes one.
+        "legal_notice": "ALTER TABLE store_settings ADD COLUMN legal_notice TEXT",
+        "delivery_postal_codes": "ALTER TABLE store_settings ADD COLUMN delivery_postal_codes TEXT",
     },
     "coupons": {
         "min_subtotal": "ALTER TABLE coupons ADD COLUMN min_subtotal NUMERIC(10,2)",
@@ -255,6 +259,13 @@ def create_limiters(settings) -> dict[str, SlidingWindowLimiter]:
         # unauthenticated, so it still gets a brake. Generous on purpose:
         # the storefront re-quotes on every basket change.
         "quote": SlidingWindowLimiter(settings.quote_rate_limit),
+        # Per-account brakes (security.account_brake). Orders: every one
+        # reserves stock and rings the desk, and a cash order costs its
+        # sender nothing. Reviews: each one emails every admin. Payment
+        # actions: each one is a call to Stripe or PayPal.
+        "orders": SlidingWindowLimiter(settings.order_rate_limit, window=3600.0),
+        "reviews": SlidingWindowLimiter(settings.review_rate_limit, window=3600.0),
+        "payment_actions": SlidingWindowLimiter(settings.payment_action_rate_limit),
     }
 
 
@@ -457,6 +468,9 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Read by the basket page when a line is refused (routers/orders.py)
+        # — only a separately hosted frontend needs them spelled out.
+        expose_headers=["X-Basket-Product", "X-Basket-Available", "X-Request-ID"],
     )
 
     # Uploaded photos can live on a persistent disk (UPLOADS_DIR) so they

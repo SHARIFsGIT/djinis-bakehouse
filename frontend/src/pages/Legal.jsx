@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import client from "../api/client";
+import { Loading } from "../components/Loading";
+import { fetchStore } from "../lib/store";
 
 /* The shop's legal pages. Written to match how the site actually behaves —
  * cash on delivery, free cancellation until baking starts, allergens on
@@ -15,9 +17,8 @@ function useShopFacts() {
   // switched on: a payment processor is named here exactly while it is one.
   const [facts, setFacts] = useState({ email: null, paypal: false });
   useEffect(() => {
-    client
-      .get("/store")
-      .then(({ data }) =>
+    fetchStore()
+      .then((data) =>
         setFacts({ email: data.contact_email || null, paypal: Boolean(data.paypal_payments) })
       )
       .catch(() => setFacts({ email: null, paypal: false }));
@@ -235,5 +236,49 @@ export function RefundPolicy() {
         </p>
       </Section>
     </LegalPage>
+  );
+}
+
+/** The shop's legal notice — the "Impressum" German and EU law ask every
+ *  commercial site to carry. The words are the baker's own, written in
+ *  Settings and shown exactly as written (line breaks kept, nothing parsed
+ *  as markup). Until one is published the page says so plainly and points
+ *  at the contact lines the shop does have — it never invents a notice. */
+export function LegalNotice() {
+  const [notice, setNotice] = useState(null); // null = loading
+  useEffect(() => {
+    client
+      .get("/legal-notice")
+      .then(({ data }) => setNotice(data))
+      .catch(() => setNotice({ text: null }));
+  }, []);
+
+  if (notice === null) return <Loading label="Fetching the legal notice…" />;
+
+  const contact = [notice.contact_address, notice.contact_phone, notice.contact_email].filter(Boolean);
+  return (
+    <div className="mx-auto max-w-3xl px-4 py-12">
+      <p className="text-xs font-bold uppercase tracking-[0.2em] text-secondary">The paperwork</p>
+      <h1 className="mt-2 font-display text-4xl font-semibold">Legal notice</h1>
+      <p className="mt-1 text-sm opacity-60" lang="de">Impressum</p>
+      {notice.text ? (
+        <p className="mt-8 whitespace-pre-line text-[0.95rem] leading-relaxed opacity-85">
+          {notice.text}
+        </p>
+      ) : (
+        <div className="mt-8 space-y-3 text-[0.95rem] leading-relaxed opacity-85">
+          <p>The shop&rsquo;s legal notice has not been published yet.</p>
+          {contact.length > 0 && (
+            <p>
+              You can reach us here:
+              <br />
+              {contact.map((line) => (
+                <span key={line} className="block">{line}</span>
+              ))}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

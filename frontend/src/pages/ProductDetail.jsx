@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, useLocation, useParams } from "react-router";
 import { BadgeCheck, Bell, Heart, Share2, Star, Truck, Wheat } from "lucide-react";
 import client, { apiError } from "../api/client";
-import { formatDate, shopConfig } from "../lib/format";
+import { formatDate, MAX_LINE_QUANTITY, shopConfig } from "../lib/format";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
 import { useFavorites } from "../context/FavoritesContext";
@@ -161,6 +161,7 @@ function InteractiveRating({ average, count, onPick, canReview }) {
 
 export default function ProductDetail() {
   const { slug } = useParams();
+  const location = useLocation();
   const { user } = useAuth();
   const { add } = useCart();
   const { isSaved, toggle } = useFavorites();
@@ -178,30 +179,55 @@ export default function ProductDetail() {
 
   useProductHead(product);
 
-  const loadProduct = () =>
-    client
-      .get(`/products/${slug}`)
-      .then(({ data }) => setProduct(data))
-      .catch((e) => setError(apiError(e, "Couldn't find that bake")));
+  // The slug this page is showing *now*. An answer for a bake the shopper
+  // has already clicked away from (a slow connection, a quick tap on a
+  // related bake) must never be painted under the new address.
+  const showing = useRef(slug);
+  showing.current = slug;
+
+  const loadProduct = () => {
+    const asked = slug;
+    return client
+      .get(`/products/${asked}`)
+      .then(({ data }) => {
+        if (showing.current === asked) setProduct(data);
+      })
+      .catch((e) => {
+        if (showing.current === asked) setError(apiError(e, "Couldn't find that bake"));
+      });
+  };
 
   useEffect(() => {
     setProduct(null);
     setError(null);
     setQuantity(1);
-    setRestockEmail("");
+    setRestockEmail(user?.email ?? "");
     setRestockDone(false);
+    setReviewRating(5);
+    setReviewComment("");
     loadProduct();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
-  // A returning reviewer's stars wait where they left them — the pickers
-  // (the one under the title and the form's own) open on their rating, not
-  // on a default five.
+  // A returning reviewer's own review waits where they left it — stars and
+  // words both. (The form used to open on an empty box, and "update" with
+  // only the stars changed quietly erased what they had written.)
+  const ownReview = user ? product?.reviews.find((r) => r.author_id === user.id) : null;
   useEffect(() => {
-    if (!product || !user) return;
-    const own = product.reviews.find((r) => r.author_id === user.id);
-    if (own) setReviewRating(own.rating);
-  }, [product, user]);
+    if (!ownReview) return;
+    setReviewRating(ownReview.rating);
+    setReviewComment(ownReview.comment ?? "");
+    // Keyed on the review itself: a reload of the same review (after
+    // saving) must not overwrite what is being typed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownReview?.id, ownReview?.rating, ownReview?.comment]);
+
+  // The session can settle after the page does (a reload restores it with
+  // a request of its own) — offer the account's address then, unless the
+  // shopper has already typed one.
+  useEffect(() => {
+    if (user?.email) setRestockEmail((typed) => typed || user.email);
+  }, [user?.email]);
 
   if (error) {
     return (
@@ -261,7 +287,6 @@ export default function ProductDetail() {
         comment: reviewComment.trim() || null,
       });
       toast.success(mine ? "Your review was updated" : "Thanks for the review");
-      setReviewComment("");
       await loadProduct();
     } catch (err) {
       toast.error(apiError(err));
@@ -274,6 +299,9 @@ export default function ProductDetail() {
     try {
       await client.delete(`/products/${product.id}/reviews/${reviewId}`);
       toast.info("Review removed");
+      // The form goes back to a blank "leave a review", not the old words.
+      setReviewRating(5);
+      setReviewComment("");
       await loadProduct();
     } catch (err) {
       toast.error(apiError(err));
@@ -361,7 +389,7 @@ export default function ProductDetail() {
             ) : (
               <Link
                 to="/login"
-                state={{ from: window.location.pathname }}
+                state={{ from: location.pathname }}
                 className="inline-block"
                 title="Log in to rate this bake"
               >
@@ -410,7 +438,7 @@ export default function ProductDetail() {
             <QuantityInput
               value={quantity}
               onChange={setQuantity}
-              max={Math.max(product.stock, 1)}
+              max={Math.min(Math.max(product.stock, 1), MAX_LINE_QUANTITY)}
             />
             <button
               type="button"
@@ -537,7 +565,7 @@ export default function ProductDetail() {
               <div className="pb-2">
                 <RatingStars rating={product.average_rating} />
                 <p className="text-xs opacity-60">
-                  {product.review_count} reviews
+                  {product.review_count} {product.review_count === 1 ? "review" : "reviews"}
                 </p>
               </div>
             </div>
@@ -614,7 +642,11 @@ export default function ProductDetail() {
             ) : (
               <div className="mt-6 rounded-box bg-base-200/60 p-5 text-sm">
                 <p className="opacity-80">Tried it? Share your crumb report.</p>
-                <Link to="/login" className="btn btn-primary btn-sm btn mt-3">
+                <Link
+                  to="/login"
+                  state={{ from: location.pathname }}
+                  className="btn btn-primary btn-sm btn mt-3"
+                >
                   Log in to review
                 </Link>
               </div>

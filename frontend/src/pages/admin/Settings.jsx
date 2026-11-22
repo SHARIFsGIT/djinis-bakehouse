@@ -5,18 +5,20 @@ import {
   Camera,
   Clock,
   ImagePlus,
+  MapPin,
   Megaphone,
   Palette,
   Percent,
   Plus,
   Quote,
+  Scale,
   Star,
   Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import client, { apiError } from "../../api/client";
 import ConfirmDialog from "../../components/ConfirmDialog";
-import { Loading } from "../../components/Loading";
+import { LoadError, Loading } from "../../components/Loading";
 import { useToast } from "../../context/ToastContext";
 import { shrinkImage } from "../../lib/imageResize";
 import {
@@ -683,24 +685,33 @@ export default function Settings() {
   // The brand colour draft: "#rrggbb", or null for the shipped burgundy.
   const [brand, setBrand] = useState(null);
   const savedBrandRef = useRef(null);
+  const [loadFailed, setLoadFailed] = useState(null);
 
-  useEffect(() => {
-    client.get("/admin/settings").then(({ data }) => {
-      setSaved(data);
-      savedBrandRef.current = data.brand_color ?? null;
-      setBrand(data.brand_color ?? null);
-      setForm({
-        fee: String(data.late_cancel_fee_percent),
-        announcement: data.announcement ?? "",
-        today_note: data.today_note ?? "",
-        marquee: data.marquee_items ?? "",
-        contact_address: data.contact_address ?? "",
-        contact_phone: data.contact_phone ?? "",
-        contact_email: data.contact_email ?? "",
-        hours: data.opening_hours ?? "",
-      });
-    });
-  }, []);
+  const loadSettings = () => {
+    setLoadFailed(null);
+    client
+      .get("/admin/settings")
+      .then(({ data }) => {
+        setSaved(data);
+        savedBrandRef.current = data.brand_color ?? null;
+        setBrand(data.brand_color ?? null);
+        setForm({
+          fee: String(data.late_cancel_fee_percent),
+          announcement: data.announcement ?? "",
+          today_note: data.today_note ?? "",
+          marquee: data.marquee_items ?? "",
+          contact_address: data.contact_address ?? "",
+          contact_phone: data.contact_phone ?? "",
+          contact_email: data.contact_email ?? "",
+          hours: data.opening_hours ?? "",
+          legal_notice: data.legal_notice ?? "",
+          delivery_area: data.delivery_postal_codes ?? "",
+        });
+      })
+      .catch((e) => setLoadFailed(apiError(e, "The settings didn't load.")));
+  };
+
+  useEffect(loadSettings, []);
 
   // Live preview: the whole console re-tints the moment a colour is tapped —
   // nothing waits for a save. The preview never touches the local cache, so
@@ -711,6 +722,9 @@ export default function Settings() {
   }, [brand]);
   useEffect(() => () => applyBrandColor(savedBrandRef.current), []);
 
+  if (loadFailed && (!saved || !form)) {
+    return <LoadError message={loadFailed} onRetry={loadSettings} />;
+  }
   if (!saved || !form) return <Loading label="Opening the rulebook…" />;
 
   const parsed = Number(form.fee);
@@ -727,28 +741,41 @@ export default function Settings() {
     form.contact_phone !== (saved.contact_phone ?? "") ||
     form.contact_email !== (saved.contact_email ?? "") ||
     form.hours !== (saved.opening_hours ?? "");
+  const legalDirty = form.legal_notice.trim() !== (saved.legal_notice ?? "");
+  const areaDirty = form.delivery_area.trim() !== (saved.delivery_postal_codes ?? "");
+  const areaEntries = (saved.delivery_postal_codes ?? "").split(",").filter((s) => s.trim()).length;
+
+  // Each card saves only its own lines — one PUT, one part of the rulebook.
+  const BODIES = {
+    fee: () => ({ late_cancel_fee_percent: parsed }),
+    contact: () => ({
+      contact_address: form.contact_address,
+      contact_phone: form.contact_phone,
+      contact_email: form.contact_email,
+      opening_hours: form.hours,
+    }),
+    copy: () => ({
+      announcement: form.announcement,
+      today_note: form.today_note,
+      marquee_items: form.marquee,
+    }),
+    legal: () => ({ legal_notice: form.legal_notice }),
+    area: () => ({ delivery_postal_codes: form.delivery_area }),
+  };
 
   const save = async (part) => {
     setSaving(part);
     try {
-      const body =
-        part === "fee"
-          ? { late_cancel_fee_percent: parsed }
-          : part === "contact"
-          ? {
-              contact_address: form.contact_address,
-              contact_phone: form.contact_phone,
-              contact_email: form.contact_email,
-              opening_hours: form.hours,
-            }
-          : {
-              announcement: form.announcement,
-              today_note: form.today_note,
-              marquee_items: form.marquee,
-            };
-      const { data } = await client.put("/admin/settings", body);
+      const { data } = await client.put("/admin/settings", BODIES[part]());
       setSaved(data);
-      setForm((f) => ({ ...f, fee: String(data.late_cancel_fee_percent) }));
+      setForm((f) => ({
+        ...f,
+        fee: String(data.late_cancel_fee_percent),
+        // The server tidies these two (trimmed text; the area as one clean
+        // list) — show what was actually kept.
+        ...(part === "legal" ? { legal_notice: data.legal_notice ?? "" } : {}),
+        ...(part === "area" ? { delivery_area: data.delivery_postal_codes ?? "" } : {}),
+      }));
       if (part === "fee") {
         toast.success(
           data.late_cancel_fee_percent > 0
@@ -757,6 +784,18 @@ export default function Settings() {
         );
       } else if (part === "contact") {
         toast.success("Contact details saved");
+      } else if (part === "legal") {
+        toast.success(
+          data.legal_notice
+            ? "Legal notice published — it's linked in the footer"
+            : "Legal notice taken down",
+        );
+      } else if (part === "area") {
+        toast.success(
+          data.delivery_postal_codes
+            ? "Delivery area saved — checkout now checks the postal code"
+            : "Delivery area cleared — every postal code can order",
+        );
       } else {
         toast.success("Storefront copy saved");
       }
@@ -1073,6 +1112,101 @@ export default function Settings() {
             {saving === "contact" ? "Saving…" : "Save contact"}
           </button>
           {contactDirty && <span className="text-xs opacity-60">Unsaved change</span>}
+        </div>
+      </section>
+
+      <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
+        <CardHead icon={MapPin} title="Delivery area" />
+        <p className="mt-1 text-sm opacity-70">
+          Where the van goes. Checkout checks the delivery address against this
+          list and tells the customer before they pay.
+        </p>
+
+        <div className="mt-5">
+          <label className="label mb-1.5 text-xs font-semibold" htmlFor="delivery-area">
+            Postal codes you deliver to
+          </label>
+          <textarea
+            id="delivery-area"
+            rows={4}
+            maxLength={20000}
+            className="textarea textarea-bordered w-full font-mono text-sm"
+            placeholder={"10115, 10117, 10119\n101*"}
+            value={form.delivery_area}
+            onChange={(e) => setForm({ ...form, delivery_area: e.target.value })}
+          />
+          <p className="mt-1.5 text-xs opacity-60">
+            Separate codes with commas or new lines. A star covers a whole area —{" "}
+            <span className="font-mono">101*</span> is every code starting with 101. Leave the
+            box empty to deliver anywhere: checkout then makes no postal-code check.
+          </p>
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => save("area")}
+            disabled={!areaDirty || saving !== ""}
+          >
+            {saving === "area" ? "Saving…" : "Save delivery area"}
+          </button>
+          <span className="text-xs opacity-60">
+            {areaDirty
+              ? "Unsaved change"
+              : areaEntries > 0
+                ? `${areaEntries} ${areaEntries === 1 ? "entry" : "entries"} — addresses outside are refused at checkout`
+                : "No limit set — every postal code can order"}
+          </span>
+        </div>
+      </section>
+
+      <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
+        <CardHead icon={Scale} title="Legal notice (Impressum)" />
+        <p className="mt-1 text-sm opacity-70">
+          Who runs this shop, in your own words. Once it has text it gets its
+          own page and a link in the footer of every page.
+        </p>
+
+        <div className="mt-5">
+          <label className="label mb-1.5 text-xs font-semibold" htmlFor="legal-notice">
+            Notice text
+          </label>
+          <textarea
+            id="legal-notice"
+            rows={9}
+            maxLength={10000}
+            className="textarea textarea-bordered w-full"
+            placeholder={
+              "Business name and legal form\nStreet and number\nPostal code, city, country\n\nPhone: …\nEmail: …\nVAT ID: …"
+            }
+            value={form.legal_notice}
+            onChange={(e) => setForm({ ...form, legal_notice: e.target.value })}
+          />
+          <p className="mt-1.5 text-xs opacity-60">
+            Shown exactly as written, line breaks kept. A shop selling online in Germany or
+            the EU is expected to name its operator — usually the business name and legal form,
+            a postal address, a phone number or email that reaches you quickly, and the VAT ID
+            or register entry if there is one. Nothing is filled in for you: ask your accountant
+            or a lawyer what yours has to contain.
+          </p>
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => save("legal")}
+            disabled={!legalDirty || saving !== ""}
+          >
+            {saving === "legal" ? "Saving…" : "Save legal notice"}
+          </button>
+          {legalDirty && <span className="text-xs opacity-60">Unsaved change</span>}
+          {saved.legal_notice && (
+            <a href="/imprint" target="_blank" rel="noopener" className="link text-xs">
+              View the published page
+            </a>
+          )}
         </div>
       </section>
     </div>

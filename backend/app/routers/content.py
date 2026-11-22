@@ -6,9 +6,9 @@ from xml.sax.saxutils import escape
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import select
 
-from ..models import ComingSoonItem, Product, Testimonial
+from ..models import ComingSoonItem, Product, Testimonial, get_store_setting
 from ..schemas import ComingSoonOut, TestimonialOut
-from ..security import DbSession
+from ..security import DbSession, site_base
 
 router = APIRouter(prefix="/api", tags=["storefront"])
 
@@ -59,7 +59,7 @@ def sitemap(request: Request, db: DbSession):
     """The shop's map for crawlers: the standing pages plus every live
     bake's page, each stamped with the moment it last changed. Sold-out
     bakes stay on the map — the page still answers, it just says so."""
-    base = str(request.base_url).rstrip("/")
+    base = site_base(request)
     urls = [
         _url(base, "/", changefreq="daily", priority="1.0"),
         _url(base, "/products", changefreq="daily", priority="0.9"),
@@ -68,6 +68,8 @@ def sitemap(request: Request, db: DbSession):
         _url(base, "/terms", changefreq="yearly", priority="0.2"),
         _url(base, "/refunds", changefreq="yearly", priority="0.2"),
     ]
+    if (get_store_setting(db).legal_notice or "").strip():
+        urls.append(_url(base, "/imprint", changefreq="yearly", priority="0.2"))
     for product in db.scalars(
         select(Product)
         .where(Product.is_available.is_(True))
@@ -95,7 +97,7 @@ def sitemap(request: Request, db: DbSession):
 def robots(request: Request):
     """Crawl rules: the storefront is open, the API and every private corner
     (the desk, the account, checkout) are not."""
-    base = str(request.base_url).rstrip("/")
+    base = site_base(request)
     body = (
         "User-agent: *\n"
         "Disallow: /api/\n"

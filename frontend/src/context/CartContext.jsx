@@ -1,8 +1,13 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "./AuthContext";
+import { MAX_LINE_QUANTITY } from "../lib/format";
 
 const CartContext = createContext(null);
 const CART_KEY = "bakehouse_cart";
+
+/* The most of one bake a basket line can hold: what is on the shelf, and
+   never more than the server takes on one line. */
+const lineCap = (stock) => Math.min(Math.max(stock || 0, 1), MAX_LINE_QUANTITY);
 
 function load() {
   try {
@@ -23,8 +28,26 @@ export function CartProvider({ children }) {
   const [items, setItems] = useState(load);
 
   useEffect(() => {
-    localStorage.setItem(CART_KEY, JSON.stringify(items));
+    try {
+      localStorage.setItem(CART_KEY, JSON.stringify(items));
+    } catch {
+      // Storage refused (blocked, or full): the basket still works for this
+      // visit — it just won't be here after a reload.
+    }
   }, [items]);
+
+  // The same basket in every tab: add a loaf in one, and the tab that is
+  // sitting on the checkout page prices the same box.
+  useEffect(() => {
+    const onStorage = (event) => {
+      if (event.key !== CART_KEY) return;
+      setItems((current) =>
+        JSON.stringify(current) === (event.newValue ?? "[]") ? current : load(),
+      );
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   // The basket belongs to the person browsing. Logging out (or switching
   // accounts) empties it — but a guest's cart survives page reloads, so we
@@ -44,7 +67,7 @@ export function CartProvider({ children }) {
         if (existing) {
           return current.map((i) =>
             i.product_id === product.id
-              ? { ...i, quantity: Math.min(i.quantity + quantity, Math.max(product.stock, 1)) }
+              ? { ...i, quantity: Math.min(i.quantity + quantity, lineCap(product.stock)) }
               : i
           );
         }
@@ -58,19 +81,25 @@ export function CartProvider({ children }) {
             category_slug: product.category_slug,
             unit_price: product.current_price,
             stock: product.stock,
-            quantity: Math.min(quantity, Math.max(product.stock, 1)),
+            quantity: Math.min(quantity, lineCap(product.stock)),
           },
         ];
       });
     };
 
-    const setQuantity = (productId, quantity) => {
+    // `stock`, when given, is the shelf count the server just reported —
+    // the figure cached when the bake was added can be days old.
+    const setQuantity = (productId, quantity, stock) => {
       setItems((current) =>
-        current.map((i) =>
-          i.product_id === productId
-            ? { ...i, quantity: Math.max(1, Math.min(quantity, i.stock || 99)) }
-            : i
-        )
+        current.map((i) => {
+          if (i.product_id !== productId) return i;
+          const shelf = stock ?? i.stock;
+          return {
+            ...i,
+            stock: shelf,
+            quantity: Math.max(1, Math.min(quantity, lineCap(shelf || MAX_LINE_QUANTITY))),
+          };
+        })
       );
     };
 

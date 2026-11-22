@@ -794,6 +794,14 @@ class StoreSetting(Base):
     contact_email: Mapped[str | None] = mapped_column(String(255))
     # One line per opening-hours row, free text ("Tue – Fri: 7:00 – 18:00").
     opening_hours: Mapped[str | None] = mapped_column(Text)
+    # The shop's legal notice (the "Impressum" German and EU law ask every
+    # commercial site to carry): who runs the shop and how to reach them.
+    # The baker's own words, shown as written at /imprint. NULL/empty means
+    # not published yet — the page and its footer link stay away until it is.
+    legal_notice: Mapped[str | None] = mapped_column(Text)
+    # Where the van goes: postal codes and areas ("10115, 101*"), see
+    # app/delivery.py. NULL/empty = no limit, the long-standing behaviour.
+    delivery_postal_codes: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 

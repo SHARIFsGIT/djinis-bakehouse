@@ -1,8 +1,9 @@
 import { Mail, MapPin, Phone, Send } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router";
 import client from "../api/client";
 import { useToast } from "../context/ToastContext";
+import useStore from "../hooks/useStore";
 
 /* Contact details and bake hours come from the shop's Settings tab, so the
  * real address and phone live in the database — nothing fictional ships.
@@ -10,17 +11,10 @@ import { useToast } from "../context/ToastContext";
 
 export default function Footer() {
   const toast = useToast();
-  const [store, setStore] = useState(null);
+  const store = useStore();
   const [email, setEmail] = useState("");
   const [sending, setSending] = useState(false);
   const [done, setDone] = useState(false);
-
-  useEffect(() => {
-    client
-      .get("/store")
-      .then(({ data }) => setStore(data))
-      .catch(() => setStore({}));
-  }, []);
 
   const hours = (store?.opening_hours ?? "")
     .split("\n")
@@ -99,16 +93,17 @@ export default function Footer() {
                 <span>{address}</span>
               </li>
             )}
+            {/* Tappable: on a phone, a number is something to call. */}
             {phone && (
               <li className="flex items-center gap-2.5">
-                <Phone size={16} className="shrink-0 opacity-60" />
-                <span>{phone}</span>
+                <Phone size={16} className="shrink-0 opacity-60" aria-hidden="true" />
+                <a href={`tel:${phone.replace(/[^+\d]/g, "")}`} className="link link-hover">{phone}</a>
               </li>
             )}
             {contactEmail && (
               <li className="flex items-center gap-2.5">
-                <Mail size={16} className="shrink-0 opacity-60" />
-                <span>{contactEmail}</span>
+                <Mail size={16} className="shrink-0 opacity-60" aria-hidden="true" />
+                <a href={`mailto:${contactEmail}`} className="link link-hover break-all">{contactEmail}</a>
               </li>
             )}
           </ul>
@@ -142,7 +137,10 @@ export default function Footer() {
                 </button>
               </div>
             )}
-            <p className="mt-1.5 text-xs opacity-55">One email a week, Friday mornings. No spam, ever.</p>
+            <p className="mt-1.5 text-xs opacity-55">
+              One email a week, Friday mornings. No spam, ever —{" "}
+              <Link to="/privacy" className="link">how we handle your address</Link>.
+            </p>
           </form>
         </div>
       </div>
@@ -155,6 +153,14 @@ export default function Footer() {
         <Link to="/terms" className="link link-hover">Terms</Link>
         <span className="mx-2" aria-hidden="true">·</span>
         <Link to="/refunds" className="link link-hover">Refunds &amp; cancellations</Link>
+        {/* Only once the baker has published one — never a link to an
+            empty legal page. */}
+        {store?.legal_notice_published && (
+          <>
+            <span className="mx-2" aria-hidden="true">·</span>
+            <Link to="/imprint" className="link link-hover">Legal notice</Link>
+          </>
+        )}
       </div>
     </footer>
   );

@@ -5,7 +5,7 @@ import client, { apiError } from "../../api/client";
 import { formatDateTime, hasNonActiveCurrency, money } from "../../lib/format";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { Loading } from "../../components/Loading";
+import { LoadError, Loading } from "../../components/Loading";
 import Drawer from "../../components/Drawer";
 
 /* What each tier wears. The rules live on the server (admin.py) — this is
@@ -334,11 +334,22 @@ export default function AdminUsers() {
           open === null ? null : (data.items.find((u) => u.id === open.id) ?? open),
         );
       })
-      .catch((err) => toast.error(apiError(err)));
+      .catch((err) => {
+        // Said twice on purpose: the toast for a refresh that failed behind
+        // an open roll, the page itself when there is no roll to show.
+        setFailed(apiError(err, "The customer roll didn't load."));
+        toast.error(apiError(err));
+      });
+
+  const [failed, setFailed] = useState(null);
+  const fetchRoll = () => {
+    setData(null);
+    setFailed(null);
+    load();
+  };
 
   useEffect(() => {
-    setData(null);
-    load();
+    fetchRoll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tier, cls, sort, searched, page]);
 
@@ -433,7 +444,13 @@ export default function AdminUsers() {
     }
   };
 
-  if (data === null) return <Loading label="Rolling out the regulars…" />;
+  if (data === null) {
+    return failed ? (
+      <LoadError message={failed} onRetry={fetchRoll} />
+    ) : (
+      <Loading label="Rolling out the regulars…" />
+    );
+  }
 
   const tierCounts = data.tier_counts;
   const worthAVoucher = (tierCounts.vip ?? 0) + (tierCounts.loyal ?? 0);

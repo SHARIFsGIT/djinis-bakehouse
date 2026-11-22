@@ -7,11 +7,12 @@ from datetime import timedelta
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 
 from .. import facebook_gateway, payment_ops, sms_gateway
 from ..config import get_settings
-from ..email import reset_password_email, send_email
+from ..email import DELETED_ACCOUNT_DOMAIN, reset_password_email, send_email
 from ..facebook_gateway import FacebookError
 from ..models import (
     Address,
@@ -25,6 +26,7 @@ from ..models import (
     Review,
     Subscriber,
     User,
+    UserRole,
     utcnow,
 )
 from ..notifications import notify_admin
@@ -57,6 +59,7 @@ from ..security import (
     create_refresh_token,
     decode_token,
     hash_password,
+    site_base,
     verify_login_state,
     verify_password,
 )
@@ -120,7 +123,16 @@ def register(payload: RegisterRequest, db: DbSession, request: Request, backgrou
         phone=payload.phone or None,
     )
     db.add(user)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # The same sign-up arrived twice at once (a double tap): both passed
+        # the check above, and the other request's insert won the unique
+        # email. Same answer as finding it there — not a 500.
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="An account with this email already exists"
+        ) from None
     # A new regular is news worth hearing at the desk.
     notify_admin(
         db,
@@ -172,7 +184,7 @@ def forgot_password(
     user.reset_token_expires = utcnow() + timedelta(minutes=RESET_TOKEN_MINUTES)
     db.commit()
 
-    link = f"{str(request.base_url).rstrip('/')}/reset-password?token={token}"
+    link = f"{site_base(request)}/reset-password?token={token}"
     subject, html, text = reset_password_email(user.first_name, link, RESET_TOKEN_MINUTES)
     background.add_task(send_email, user.email, subject, html, text)
     # Dev convenience: with SMTP unset the link lands in the server log, so
@@ -333,7 +345,7 @@ def facebook_start(request: Request):
     it back to /api/auth/facebook/callback with a one-time code."""
     if not facebook_gateway.configured():
         raise HTTPException(status_code=404, detail="Facebook sign-in is not configured")
-    redirect_uri = f"{str(request.base_url).rstrip('/')}/api/auth/facebook/callback"
+    redirect_uri = f"{site_base(request)}/api/auth/facebook/callback"
     return {"url": facebook_gateway.authorize_url(redirect_uri, create_login_state())}
 
 
@@ -349,7 +361,7 @@ def facebook_callback(
     """Where Facebook lands the browser after its dialog. No human sees this
     page: it issues a one-time login code and redirects to the SPA, which
     exchanges it for real tokens — so tokens never ride in a URL."""
-    base = str(request.base_url).rstrip("/")
+    base = site_base(request)
 
     def back(slug: str) -> RedirectResponse:
         return RedirectResponse(f"{base}/auth/callback?error={slug}")
@@ -664,6 +676,21 @@ def delete_my_account(
     """
     if not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=400, detail="Password is incorrect")
+    # The shop must never end up with zero active admins — the same rule
+    # the Users desk keeps (admin.update_user). This door needs it too: an
+    # admin's own profile page carries the same "close my account" button.
+    if user.role == UserRole.ADMIN.value:
+        other_admins = db.scalar(
+            select(func.count(User.id)).where(
+                User.role == UserRole.ADMIN.value, User.is_active.is_(True), User.id != user.id
+            )
+        )
+        if not other_admins:
+            raise HTTPException(
+                status_code=400,
+                detail="You are the shop's only admin — closing this account would lock "
+                "everyone out of the desk. Make another account an admin first.",
+            )
 
     user_id = user.id
     old_email = user.email.lower()
@@ -693,7 +720,7 @@ def delete_my_account(
     # the shop's own domain — syntactically valid on purpose: an `.invalid`
     # style suffix is rejected by the email schema, and one deleted account
     # would then 500 the whole Users roll.
-    user.email = f"deleted-account-{user_id}@deleted.djinisbakehouse.com"
+    user.email = f"deleted-account-{user_id}@{DELETED_ACCOUNT_DOMAIN}"
     user.first_name = "Deleted"
     user.last_name = "customer"
     user.phone = None
@@ -734,6 +761,10 @@ def delete_my_account(
 # --------------------------------------------------------------------------
 # Addresses
 # --------------------------------------------------------------------------
+
+# The address lines that may be emptied; every other one is required.
+_CLEARABLE_ADDRESS_FIELDS = frozenset({"phone", "line2"})
+
 
 def _get_own_address(db, user: User, address_id: int) -> Address:
     address = db.get(Address, address_id)
@@ -781,6 +812,10 @@ def update_address(address_id: int, payload: AddressUpdate, user: CurrentUser, d
     if payload.is_default:
         _unset_defaults(db, user, keep_id=address.id)
     for field, value in payload.model_dump(exclude_unset=True).items():
+        if value is None and field not in _CLEARABLE_ADDRESS_FIELDS:
+            # A required line sent as null means "leave it" — the column
+            # cannot hold nothing, and the customer did not ask for that.
+            continue
         setattr(address, field, value)
     db.commit()
     db.refresh(address)

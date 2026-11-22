@@ -3,6 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -145,6 +146,13 @@ class Settings(BaseSettings):
     forgot_rate_limit: int = 5  # reset asks + redemptions per minute
     otp_rate_limit: int = 5  # sign-in-code asks per minute
     quote_rate_limit: int = 30  # public basket price checks per minute
+    # Brakes on what a signed-in account can do, keyed on the account (an
+    # address changes; an account does not). Far above anything a person
+    # does, and enough to stop a script from reserving the whole shelf with
+    # unpaid orders, burying the desk in pings, or hammering a provider.
+    order_rate_limit: int = 12  # orders placed per account per hour
+    review_rate_limit: int = 10  # reviews written or edited per account per hour
+    payment_action_rate_limit: int = 30  # pay-page opens and payment checks per account per minute
     # Which request header carries the visitor's real address, for the
     # brakes above. Empty (the default) keeps the long-standing behaviour:
     # the first X-Forwarded-For hop — which is only honest when the proxy in
@@ -155,6 +163,11 @@ class Settings(BaseSettings):
     # edge overwrites — a pass-through header is as forgeable as the default.
     client_ip_header: str = ""
 
+    # Where the shop is. The database keeps UTC; "today" on a delivery date
+    # and the time printed on a receipt are this zone's (app/shoptime.py).
+    # An IANA name; "local" means the server's own clock.
+    shop_timezone: str = "Europe/Berlin"
+
     # Outgoing email (password resets today; newsletters and marketing later).
     # Empty SMTP_HOST = the log-only fallback: messages are logged with their
     # links instead of sent, so the flow never fails silently.
@@ -163,6 +176,20 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_from: str = "Djini's Bakehouse <no-reply@djinisbakehouse.com>"
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _blank_means_unset(cls, value, info):
+        """A dashboard field left empty arrives as "". For a number or a
+        switch that means "not set" — the default applies — and never a
+        reason to refuse to boot (a blank SMTP_PORT once did exactly that).
+        Text settings keep their empty string: an empty SMTP_HOST is how
+        mail is switched off."""
+        if isinstance(value, str) and not value.strip():
+            field = cls.model_fields.get(info.field_name)
+            if field is not None and field.annotation is not str:
+                return field.default
+        return value
 
     @property
     def is_production(self) -> bool:

@@ -165,15 +165,10 @@ export const isoDate = (date) => {
 
 export const todayISO = () => isoDate(new Date());
 
-/** "1440" -> "24 h", "2880" -> "2 days", "90" -> "1.5 h" */
-export const formatPrepTime = (minutes) => {
-  if (!minutes && minutes !== 0) return null;
-  if (minutes < 60) return `${minutes} min`;
-  const hours = minutes / 60;
-  if (hours < 24) return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} h`;
-  const days = hours / 24;
-  return `${Number.isInteger(days) ? days : days.toFixed(1)} days`;
-};
+/** The most of one bake the server accepts on a single basket line
+    (schemas.OrderItemRequest). The quantity pickers stop here, so a
+    well-stocked shelf can never walk a basket into a refused checkout. */
+export const MAX_LINE_QUANTITY = 99;
 
 /** Letter shown on the plain fallback tile when a product has no photo. */
 export const productInitial = (name) => (name ?? "?").trim().charAt(0).toUpperCase();

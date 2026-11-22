@@ -2,6 +2,7 @@ import { Menu, Moon, Search, ShoppingBasket, Sun, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import client from "../api/client";
+import useStore from "../hooks/useStore";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
 import AdminBell from "./AdminBell";
@@ -33,7 +34,8 @@ export default function Navbar() {
   const navigate = useNavigate();
   const location = useLocation();
   const [categories, setCategories] = useState([]);
-  const [announcement, setAnnouncement] = useState("");
+  // Shop copy the admin can rewrite (or clear — an empty line hides the bar)
+  const announcement = useStore()?.announcement ?? "";
   const [search, setSearch] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -50,12 +52,13 @@ export default function Navbar() {
       .get("/products/categories")
       .then(({ data }) => setCategories(data))
       .catch(() => {});
-    // Shop copy the admin can rewrite (or clear — an empty line hides the bar)
-    client
-      .get("/store")
-      .then(({ data }) => setAnnouncement(data.announcement))
-      .catch(() => {});
   }, []);
+
+  // The sheet is for getting somewhere — once the address changes (a shelf
+  // link, the logo, the basket, the back button), it has done its job.
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [location.pathname, location.search]);
 
   const toggleTheme = () => {
     const next = theme === "bakery" ? "midnight" : "bakery";
@@ -173,7 +176,7 @@ export default function Navbar() {
         <Link
           to="/cart"
           className="btn btn-ghost btn-sm btn-square relative"
-          aria-label={`Basket, ${count} items`}
+          aria-label={`Basket, ${count} ${count === 1 ? "item" : "items"}`}
         >
           <ShoppingBasket size={20} />
           {count > 0 && (
@@ -200,7 +203,7 @@ export default function Navbar() {
               />
             ) : (
               <span className="brand-gradient flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold text-secondary-content">
-                {user.first_name.charAt(0)}
+                {(user.first_name || user.email || "?").charAt(0).toUpperCase()}
               </span>
             )}
             <span className="hidden max-w-24 truncate text-sm font-semibold xl:inline">

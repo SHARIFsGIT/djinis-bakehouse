@@ -1024,3 +1024,20 @@ def test_closing_an_account_forgets_its_checkout_presses_and_keeps_the_books():
     # the order's payment record — an invoice's other half — is still on the book
     (tx,) = _payments(placed.json()["id"])["transactions"]
     assert tx["status"] == "succeeded"
+
+
+def test_pay_page_actions_are_braked_per_account(monkeypatch):
+    """Every "complete payment" and every "check again" is a call to the
+    provider. One account gets a generous handful a minute, not a flood."""
+    from app import SlidingWindowLimiter
+
+    monkeypatch.setitem(client.app.state.limiters, "payment_actions", SlidingWindowLimiter(2))
+    headers = _customer("pay-flood")
+    order = _place(headers)
+
+    codes = [client.post(f"/api/payments/confirm/{order['id']}", headers=headers).status_code for _ in range(3)]
+    assert codes == [200, 200, 429]
+    assert client.post(f"/api/payments/{order['id']}/session", headers=headers).status_code == 429
+    # a paid order has nothing to ask the provider — reading it is never braked
+    pay_order_via_webhook(order["id"])
+    assert client.post(f"/api/payments/confirm/{order['id']}", headers=headers).status_code == 200

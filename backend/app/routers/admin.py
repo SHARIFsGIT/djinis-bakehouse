@@ -91,10 +91,10 @@ from ..schemas import (
     UserOut,
     VoucherLinkRequest,
 )
-from .. import ledger, payment_ops
+from .. import delivery, ledger, payment_ops, shoptime
 from ..loyalty import loyalty_tier as _loyalty
-from ..security import CurrentAdmin, DbSession
-from ..serialize import csv_safe, product_to_card, review_summary, verified_buyers
+from ..security import CurrentAdmin, DbSession, site_base
+from ..serialize import csv_safe, like_term, product_to_card, review_summary, verified_buyers
 from .. import costing
 from ..vat import REVIEW_STATUS_APPROVED, preview_rate, validate_classification
 from ..uploads import MAX_PRODUCT_PHOTO_BYTES, save_photo
@@ -346,6 +346,24 @@ def update_shop_settings(payload: StoreSettingsUpdate, admin: CurrentAdmin, db: 
                 )
             # Empty clears the line — an unset detail never shows a placeholder
             setattr(settings, field, value.strip() or None)
+    if payload.legal_notice is not None:
+        # Published exactly as written; empty takes the page down again.
+        settings.legal_notice = payload.legal_notice.strip() or None
+    if payload.delivery_postal_codes is not None:
+        entries = delivery.parse_area(payload.delivery_postal_codes)
+        bad = delivery.invalid_entries(entries)
+        if bad:
+            raise HTTPException(
+                status_code=400,
+                detail=f"“{bad[0][:20]}” isn't a postal code or an area like 101* — "
+                "check that entry",
+            )
+        if len(entries) > delivery.MAX_ENTRIES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"That is more than {delivery.MAX_ENTRIES} entries — use areas like 101* instead",
+            )
+        settings.delivery_postal_codes = ", ".join(entries) or None
     db.commit()
     db.refresh(settings)
     settings.hero_image = settings.hero_image or DEFAULT_HERO_IMAGE
@@ -371,14 +389,14 @@ def all_orders(
     query = select(Order)
     if status_filter:
         query = query.where(Order.status == status_filter.value)
-    if search:
-        term = f"%{search.strip()}%"
+    if search and search.strip():
+        term = like_term(search)
         query = query.join(User).where(
             or_(
-                Order.order_number.ilike(term),
-                User.email.ilike(term),
-                User.first_name.ilike(term),
-                User.last_name.ilike(term),
+                Order.order_number.ilike(term, escape="\\"),
+                User.email.ilike(term, escape="\\"),
+                User.first_name.ilike(term, escape="\\"),
+                User.last_name.ilike(term, escape="\\"),
             )
         )
 
@@ -538,7 +556,8 @@ def export_orders(admin: CurrentAdmin, db: DbSession):
         writer.writerow(
             [
                 order.order_number,
-                order.created_at.strftime("%Y-%m-%d %H:%M"),
+                # The shop's own clock, like every time a person reads.
+                shoptime.in_shop_time(order.created_at).strftime("%Y-%m-%d %H:%M"),
                 # Customer-typed text: shown by the spreadsheet, never run.
                 csv_safe(order.user.full_name if order.user else ""),
                 csv_safe(order.user.email if order.user else ""),
@@ -668,9 +687,11 @@ def all_products(
     per_page: int = Query(default=15, ge=1, le=100),
 ):
     query = select(Product)
-    if search:
-        term = f"%{search.strip()}%"
-        query = query.where(or_(Product.name.ilike(term), Product.slug.ilike(term)))
+    if search and search.strip():
+        term = like_term(search)
+        query = query.where(
+            or_(Product.name.ilike(term, escape="\\"), Product.slug.ilike(term, escape="\\"))
+        )
     # tapping a shelf on the desk shows just that shelf's bakes
     if category_id is not None:
         query = query.where(Product.category_id == category_id)
@@ -815,7 +836,7 @@ def _answer_restock_alerts(
         return
     db.execute(delete(RestockAlert).where(RestockAlert.product_id == product.id))
     db.commit()
-    product_url = f"{str(request.base_url).rstrip('/')}/products/{product.slug}"
+    product_url = f"{site_base(request)}/products/{product.slug}"
     background.add_task(send_restock_emails, alerts, product_url, product.name)
 
 
@@ -1296,7 +1317,7 @@ def export_bulk_enquiries(admin: CurrentAdmin, db: DbSession):
     for e in db.scalars(select(BulkEnquiry).order_by(BulkEnquiry.created_at.desc())):
         writer.writerow(
             [
-                e.created_at.strftime("%Y-%m-%d %H:%M"),
+                shoptime.in_shop_time(e.created_at).strftime("%Y-%m-%d %H:%M"),
                 # Everything a guest typed into the public form is text to
                 # the spreadsheet, never a formula (csv_safe).
                 csv_safe(e.name),

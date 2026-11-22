@@ -6,7 +6,7 @@ import { shrinkImage } from "../../lib/imageResize";
 import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import PhotoTile from "../../components/PhotoTile";
-import { Loading } from "../../components/Loading";
+import { LoadError, Loading } from "../../components/Loading";
 
 const EMPTY_FORM = {
   name: "",
@@ -68,6 +68,8 @@ export default function AdminProducts() {
   const [deleting, setDeleting] = useState(null);
   const [deletingShelf, setDeletingShelf] = useState(null);
   const [needsVatReview, setNeedsVatReview] = useState(false);
+  const [failed, setFailed] = useState(null); // why the list didn't load, when it didn't
+  const [attempt, setAttempt] = useState(0);
 
   const load = (p = page, s = search, cat = shelfFilter, vat = needsVatReview) => {
     const query = { page: p, per_page: 15 };
@@ -80,14 +82,18 @@ export default function AdminProducts() {
   };
 
   useEffect(() => {
-    client.get("/products/categories").then(({ data }) => setCategories(data));
+    client
+      .get("/products/categories")
+      .then(({ data }) => setCategories(data))
+      .catch(() => {}); // the shelf filter is a convenience — the list still loads
   }, []);
 
   useEffect(() => {
     setData(null);
-    load(page, search);
+    setFailed(null);
+    load(page, search).catch((e) => setFailed(apiError(e, "The products didn't load.")));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, search, shelfFilter, needsVatReview]);
+  }, [page, search, shelfFilter, needsVatReview, attempt]);
 
   const openNew = () =>
     setEditing({
@@ -381,7 +387,9 @@ export default function AdminProducts() {
         )}
       </div>
 
-      {data === null ? (
+      {failed && data === null ? (
+        <LoadError message={failed} onRetry={() => setAttempt((n) => n + 1)} />
+      ) : data === null ? (
         <Loading label="Opening the case…" />
       ) : (
         <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">

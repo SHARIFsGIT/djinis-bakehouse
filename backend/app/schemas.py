@@ -34,6 +34,26 @@ def normalize_phone(value: str | None, *, required: bool = False) -> str | None:
     return ("+" if plus else "") + digits
 
 
+def _trim(value):
+    """Surrounding whitespace is not content. Trimmed *before* the length
+    rules run, so a required line of only spaces is refused as the empty
+    line it is — instead of being stored as nothing (a customer called "",
+    an address in the city of " ", a bake with no name)."""
+    return value.strip() if isinstance(value, str) else value
+
+
+def _trimmed(*fields: str):
+    """A validator that trims the named text fields — never used on
+    passwords, whose spaces are the customer's own business."""
+    return field_validator(*fields, mode="before")(_trim)
+
+
+def _label_or_home(value):
+    """An address label left blank is "Home": the book lists addresses by
+    label, and one with no name is a row nobody can tell apart or tap."""
+    return (value.strip() or "Home") if isinstance(value, str) else value
+
+
 # --------------------------------------------------------------------------
 # Auth
 # --------------------------------------------------------------------------
@@ -46,6 +66,8 @@ class RegisterRequest(BaseModel):
     # customers have a single name to give.
     last_name: str = Field(default="", max_length=100)
     phone: str | None = Field(default=None, max_length=30)
+
+    _text = _trimmed("first_name", "last_name")
 
     @field_validator("phone")
     @classmethod
@@ -126,8 +148,12 @@ class UserOut(ORMModel):
 
 class UserUpdateRequest(BaseModel):
     first_name: str | None = Field(default=None, min_length=1, max_length=100)
-    last_name: str | None = Field(default=None, min_length=1, max_length=100)
+    # May be empty, exactly as at sign-up: plenty of customers have a single
+    # name to give, and they must still be able to save their profile.
+    last_name: str | None = Field(default=None, max_length=100)
     phone: str | None = Field(default=None, max_length=30)
+
+    _text = _trimmed("first_name", "last_name")
 
     @field_validator("phone")
     @classmethod
@@ -165,6 +191,9 @@ class AddressBase(BaseModel):
     country: str = Field(min_length=1, max_length=100)
     is_default: bool = False
 
+    _text = _trimmed("recipient", "line1", "line2", "city", "state", "postal_code", "country")
+    _label = field_validator("label", mode="before")(_label_or_home)
+
 
 class AddressCreate(AddressBase):
     pass
@@ -185,6 +214,9 @@ class AddressUpdate(BaseModel):
     # country but never blank it.
     country: str | None = Field(default=None, min_length=1, max_length=100)
     is_default: bool | None = None
+
+    _text = _trimmed("recipient", "line1", "line2", "city", "state", "postal_code", "country")
+    _label = field_validator("label", mode="before")(_label_or_home)
 
 
 class AddressOut(ORMModel):
@@ -220,6 +252,8 @@ class CategoryCreateRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=100)
     image_url: str | None = Field(default=None, max_length=255)
+
+    _text = _trimmed("name")
 
 
 class ReviewOut(ORMModel):
@@ -471,6 +505,8 @@ class StoreSettingsOut(ORMModel):
     contact_email: str | None = None
     opening_hours: str | None = None
     brand_color: str | None = None
+    legal_notice: str | None = None
+    delivery_postal_codes: str | None = None
     updated_at: datetime
 
 
@@ -488,6 +524,11 @@ class StoreSettingsUpdate(BaseModel):
     # padding) is checked in the route itself so a bad pick gets the
     # shop-language message, not a pydantic field error.
     brand_color: str | None = None
+    # The legal notice, as the baker wrote it; empty takes it down again.
+    legal_notice: str | None = Field(default=None, max_length=10000)
+    # Postal codes and areas the shop delivers to; empty lifts the limit.
+    # Entries are checked in the route (plain-words message for a bad one).
+    delivery_postal_codes: str | None = Field(default=None, max_length=20000)
 
 
 class StorefrontOut(BaseModel):
@@ -525,6 +566,12 @@ class StorefrontOut(BaseModel):
     # burgundy the logo wears. The storefront re-tints its theme seats from
     # this one value before first paint.
     brand_color: str | None = None
+    # True once the baker has published a legal notice — the footer links
+    # to /imprint only then (the text itself is GET /api/legal-notice).
+    legal_notice_published: bool = False
+    # The postal codes and areas ("101*") the shop delivers to; empty means
+    # anywhere. Checkout shows them and refuses an address outside them.
+    delivery_postal_codes: list[str] = []
     # The shop's money rules, straight from the environment — the storefront's
     # basket arithmetic, labels and currency symbol consume these instead of
     # keeping a second copy, so what a customer estimates can never drift from
@@ -547,6 +594,7 @@ class StorefrontOut(BaseModel):
 
 class ProductCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=150)
+    _text = _trimmed("name")
     description: str | None = None
     price: float = Field(gt=0)
     sale_price: float | None = Field(default=None, gt=0)
@@ -1139,6 +1187,9 @@ class MarketingOverviewOut(BaseModel):
     voucher_percent_cap: int | None
     voucher_fixed_cap: float | None
     costed_products: int
+    # Footer sign-ups — a list to export, not an audience to mail: a sign-up
+    # alone is not marketing consent (see models.Subscriber).
+    newsletter_subscribers: int = 0
 
 
 # --------------------------------------------------------------------------
@@ -1232,6 +1283,7 @@ class BulkEnquiryCreate(BaseModel):
     """Public catering lead from the home page's "Bulk order" button."""
 
     name: str = Field(min_length=1, max_length=150)
+    _text = _trimmed("name")
     email: EmailStr
     # Quotes move faster by phone, so the number is required.
     phone: str = Field(min_length=3, max_length=30)

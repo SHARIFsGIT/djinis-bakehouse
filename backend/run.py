@@ -22,6 +22,8 @@ RUNTIME_IMPORTS = {
     "bcrypt": "bcrypt",
     "jwt": "PyJWT",
     "python_multipart": "python-multipart",  # file uploads (product & avatar photos)
+    "stripe": "stripe",  # imported by app/stripe_gateway.py even when no key is set
+    "tzdata": "tzdata",  # the time zone database behind SHOP_TIMEZONE (Windows has none of its own)
 }
 
 

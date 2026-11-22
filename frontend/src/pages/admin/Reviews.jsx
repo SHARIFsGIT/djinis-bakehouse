@@ -6,7 +6,7 @@ import { formatDateTime, productInitial, stampTime } from "../../lib/format";
 import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import RatingStars from "../../components/RatingStars";
-import { Loading } from "../../components/Loading";
+import { LoadError, Loading } from "../../components/Loading";
 
 const FILTERS = [
   { value: "live", label: "On the wall", count: "live" },
@@ -111,6 +111,8 @@ export default function AdminReviews() {
   const [query, setQuery] = useState("");
   const [pendingDelete, setPendingDelete] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(null);
+  const [attempt, setAttempt] = useState(0);
   const focusRef = useRef(null);
 
   const load = (current = filter) =>
@@ -122,18 +124,21 @@ export default function AdminReviews() {
 
   useEffect(() => {
     let stale = false;
-    load().then((data) => {
-      // A bell ping can point at a taken-down review. If the focused one
-      // isn't on this shelf, widen to Everything so the highlight has a
-      // card to land on instead of quietly matching nothing.
-      if (stale || !focusId || filter === "all") return;
-      if (!data.items.some((r) => r.id === focusId)) setFilter("all");
-    });
+    setFailed(null);
+    load()
+      .then((data) => {
+        // A bell ping can point at a taken-down review. If the focused one
+        // isn't on this shelf, widen to Everything so the highlight has a
+        // card to land on instead of quietly matching nothing.
+        if (stale || !focusId || filter === "all") return;
+        if (!data.items.some((r) => r.id === focusId)) setFilter("all");
+      })
+      .catch((e) => !stale && setFailed(apiError(e, "The reviews didn't load.")));
     return () => {
       stale = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, focusId]);
+  }, [filter, focusId, attempt]);
 
   // A bell click lands here with ?focus= — make that review easy to find
   useEffect(() => {
@@ -148,7 +153,7 @@ export default function AdminReviews() {
   const visible = useMemo(
     () =>
       needle
-        ? reviews.filter((r) =>
+        ? (reviews ?? []).filter((r) =>
             [r.product_name, r.author_name, r.author_email, r.comment]
               .filter(Boolean)
               .some((field) => field.toLowerCase().includes(needle)),
@@ -183,6 +188,9 @@ export default function AdminReviews() {
     }
   };
 
+  if (failed && reviews === null) {
+    return <LoadError message={failed} onRetry={() => setAttempt((n) => n + 1)} />;
+  }
   if (reviews === null) return <Loading label="Reading the reviews…" />;
 
   return (

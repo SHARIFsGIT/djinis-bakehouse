@@ -149,6 +149,27 @@ OptionalUser = Annotated[User | None, Depends(get_optional_user)]
 DbSession = Annotated[Session, Depends(get_db)]
 
 
+def account_brake(request, name: str, user, detail: str) -> None:
+    """One of the per-account brakes (app factory → create_limiters): keyed
+    on the account, not the address, so it holds wherever the caller comes
+    from. Raises 429 with `detail` once the account is over its budget."""
+    if not request.app.state.limiters[name].allow(f"account:{user.id}"):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=detail)
+
+
+def site_base(request) -> str:
+    """The shop's public address, for every link that leaves the server —
+    in an email, to a payment provider, to Facebook, in the sitemap.
+
+    PUBLIC_BASE_URL when it is set: a fixed address no request can
+    influence. Otherwise the address this request arrived on, as it always
+    was — which is only as trustworthy as the proxy in front of the app (a
+    Host header the edge does not pin could aim a password-reset link at
+    somebody else's site)."""
+    configured = settings.public_base_url.strip().rstrip("/")
+    return configured or str(request.base_url).rstrip("/")
+
+
 def client_key(request) -> str:
     """Best-effort client identity for rate limiting.
 

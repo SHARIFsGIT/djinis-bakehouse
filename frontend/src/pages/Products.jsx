@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 import client from "../api/client";
 import EmptyState from "../components/EmptyState";
-import { ProductGridSkeleton } from "../components/Loading";
+import { LoadError, ProductGridSkeleton } from "../components/Loading";
 import ProductCard from "../components/ProductCard";
 
 const SORTS = [
@@ -13,33 +13,53 @@ const SORTS = [
   { value: "rating", label: "Best rated" },
 ];
 
+/* The address bar is something people edit, share and mistype. Whatever
+   arrives there is read into something the catalog can be asked for — a
+   page that isn't a number is page one, a price that isn't a price is no
+   price filter — rather than sent on and refused. */
+const cleanPage = (raw) => {
+  const page = Number.parseInt(raw ?? "", 10);
+  return Number.isFinite(page) && page >= 1 ? page : 1;
+};
+const cleanPrice = (raw) => {
+  const value = Number(raw);
+  return raw !== null && raw !== "" && Number.isFinite(value) && value >= 0 ? String(value) : "";
+};
+
 export default function Products() {
   const [params, setParams] = useSearchParams();
   const [categories, setCategories] = useState([]);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  // null | "missing-shelf" (the URL names a shelf that isn't there) | "failed"
+  const [problem, setProblem] = useState(null);
+  const [attempt, setAttempt] = useState(0);
 
   // All filter state lives in the URL — shareable and back-button friendly.
   const filters = useMemo(
     () => ({
       category: params.get("category") ?? "",
       search: params.get("search") ?? "",
-      sort: params.get("sort") ?? "newest",
+      sort: SORTS.some((s) => s.value === params.get("sort")) ? params.get("sort") : "newest",
       on_sale: params.get("on_sale") === "true",
       in_stock: params.get("in_stock") === "true",
-      min_price: params.get("min_price") ?? "",
-      max_price: params.get("max_price") ?? "",
-      page: Number(params.get("page") ?? 1),
+      min_price: cleanPrice(params.get("min_price")),
+      max_price: cleanPrice(params.get("max_price")),
+      page: cleanPage(params.get("page")),
     }),
     [params],
   );
 
   useEffect(() => {
-    client.get("/products/categories").then(({ data }) => setCategories(data));
+    client
+      .get("/products/categories")
+      .then(({ data }) => setCategories(data))
+      .catch(() => {}); // the shelf list is a convenience — the results below still load
   }, []);
 
   useEffect(() => {
     setLoading(true);
+    setProblem(null);
     let stale = false;
     const query = {
       sort: filters.sort,
@@ -55,12 +75,35 @@ export default function Products() {
 
     client
       .get("/products", { params: query })
-      .then(({ data }) => !stale && setData(data))
+      .then(({ data }) => {
+        if (stale) return;
+        // A page past the end (a filter narrowed the list, or the link is
+        // old): step back to the last page that exists instead of showing
+        // an empty shelf beside a count that says otherwise.
+        const last = Math.max(1, data.pagination?.total_pages ?? 1);
+        if (data.products.length === 0 && filters.page > last) {
+          const next = new URLSearchParams(params);
+          if (last > 1) next.set("page", last);
+          else next.delete("page");
+          stale = true; // this answer is never shown — the loader stays up for the next one
+          setParams(next, { replace: true });
+          return;
+        }
+        setData(data);
+      })
+      .catch((error) => {
+        if (stale) return;
+        // Never leave the previous filter's bakes on screen under this one.
+        setData(null);
+        setProblem(error?.response?.status === 404 ? "missing-shelf" : "failed");
+      })
       .finally(() => !stale && setLoading(false));
     return () => {
       stale = true;
     };
-  }, [filters]);
+    // `attempt` re-runs the same request for "Try again".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, attempt]);
 
   const setFilter = (patch, resetPage = true) => {
     const next = new URLSearchParams(params);
@@ -233,6 +276,24 @@ export default function Products() {
 
           {loading ? (
             <ProductGridSkeleton />
+          ) : problem === "missing-shelf" ? (
+            <EmptyState
+              title="That shelf isn't here"
+              hint="The link points at a shelf the bakery no longer keeps — everything else is still on the counter."
+            >
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm text-secondary-content"
+                onClick={() => setParams(new URLSearchParams())}
+              >
+                See everything
+              </button>
+            </EmptyState>
+          ) : problem === "failed" ? (
+            <LoadError
+              message="The shelves didn't load — check your connection and try again."
+              onRetry={() => setAttempt((n) => n + 1)}
+            />
           ) : data?.products?.length ? (
             <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
               {data.products.map((p) => (
@@ -259,11 +320,12 @@ export default function Products() {
           {/* Pagination */}
           {pagination && pagination.total_pages > 1 && (
             <div className="mt-8 flex items-center justify-center gap-2">
-              <div className="join">
+              <div className="join" role="navigation" aria-label="Pages of bakes">
                 <button
                   type="button"
                   className="btn join-item btn-sm"
                   disabled={pagination.page <= 1}
+                  aria-label="Previous page"
                   onClick={() =>
                     setFilter({ page: pagination.page - 1 }, false)
                   }
@@ -288,6 +350,8 @@ export default function Products() {
                         type="button"
                         onClick={() => setFilter({ page: p }, false)}
                         className={`join-item btn btn-sm ${p === pagination.page ? "btn-primary" : ""}`}
+                        aria-label={`Page ${p}`}
+                        aria-current={p === pagination.page ? "page" : undefined}
                       >
                         {p}
                       </button>
@@ -297,6 +361,7 @@ export default function Products() {
                   type="button"
                   className="btn join-item btn-sm"
                   disabled={pagination.page >= pagination.total_pages}
+                  aria-label="Next page"
                   onClick={() =>
                     setFilter({ page: pagination.page + 1 }, false)
                   }

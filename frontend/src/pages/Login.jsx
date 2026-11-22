@@ -1,7 +1,9 @@
 import { Mail, MessageSquare, Smartphone } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router";
+import { Link, Navigate, useLocation, useNavigate } from "react-router";
 import client, { apiError } from "../api/client";
+import { returnPath } from "../lib/navigation";
+import { fetchStore } from "../lib/store";
 import PasswordInput from "../components/PasswordInput";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -22,7 +24,7 @@ const DEMO_ACCOUNTS = [
 ];
 
 export default function Login() {
-  const { login, phoneLogin } = useAuth();
+  const { login, phoneLogin, user, ready } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -45,16 +47,19 @@ export default function Login() {
 
   // Demo logins only exist where demo data was seeded — never on a real shop.
   useEffect(() => {
-    client
-      .get("/store")
-      .then(({ data }) => {
+    fetchStore()
+      .then((data) => {
         setDemoAccounts(Boolean(data.demo_accounts));
         setRails({ phone: Boolean(data.phone_login), facebook: Boolean(data.facebook_login) });
       })
       .catch(() => {});
   }, []);
 
-  const from = location.state?.from || "/";
+  const from = returnPath(location);
+
+  // Already signed in (a bookmark, the back button, a second tab that just
+  // logged in): there is nothing to do here — on to where they were going.
+  if (ready && user && !busy && !phoneBusy) return <Navigate to={from} replace />;
 
   const submit = async (e) => {
     e.preventDefault();

@@ -1,12 +1,13 @@
 import { useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router";
+import { Link, Navigate, useLocation, useNavigate } from "react-router";
 import { apiError } from "../api/client";
 import PasswordInput from "../components/PasswordInput";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
+import { returnPath } from "../lib/navigation";
 
 export default function Register() {
-  const { register } = useAuth();
+  const { register, user, ready } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -19,9 +20,12 @@ export default function Register() {
   });
   const [busy, setBusy] = useState(false);
 
-  const from = location.state?.from || "/";
+  const from = returnPath(location);
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+
+  // Already signed in — nothing to create.
+  if (ready && user && !busy) return <Navigate to={from} replace />;
 
   const submit = async (e) => {
     e.preventDefault();
@@ -92,6 +96,13 @@ export default function Register() {
           <button type="submit" className="btn btn-primary btn w-full" disabled={busy}>
             {busy ? <span className="loading loading-spinner loading-sm" /> : "Create account"}
           </button>
+          {/* What signing up means, where it is decided — with the two
+              documents one tap away. */}
+          <p className="text-center text-xs opacity-60">
+            By creating an account you accept our{" "}
+            <Link to="/terms" className="link">terms</Link>. How we handle your details
+            is in the <Link to="/privacy" className="link">privacy policy</Link>.
+          </p>
         </form>
 
         <p className="mt-4 text-center text-sm opacity-70">

@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { BadgeEuro, ScrollText, TrendingUp, Users } from "lucide-react";
-import client from "../../api/client";
+import client, { apiError } from "../../api/client";
 import { formatDate, hasNonActiveCurrency, money, ORDER_STATUSES, statusBadge, statusLabel } from "../../lib/format";
 import PhotoTile from "../../components/PhotoTile";
 import TradingChart from "../../components/TradingChart";
-import { Loading } from "../../components/Loading";
+import { LoadError, Loading } from "../../components/Loading";
 
 function StatTile({ label, value, sub, Icon }) {
   return (
@@ -26,11 +26,19 @@ function StatTile({ label, value, sub, Icon }) {
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
+  const [failed, setFailed] = useState(null);
 
-  useEffect(() => {
-    client.get("/admin/stats").then(({ data }) => setStats(data));
-  }, []);
+  const load = () => {
+    setFailed(null);
+    client
+      .get("/admin/stats")
+      .then(({ data }) => setStats(data))
+      .catch((e) => setFailed(apiError(e, "The day's numbers didn't load.")));
+  };
 
+  useEffect(load, []);
+
+  if (failed && !stats) return <LoadError message={failed} onRetry={load} />;
   if (!stats) return <Loading label="Counting the day's loaves…" />;
 
   const activeStatuses = ORDER_STATUSES.filter((s) => (stats.orders_by_status[s.value] ?? 0) > 0);

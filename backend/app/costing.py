@@ -49,7 +49,7 @@ QUANT4 = Decimal("0.0001")
 # D2: the 40 % margin floor. Phase 2 computes flags against it; Phase 3's
 # pricing engine is what enforces it.
 MARGIN_FLOOR = Decimal("0.40")
-MARGIN_FLOOR_DIVISOR = Decimal("0.60")  # 1 − 0.40 — min_net = cost / 0.60
+MARGIN_FLOOR_DIVISOR = Decimal("1") - MARGIN_FLOOR  # 0.60 — min_net = cost / 0.60
 
 # D18: the default cost-review interval, in days.
 DEFAULT_REVIEW_INTERVAL_DAYS = 90

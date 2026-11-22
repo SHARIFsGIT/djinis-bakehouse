@@ -4,8 +4,8 @@ import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
 import { Loading } from "./components/Loading";
 import { AdminRoute, ProtectedRoute } from "./components/RouteGuards";
-import client from "./api/client";
 import { applyShopConfig } from "./lib/format";
+import { fetchStore } from "./lib/store";
 import { applyBrandColor } from "./lib/theme";
 
 import Home from "./pages/Home";
@@ -21,7 +21,7 @@ import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import Unsubscribe from "./pages/Unsubscribe";
 import NotFound from "./pages/NotFound";
-import { PrivacyPolicy, RefundPolicy, TermsOfService } from "./pages/Legal";
+import { LegalNotice, PrivacyPolicy, RefundPolicy, TermsOfService } from "./pages/Legal";
 import AccountLayout from "./pages/account/AccountLayout";
 import Profile from "./pages/account/Profile";
 import Addresses from "./pages/account/Addresses";
@@ -106,9 +106,8 @@ export default function App() {
   // baker's brand colour: painting it here (and caching it for the next
   // boot's pre-paint) keeps every visitor's theme the server's own pick.
   useEffect(() => {
-    client
-      .get("/store")
-      .then(({ data }) => {
+    fetchStore()
+      .then((data) => {
         applyShopConfig(data);
         applyBrandColor(data.brand_color ?? null);
       })
@@ -135,6 +134,10 @@ export default function App() {
           <Route path="privacy" element={<PrivacyPolicy />} />
           <Route path="terms" element={<TermsOfService />} />
           <Route path="refunds" element={<RefundPolicy />} />
+          {/* The legal notice answers to both names — the English one and
+              the German word every local customer looks for. */}
+          <Route path="imprint" element={<LegalNotice />} />
+          <Route path="impressum" element={<LegalNotice />} />
 
           <Route element={<ProtectedRoute />}>
             <Route path="checkout" element={<Checkout />} />

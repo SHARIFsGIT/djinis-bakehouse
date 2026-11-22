@@ -8,7 +8,7 @@ Card orders are placed unpaid and only become paid when Stripe says so
 
 import random
 import re
-from datetime import date, timedelta
+from datetime import timedelta
 from decimal import Decimal
 from typing import Annotated
 
@@ -26,7 +26,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import object_session
 
-from .. import ledger, payment_ops, pricing, stripe_gateway
+from .. import delivery, ledger, payment_ops, pricing, shoptime, stripe_gateway
 from ..config import get_settings
 from ..database import utcnow
 from ..email import send_order_receipt, send_order_status_email
@@ -60,7 +60,7 @@ from ..schemas import (
     QuoteOut,
     QuoteRequest,
 )
-from ..security import CurrentUser, DbSession, OptionalUser, client_key
+from ..security import CurrentUser, DbSession, OptionalUser, account_brake, client_key
 from ..serialize import find_matching_address
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
@@ -68,7 +68,7 @@ settings = get_settings()
 
 
 def _generate_order_number(db) -> str:
-    today = date.today().strftime("%Y%m%d")
+    today = shoptime.shop_today().strftime("%Y%m%d")
     while True:
         number = f"DJ-{today}-{random.randint(1000, 9999)}"
         if not db.scalar(select(Order).where(Order.order_number == number)):
@@ -172,6 +172,29 @@ def _load_coupon(db, code: str, user: User | None = None, *, lock: bool = False)
     return coupon
 
 
+def _line_refused(product_id: int, detail: str, available: int) -> HTTPException:
+    """A basket line the shelf can't honour (400). The words are for the
+    customer; the two headers name the line and what is left of it, so the
+    basket page can point at the row and offer the fix — remove it, or take
+    what is left — instead of leaving the shopper to work out which bake
+    was meant."""
+    return HTTPException(
+        status_code=400,
+        detail=detail,
+        headers={
+            "X-Basket-Product": str(product_id),
+            "X-Basket-Available": str(max(int(available or 0), 0)),
+        },
+    )
+
+
+def _short_shelf(product_id: int, name: str, left: int | None) -> HTTPException:
+    """More was asked for than the shelf holds."""
+    left = max(int(left or 0), 0)
+    detail = f"Only {left} left of {name}" if left else f"{name} is sold out"
+    return _line_refused(product_id, detail, left)
+
+
 def _resolve_basket(db, items) -> tuple[dict[int, int], dict[int, Product]]:
     """Validate a client basket against the catalog and hand back the merged
     quantities plus the products that carry them. Checkout and the basket
@@ -189,12 +212,17 @@ def _resolve_basket(db, items) -> tuple[dict[int, int], dict[int, Product]]:
     for product_id, quantity in merged.items():
         product = by_id.get(product_id)
         if product is None:
-            raise HTTPException(status_code=400, detail=f"Product {product_id} is not available")
-        if product.stock < quantity:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Only {product.stock} left of {product.name}",
+            # A bake the desk took off the shelf reads by its name; an id
+            # the catalog has never heard of can only be named by number.
+            name = db.scalar(select(Product.name).where(Product.id == product_id))
+            detail = (
+                f"{name} is not available right now"
+                if name
+                else f"Product {product_id} is not available"
             )
+            raise _line_refused(product_id, detail, 0)
+        if product.stock < quantity:
+            raise _short_shelf(product_id, product.name, product.stock)
     return merged, by_id
 
 
@@ -382,7 +410,7 @@ def _receipt_dict(order: Order) -> dict:
         "email": order.user.email,
         "first_name": order.user.first_name,
         "order_number": order.order_number,
-        "placed_at": order.created_at.strftime("%b %d, %Y, %I:%M %p"),
+        "placed_at": shoptime.stamp(order.created_at),
         "items": [
             {"name": i.product_name, "quantity": i.quantity, "subtotal": float(i.subtotal)}
             for i in order.items
@@ -625,6 +653,15 @@ def checkout(
             response.status_code = status.HTTP_200_OK
             return _serialize(placed, detailed=True, payment_url=_resume_url(placed, db))
 
+    # A brake no shopper ever meets (a dozen orders an hour), there for the
+    # script that would otherwise reserve the whole shelf with unpaid orders
+    # and bury the desk in pings. After the replay check on purpose: the
+    # same press arriving again is not a new order.
+    account_brake(
+        request, "orders", user,
+        "That's a lot of orders in one hour — give it a little while, or call the bakery.",
+    )
+
     # The charge currency every figure this order stores will be read in —
     # validated up front so no row is ever written with money the pipeline
     # can't charge or report.
@@ -663,12 +700,25 @@ def checkout(
                 other.is_default = False
             address.is_default = True
 
+    # The van has a range. An address outside the baker's delivery area is
+    # refused here — before stock moves or a payment page opens — rather
+    # than placed, paid for, and then cancelled and refunded by hand.
+    area = delivery.parse_area(get_store_setting(db).delivery_postal_codes)
+    if not delivery.delivers_to(address.postal_code, area):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Sorry — we don't deliver to {address.postal_code} yet. "
+            "Our delivery area is listed at checkout.",
+        )
+
     # Validate items against the catalog — the server is the source of truth
     merged, by_id = _resolve_basket(db, payload.items)
 
-    if payload.delivery_date and payload.delivery_date < date.today():
+    # "Today" is the shop's own date, not the server's (app/shoptime.py).
+    today = shoptime.shop_today()
+    if payload.delivery_date and payload.delivery_date < today:
         raise HTTPException(status_code=400, detail="Delivery date cannot be in the past")
-    if payload.delivery_date and payload.delivery_date > date.today() + timedelta(days=30):
+    if payload.delivery_date and payload.delivery_date > today + timedelta(days=30):
         raise HTTPException(status_code=400, detail="Delivery date is too far ahead")
 
     subtotal = round(sum(by_id[pid].current_price * qty for pid, qty in merged.items()), 2)
@@ -747,11 +797,11 @@ def checkout(
             .values(stock=Product.stock - quantity)
         )
         if result.rowcount == 0:
-            # The uncommitted order and address roll back with this raise
-            raise HTTPException(
-                status_code=400,
-                detail=f"Only {product.stock} left of {product.name}",
-            )
+            # The uncommitted order and address roll back with this raise.
+            # Say what is on the shelf *now*: the figure read before the
+            # race is the very one that just turned out to be wrong.
+            left = db.scalar(select(Product.stock).where(Product.id == product_id))
+            raise _short_shelf(product_id, product.name, left)
         db.add(
             OrderItem(
                 order_id=order.id,

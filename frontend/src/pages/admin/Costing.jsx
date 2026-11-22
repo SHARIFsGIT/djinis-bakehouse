@@ -10,7 +10,7 @@ import {
 } from "../../lib/costing";
 import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
-import { Loading } from "../../components/Loading";
+import { LoadError, Loading } from "../../components/Loading";
 
 /* The Phase 2 costing desk — the UI over the /api/admin/costing surface.
    Five tabs, the way the work actually runs: what needs review, the
@@ -110,10 +110,22 @@ function Field({ label, children }) {
 const inputCls = "input input-bordered input-sm w-full";
 const selectCls = "select select-bordered select-sm w-full";
 
+/** A tab's first load. While it is on the wire: the loader. If it didn't
+ *  come back (the toast has said why): a way to ask again, in place of a
+ *  loader that would otherwise turn forever. */
+function TabLoad({ failed, label, onRetry }) {
+  return failed ? (
+    <LoadError message="That didn't load — check the connection and try again." onRetry={onRetry} />
+  ) : (
+    <Loading label={label} />
+  );
+}
+
 export default function Costing() {
   const toast = useToast();
   const [tab, setTab] = useState("review");
   const [products, setProducts] = useState(null);
+  const [productsFailed, setProductsFailed] = useState(false);
   const [recipeProductId, setRecipeProductId] = useState(null);
 
   const loadProducts = async () => {
@@ -129,8 +141,16 @@ export default function Costing() {
     setProducts(all);
   };
 
+  const fetchProducts = () => {
+    setProductsFailed(false);
+    loadProducts().catch((e) => {
+      setProductsFailed(true);
+      toast.error(apiError(e));
+    });
+  };
+
   useEffect(() => {
-    loadProducts().catch((e) => toast.error(apiError(e)));
+    fetchProducts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -170,7 +190,13 @@ export default function Costing() {
       {tab === "review" && <ReviewTab onOpenRecipe={openRecipeFor} />}
       {tab === "ingredients" && <IngredientsTab />}
       {tab === "recipes" && (
-        <RecipesTab products={products} selectedId={recipeProductId} onSelect={setRecipeProductId} />
+        <RecipesTab
+          products={products}
+          productsFailed={productsFailed}
+          onReloadProducts={fetchProducts}
+          selectedId={recipeProductId}
+          onSelect={setRecipeProductId}
+        />
       )}
       {tab === "batches" && <BatchesTab products={products} />}
       {tab === "overhead" && <OverheadTab />}
@@ -187,20 +213,30 @@ function ReviewTab({ onOpenRecipe }) {
   const [data, setData] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [windowDays, setWindowDays] = useState(14);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     // The old shelf stays up (dimmed) while the new window loads — swapping
     // it for a spinner would bounce the whole tab on every change.
     setRefreshing(true);
+    setFailed(false);
     client
       .get("/admin/costing/cost-review", { params: { window: windowDays } })
       .then(({ data }) => setData(data))
-      .catch((e) => toast.error(apiError(e)))
+      .catch((e) => {
+        setFailed(true);
+        toast.error(apiError(e));
+      })
       .finally(() => setRefreshing(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [windowDays]);
+  }, [windowDays, attempt]);
 
-  if (data === null) return <Loading label="Checking the proof…" />;
+  if (data === null) {
+    return (
+      <TabLoad failed={failed} label="Checking the proof…" onRetry={() => setAttempt((n) => n + 1)} />
+    );
+  }
 
   const { overdue, upcoming, overlap_warnings: warnings } = data;
 
@@ -369,8 +405,17 @@ function IngredientsTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const [failed, setFailed] = useState(false);
+  const fetchList = () => {
+    setFailed(false);
+    load().catch((e) => {
+      setFailed(true);
+      toast.error(apiError(e));
+    });
+  };
+
   useEffect(() => {
-    load().catch((e) => toast.error(apiError(e)));
+    fetchList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, filters]);
 
@@ -807,7 +852,7 @@ function IngredientsTab() {
 
       {/* List */}
       {data === null ? (
-        <Loading label="Weighing the ingredients…" />
+        <TabLoad failed={failed} label="Weighing the ingredients…" onRetry={fetchList} />
       ) : ingredients.length === 0 ? (
         <p className="rounded-box glass p-8 text-center text-sm opacity-60 ring-1 ring-base-300/60">
           No ingredients match — add the first one above.
@@ -1105,14 +1150,17 @@ function IngredientRow({
 /* Recipes — one product's formula and its computed cost               */
 /* ------------------------------------------------------------------ */
 
-function RecipesTab({ products, selectedId, onSelect }) {
+function RecipesTab({ products, productsFailed, onReloadProducts, selectedId, onSelect }) {
   const toast = useToast();
   const [ingredients, setIngredients] = useState(null);
   const [recipe, setRecipe] = useState(null);
   const [detail, setDetail] = useState(null); // product detail carrying cost
   const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    setFailed(false);
     // The line picker wants every ingredient, whatever the page size.
     const all = [];
     const fetch = async (page) => {
@@ -1124,9 +1172,12 @@ function RecipesTab({ products, selectedId, onSelect }) {
     };
     fetch(1)
       .then(() => setIngredients(all))
-      .catch((e) => toast.error(apiError(e)));
+      .catch((e) => {
+        setFailed(true);
+        toast.error(apiError(e));
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [attempt]);
 
   // Only the newest pick may paint. Switching from A to B while A is still
   // on the wire used to let A's answer land last: the picker said B, the
@@ -1239,7 +1290,20 @@ function RecipesTab({ products, selectedId, onSelect }) {
   };
 
   if (products === null || ingredients === null) {
-    return <Loading label="Opening the recipe book…" />;
+    // Two lists feed this tab (the shelf comes from the page, the
+    // ingredient book from here) — ask again for whichever is missing.
+    const productsMissing = products === null && productsFailed;
+    const ingredientsMissing = ingredients === null && failed;
+    return (
+      <TabLoad
+        failed={productsMissing || ingredientsMissing}
+        label="Opening the recipe book…"
+        onRetry={() => {
+          if (productsMissing) onReloadProducts();
+          if (ingredientsMissing) setAttempt((n) => n + 1);
+        }}
+      />
+    );
   }
 
   const cost = detail?.cost ?? null;
@@ -1536,12 +1600,21 @@ function BatchesTab({ products }) {
       .get("/admin/costing/batches", { params: { status: statusFilter || undefined } })
       .then(({ data }) => setBatches(data));
 
-  useEffect(() => {
+  const [failed, setFailed] = useState(false);
+  const fetchList = () => {
     // The old list stays up (dimmed) while the new filter loads.
     setRefreshing(true);
+    setFailed(false);
     load()
-      .catch((e) => toast.error(apiError(e)))
+      .catch((e) => {
+        setFailed(true);
+        toast.error(apiError(e));
+      })
       .finally(() => setRefreshing(false));
+  };
+
+  useEffect(() => {
+    fetchList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
 
@@ -1684,7 +1757,7 @@ function BatchesTab({ products }) {
       </div>
 
       {batches === null ? (
-        <Loading label="Counting the ovens…" />
+        <TabLoad failed={failed} label="Counting the ovens…" onRetry={fetchList} />
       ) : (
         <div className={refreshing ? "opacity-60 transition-opacity" : "transition-opacity"}>
           {batches.length === 0 ? (
@@ -1843,9 +1916,19 @@ function OverheadTab() {
   const loadRate = () =>
     client.get("/admin/costing/labour-rate").then(({ data }) => setRate(data));
 
+  const [failed, setFailed] = useState(false);
+  const fetchBoth = () => {
+    setFailed(false);
+    const refused = (e) => {
+      setFailed(true);
+      toast.error(apiError(e));
+    };
+    loadMonths().catch(refused);
+    loadRate().catch(refused);
+  };
+
   useEffect(() => {
-    loadMonths().catch((e) => toast.error(apiError(e)));
-    loadRate().catch((e) => toast.error(apiError(e)));
+    fetchBoth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2045,7 +2128,7 @@ function OverheadTab() {
         </form>
 
         {months === null ? (
-          <Loading label="Opening the ledger…" />
+          <TabLoad failed={failed} label="Opening the ledger…" onRetry={fetchBoth} />
         ) : months.length === 0 ? (
           <p className="rounded-box glass p-8 text-center text-sm opacity-60 ring-1 ring-base-300/60">
             No overhead months yet — costing needs one before it can allocate.

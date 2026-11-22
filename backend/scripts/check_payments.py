@@ -110,10 +110,14 @@ def check_configuration(report: Report, settings) -> None:
 
     base = settings.public_base_url.strip()
     if not base:
-        report.info(
-            "PUBLIC_BASE_URL is not set - customers are sent back to the address they were "
-            "shopping on (the default; right while the shop answers on one address)"
+        note = (
+            "PUBLIC_BASE_URL is not set - links in emails and the return from a payment page are "
+            "built on whatever address each request arrived on"
         )
+        if production:
+            report.warn(note + ". Set it to the shop's one public https:// address.")
+        else:
+            report.info(note + " (fine in development)")
     elif production and not base.lower().startswith("https://"):
         report.fail("PUBLIC_BASE_URL must be an https:// address in production")
     else:
@@ -345,6 +349,71 @@ def check_database(report: Report) -> None:
     report.info("what does not add up is listed at the desk: Orders → Payment check")
 
 
+# ── The shop around the payments (read-only) ───────────────────────────────
+
+def check_shop(report: Report, settings) -> None:
+    """What a paying customer meets besides the pay page: a receipt in their
+    inbox, a shop that names its operator, a clock that agrees with the
+    bakery's. None of it blocks a payment - all of it is worth knowing
+    before the first real one."""
+    report.section("The shop around the payments (read-only)")
+
+    if settings.smtp_host:
+        report.ok(f"outgoing email is on (via {settings.smtp_host})")
+    else:
+        note = "outgoing email is OFF (no SMTP_HOST) - no receipts, order updates or password resets are sent"
+        (report.warn if settings.is_production else report.info)(note)
+
+    from app import shoptime
+
+    zone = settings.shop_timezone.strip()
+    if not zone or zone.lower() == "local":
+        report.info("SHOP_TIMEZONE is the server's own clock")
+    else:
+        try:
+            from zoneinfo import ZoneInfo
+
+            ZoneInfo(zone)
+        except Exception:
+            report.warn(f"SHOP_TIMEZONE {zone!r} is not a time zone this system knows - the shop runs on UTC")
+        else:
+            report.ok(f"the shop's clock is {zone} - it is {shoptime.shop_now():%Y-%m-%d %H:%M} there")
+
+    try:
+        from app import delivery
+        from app.models import StoreSetting
+
+        with engine.connect() as conn:
+            row = conn.execute(
+                select(
+                    StoreSetting.legal_notice,
+                    StoreSetting.delivery_postal_codes,
+                    StoreSetting.contact_email,
+                ).limit(1)
+            ).first()
+    except Exception as exc:  # columns this release adds, on a database it has not booted on yet
+        report.info(
+            f"the shop's settings could not be read ({type(exc).__name__}) - on a database this "
+            "release has not started on yet, that is expected"
+        )
+        return
+    notice, area, contact = row if row is not None else (None, None, None)
+    if (notice or "").strip():
+        report.ok("a legal notice is published (linked in the footer, at /imprint)")
+    else:
+        report.warn(
+            "no legal notice is published - a shop selling online in Germany/the EU is expected to "
+            "name its operator. Admin -> Settings -> Legal notice."
+        )
+    if not (contact or "").strip():
+        report.warn("no contact email is set (Admin -> Settings -> Contact & hours) - the legal pages have nobody to point at")
+    entries = delivery.parse_area(area)
+    if entries:
+        report.ok(f"delivery area: {len(entries)} postal code entries - addresses outside are refused at checkout")
+    else:
+        report.info("no delivery area is set - orders are accepted for any postal code (Admin -> Settings -> Delivery area)")
+
+
 # ── Rehearsals — test keys and sandbox ONLY ────────────────────────────────
 
 def _rehearsal_order(settings) -> SimpleNamespace:
@@ -521,6 +590,7 @@ def main() -> int:
         check_stripe(report, settings)
         check_paypal(report, settings)
         check_database(report)
+        check_shop(report, settings)
         if args.rehearse or args.rehearse_pay:
             rehearse(report, settings, leave_open=args.rehearse_pay)
 
