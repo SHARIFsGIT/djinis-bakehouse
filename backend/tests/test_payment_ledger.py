@@ -205,7 +205,8 @@ def test_a_partial_then_full_refund_goes_through_stripe_and_onto_the_book(caplog
 
     mine = _detail(order["id"], headers)
     assert mine["payment_status"] == "partially_refunded" and mine["refunded_amount"] == 5.0
-    assert "Refund of €5.00 sent back through Stripe" in mine["timeline"][-1]["comment"]
+    # the customer's timeline says what happened — and keeps the desk's note to the desk
+    assert mine["timeline"][-1]["comment"] == "Refund of €5.00 sent back through Stripe"
 
     # a second refund of the same amount is its own decision, not a retry
     second = _refund(order["id"], amount=5.0)
@@ -983,3 +984,43 @@ def test_the_bookkeeping_export_can_be_checked_against_the_providers_own_reports
     door = by_number[cash["order_number"]]
     assert (float(door["refunded"]), door["payment_provider"], door["payment_reference"]) == (0.0, "", "")
     assert header[-1] == "currency"  # still the last word on every money column
+
+
+def test_a_customers_own_data_export_includes_how_their_orders_were_paid():
+    order, headers = _paid_order("my-data")
+    assert _refund(order["id"], amount=1.5, reason="internal note about the box").status_code == 200
+
+    export = client.get("/api/auth/me/export", headers=headers).json()
+    (mine,) = [o for o in export["orders"] if o["order_number"] == order["order_number"]]
+    (payment,) = mine["payments"]
+    assert (payment["provider"], payment["method"], payment["state"]) == ("stripe", "Card", "partially_refunded")
+    assert payment["amount"] == order["total"] and payment["refunded_amount"] == 1.5
+    assert payment["provider_reference"] == f"pi_fake_{order['id']}"
+    assert [(r["amount"], r["status"]) for r in payment["refunds"]] == [(1.5, "succeeded")]
+    # the desk's own note and name are the shop's working record, not part of the download
+    assert "internal note" not in str(export) and "Djini Rahman" not in str(export)
+
+
+def test_closing_an_account_forgets_its_checkout_presses_and_keeps_the_books():
+    headers = _customer("closing-account")
+    api._top_up_stock("butter-croissant")
+    api._top_up_stock("beef-curry-puff")
+    placed = client.post(
+        "/api/orders", json=checkout_payload(), headers={**headers, "Idempotency-Key": "press-closing-0001"}
+    )
+    assert placed.status_code == 201
+    pay_order_via_webhook(placed.json()["id"])
+
+    closed = client.post("/api/auth/me/delete", json={"password": "Ledger123!"}, headers=headers)
+    assert closed.status_code == 200, closed.text
+
+    db = SessionLocal()
+    try:
+        assert db.scalars(
+            select(CheckoutAttempt).where(CheckoutAttempt.idempotency_key == "press-closing-0001")
+        ).all() == []
+    finally:
+        db.close()
+    # the order's payment record — an invoice's other half — is still on the book
+    (tx,) = _payments(placed.json()["id"])["transactions"]
+    assert tx["status"] == "succeeded"

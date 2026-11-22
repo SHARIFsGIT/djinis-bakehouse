@@ -188,8 +188,9 @@ def refund_order(
         comment = f"Refund of {amount_text} requested — {label} has yet to confirm it"
     else:
         comment = f"Refund of {amount_text} could not be sent — {refund.failure_reason}"
-    if reason and refund.status != "failed":
-        comment += f" ({reason})"
+    # The desk's reason stays on the refund's own record (the payment panel
+    # shows it). The order's timeline is the customer's to read — a working
+    # note written for colleagues does not belong on it.
     db.add(OrderEvent(order_id=order.id, status=order.status, comment=comment))
     db.commit()
     db.refresh(order)

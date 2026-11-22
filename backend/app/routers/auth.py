@@ -9,15 +9,18 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFi
 from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, select
 
-from .. import facebook_gateway, sms_gateway
+from .. import facebook_gateway, payment_ops, sms_gateway
 from ..config import get_settings
 from ..email import reset_password_email, send_email
 from ..facebook_gateway import FacebookError
 from ..models import (
     Address,
+    CheckoutAttempt,
     ClassificationEvent,
     Favorite,
     Order,
+    PaymentRefund,
+    PaymentTransaction,
     RestockAlert,
     Review,
     Subscriber,
@@ -544,11 +547,50 @@ def export_my_data(user: CurrentUser, db: DbSession):
                 {"status": event.status, "comment": event.comment, "at": event.created_at.isoformat()}
                 for event in order.timeline
             ],
+            # What the shop keeps about paying for this order: each pay
+            # page it was handed, through whom, and what became of it. No
+            # card or account details exist here to export — those never
+            # reach the shop, only the provider's own reference does.
+            "payments": [
+                {
+                    "provider": tx.provider,
+                    "method": payment_ops.method_label(tx.method_type),
+                    "state": tx.status,
+                    "amount": float(tx.amount),
+                    "currency": tx.currency,
+                    "opened_at": tx.created_at.isoformat(),
+                    "paid_at": tx.paid_at.isoformat() if tx.paid_at else None,
+                    "provider_reference": tx.provider_payment_id or tx.provider_reference,
+                    "refunded_amount": float(tx.refunded_amount or 0),
+                    "refunds": [
+                        {
+                            "amount": float(refund.amount),
+                            "status": refund.status,
+                            "at": refund.created_at.isoformat(),
+                        }
+                        for refund in refunds.get(tx.id, [])
+                    ],
+                }
+                for tx in payments.get(order.id, [])
+            ],
         }
 
     orders = list(
         db.scalars(select(Order).where(Order.user_id == user.id).order_by(Order.created_at))
     )
+    order_ids = [order.id for order in orders] or [0]
+    payments: dict[int, list[PaymentTransaction]] = {}
+    for tx in db.scalars(
+        select(PaymentTransaction)
+        .where(PaymentTransaction.order_id.in_(order_ids))
+        .order_by(PaymentTransaction.id)
+    ):
+        payments.setdefault(tx.order_id, []).append(tx)
+    refunds: dict[int, list[PaymentRefund]] = {}
+    for refund in db.scalars(
+        select(PaymentRefund).where(PaymentRefund.order_id.in_(order_ids)).order_by(PaymentRefund.id)
+    ):
+        refunds.setdefault(refund.transaction_id, []).append(refund)
     return {
         "exported_at": utcnow().isoformat(),
         "account": {
@@ -639,6 +681,9 @@ def delete_my_account(
     # row STAYS — deleting the account is not a licence to start mailing
     # the address again should it ever return.
     db.execute(delete(ClassificationEvent).where(ClassificationEvent.user_id == user_id))
+    # Remembered checkout presses are the account's, not the books' — the
+    # orders they placed (and those orders' payment ledger) stay.
+    db.execute(delete(CheckoutAttempt).where(CheckoutAttempt.user_id == user_id))
 
     delete_photo(user.avatar_url)
     # The account row stays — orders point at it — but it is a shell: no

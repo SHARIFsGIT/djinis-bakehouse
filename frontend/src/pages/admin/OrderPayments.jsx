@@ -165,7 +165,7 @@ function RefundDialog({ order, payments, onClose, onDone }) {
           disabled={busy}
         />
         <p id={`${titleId}-reason-help`} className="mt-1 text-xs opacity-60">
-          Kept on the refund&rsquo;s record — never sent to the customer.
+          Kept on the refund&rsquo;s record for the desk — the customer does not see it.
         </p>
 
         {refused && (
