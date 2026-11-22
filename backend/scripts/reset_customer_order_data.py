@@ -94,6 +94,15 @@ DELETE_ALL = frozenset(
         # row carries a recipient email snapshot.
         "classification_events",
         "campaign_deliveries",
+        # The payment ledger is the orders' own money trail — every row
+        # hangs off an order (or, for a remembered checkout press, off the
+        # customer who made it), so it goes with them. The foreign keys
+        # RESTRICT deleting an order from under its transactions; the
+        # children-first order worked out below is what honours that.
+        "payment_transactions",
+        "payment_refunds",
+        "payment_events",
+        "checkout_attempts",
     }
 )
 

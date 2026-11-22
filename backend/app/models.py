@@ -29,8 +29,54 @@ class OrderStatus(str, enum.Enum):
 
 
 class PaymentMethod(str, enum.Enum):
+    # "card" is Stripe's hosted page — cards first, plus whatever wallets and
+    # bank methods the Stripe account offers there. The name predates the
+    # wallets and stays, because every stored order already says it.
     CARD = "card"
+    # PayPal Checkout, as its own provider (not PayPal-inside-Stripe).
+    PAYPAL = "paypal"
     CASH_ON_DELIVERY = "cash_on_delivery"
+
+
+# The rails that take money online, and the provider behind each. Anything
+# not listed here (cash on delivery) settles in person and has no provider
+# transaction at all.
+PAYMENT_PROVIDERS = {
+    PaymentMethod.CARD.value: "stripe",
+    PaymentMethod.PAYPAL.value: "paypal",
+}
+
+
+class TransactionStatus(str, enum.Enum):
+    """Where one provider payment stands. The order's own payment_status
+    stays the four-word summary the shop has always used (pending, paid,
+    partially_refunded, refunded); this is the provider-level detail
+    behind it."""
+
+    PENDING = "pending"  # the pay page exists; no money yet
+    PROCESSING = "processing"  # the provider is still settling (SEPA, Klarna, a held capture)
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"  # closed by the shop: order cancelled, or a newer link replaced it
+    EXPIRED = "expired"  # the pay window lapsed unpaid
+    PARTIALLY_REFUNDED = "partially_refunded"
+    REFUNDED = "refunded"
+    DISPUTED = "disputed"
+
+
+# Statuses in which the provider holds (or held) the customer's money.
+SETTLED_TRANSACTION_STATUSES = frozenset(
+    {
+        TransactionStatus.SUCCEEDED.value,
+        TransactionStatus.PARTIALLY_REFUNDED.value,
+        TransactionStatus.REFUNDED.value,
+        TransactionStatus.DISPUTED.value,
+    }
+)
+# Statuses in which the pay page may still take money.
+OPEN_TRANSACTION_STATUSES = frozenset(
+    {TransactionStatus.PENDING.value, TransactionStatus.PROCESSING.value}
+)
 
 
 class PaymentStatus(str, enum.Enum):
@@ -1016,3 +1062,136 @@ class ProductCostRecord(Base):
     # Machine-readable reason codes, e.g. ["no_overhead_month", "mixed_currencies"].
     missing: Mapped[list | None] = mapped_column(JSON)
     breakdown: Mapped[dict | None] = mapped_column(JSON)
+
+
+# ---------------------------------------------------------------------------
+# The payment ledger. One shape for every provider, so an order paid through
+# Stripe and one paid through PayPal read the same on the desk, in a report
+# and in a dispute. Four new tables, all additive (create_all builds them,
+# nothing existing is altered) and all empty until the first online payment
+# after they arrive — history is never back-filled by guessing; an older
+# order gets its ledger row the first time something needs one.
+#
+# No card number, CVV or authentication data ever lands here: the shop only
+# ever holds the providers' own references.
+# ---------------------------------------------------------------------------
+
+class PaymentTransaction(Base):
+    """One provider pay page for one order — a Stripe Checkout session or a
+    PayPal order — and what became of it. An order has one row per pay link
+    it was ever handed; at most one of them should end up holding money."""
+
+    __tablename__ = "payment_transactions"
+    __table_args__ = (
+        # The provider's own ids are the idempotency keys of this table: the
+        # same session, or the same captured payment, can never be booked twice.
+        UniqueConstraint("provider", "provider_reference", name="uq_payment_tx_reference"),
+        UniqueConstraint("provider", "provider_payment_id", name="uq_payment_tx_payment"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # RESTRICT on purpose: a financial record must never vanish because the
+    # order it belongs to did.
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="RESTRICT"), index=True)
+    provider: Mapped[str] = mapped_column(String(20))  # stripe | paypal
+    # The pay page: Stripe's checkout session id, PayPal's order id.
+    provider_reference: Mapped[str] = mapped_column(String(255))
+    # The money itself, once it moved: Stripe's payment intent, PayPal's
+    # capture id. NULL until then (several NULLs never collide).
+    provider_payment_id: Mapped[str | None] = mapped_column(String(255))
+    amount: Mapped[float] = mapped_column(Numeric(10, 2))
+    currency: Mapped[str] = mapped_column(String(3))
+    status: Mapped[str] = mapped_column(String(20), default=TransactionStatus.PENDING.value)
+    # Sum of the refunds the provider has confirmed (payment_refunds rows).
+    refunded_amount: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
+    # open | won | lost — NULL while nobody has disputed the payment.
+    dispute_status: Mapped[str | None] = mapped_column(String(20))
+    failure_reason: Mapped[str | None] = mapped_column(String(255))
+    # Where the customer pays. Kept so "Complete payment" can hand back the
+    # same page instead of minting a second one.
+    checkout_url: Mapped[str | None] = mapped_column(Text)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    refunds: Mapped[list["PaymentRefund"]] = relationship(
+        back_populates="transaction", order_by="PaymentRefund.id"
+    )
+
+
+class PaymentRefund(Base):
+    """Money sent back, or an attempt to. A row is "succeeded" only on the
+    provider's word — the desk asking for a refund is never, by itself, a
+    refund."""
+
+    __tablename__ = "payment_refunds"
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_refund_id", name="uq_payment_refund_provider_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    transaction_id: Mapped[int] = mapped_column(
+        ForeignKey("payment_transactions.id", ondelete="RESTRICT"), index=True
+    )
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="RESTRICT"), index=True)
+    provider: Mapped[str] = mapped_column(String(20))
+    # NULL when the provider never issued one (a refused attempt) or never
+    # told us (a refund made in the provider's own dashboard).
+    provider_refund_id: Mapped[str | None] = mapped_column(String(255))
+    amount: Mapped[float] = mapped_column(Numeric(10, 2))
+    currency: Mapped[str] = mapped_column(String(3))
+    status: Mapped[str] = mapped_column(String(12))  # pending | succeeded | failed
+    reason: Mapped[str | None] = mapped_column(String(255))
+    failure_reason: Mapped[str | None] = mapped_column(String(255))
+    # Who asked: an admin's name, or the part of the shop that did it
+    # ("order cancellation", "late payment", "provider dashboard").
+    initiated_by: Mapped[str] = mapped_column(String(150))
+    admin_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    transaction: Mapped[PaymentTransaction] = relationship(back_populates="refunds")
+
+
+class PaymentEvent(Base):
+    """The payment audit trail, append-only: every provider notification the
+    shop accepted and every change of state it made in answer.
+
+    A provider's event id is unique here, which is what makes a webhook
+    delivered twice — providers retry — count once. Rows the shop writes
+    itself carry no event id (NULLs never collide). Only references and
+    outcomes are kept; the provider's payload, with its customer details,
+    is not."""
+
+    __tablename__ = "payment_events"
+    __table_args__ = (UniqueConstraint("provider", "event_id", name="uq_payment_event_provider_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    provider: Mapped[str] = mapped_column(String(20))
+    event_id: Mapped[str | None] = mapped_column(String(255))
+    # The provider's event type, or the shop's own word for what it did.
+    event_type: Mapped[str] = mapped_column(String(80))
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), index=True)
+    transaction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("payment_transactions.id", ondelete="CASCADE"), index=True
+    )
+    from_status: Mapped[str | None] = mapped_column(String(20))
+    to_status: Mapped[str | None] = mapped_column(String(20))
+    detail: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CheckoutAttempt(Base):
+    """One press of the pay button, remembered. The browser sends a key it
+    made up for this checkout; if the same key arrives again — a double
+    click, a retry after a dropped connection — the answer is the order
+    that press already placed, never a second one."""
+
+    __tablename__ = "checkout_attempts"
+    __table_args__ = (UniqueConstraint("user_id", "idempotency_key", name="uq_checkout_attempt_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(80))
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

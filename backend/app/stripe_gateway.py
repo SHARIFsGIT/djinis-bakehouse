@@ -64,14 +64,32 @@ class BadSignature(Exception):
 # configured otherwise pauses fail-closed instead of relabelling money.
 SUPPORTED_CURRENCIES = ("eur",)
 
-# Payment methods the hosted page may offer beyond the universal card rail.
-# Curated, not exhaustive: each entry is one Stripe Checkout supports across
-# the shop's market and whose delayed-settlement variants the webhook already
-# answers (async_payment_succeeded / async_payment_expired). Availability is
-# still Stripe's to decide per account and country — a refused method is a
-# session-creation failure, which checkout already handles by cancelling the
-# order honestly and telling the customer to try again.
-EXTRA_PAYMENT_METHODS = frozenset({"klarna", "paypal", "sepa_debit", "ideal", "bancontact"})
+# Payment-method names an explicit STRIPE_PAYMENT_METHODS list may carry. The
+# list is only ever a *filter* over what Stripe itself computes as eligible
+# for the account, the customer and the device, so nothing here can make an
+# unavailable method appear; the vocabulary exists so a typo is dropped with
+# a warning instead of failing every session. Apple Pay and Google Pay are
+# not entries: they ride on "card" and show wherever the device has them.
+KNOWN_PAYMENT_METHODS = frozenset(
+    {
+        "card",
+        "link",
+        "klarna",
+        "paypal",
+        "sepa_debit",
+        "ideal",
+        "bancontact",
+        "eps",
+        "p24",
+        "revolut_pay",
+        "amazon_pay",
+    }
+)
+
+# One wait for every call to Stripe. The SDK's own default is 80 seconds —
+# far longer than a shopper watching a spinner (or a worker thread holding
+# an order's row lock) should ever wait.
+REQUEST_TIMEOUT_SECONDS = 20
 
 
 def order_currency(order) -> str:
@@ -93,13 +111,38 @@ def configured() -> bool:
     return bool(get_settings().stripe_secret_key)
 
 
-def payment_method_types() -> list[str]:
-    """The methods the hosted page offers, from STRIPE_PAYMENT_METHODS.
+def _ready() -> None:
+    """Point the SDK at the shop's key and give its calls a sane timeout.
+    Called at the top of every gateway function; cheap after the first."""
+    stripe.api_key = get_settings().stripe_secret_key
+    make_client = getattr(stripe, "new_default_http_client", None)
+    if make_client is not None and getattr(stripe, "default_http_client", None) is None:
+        try:
+            stripe.default_http_client = make_client(timeout=REQUEST_TIMEOUT_SECONDS)
+        except Exception:  # an SDK without the knob keeps its own default
+            logger.warning("could not set the Stripe request timeout — using the SDK default")
 
-    Cards always lead — the one method that works everywhere — and anything
-    the gateway doesn't know drops out with a warning rather than reaching
-    Stripe as a refusal. An unusable setting (empty after filtering) falls
-    back to card alone, so the pay page never loses its universal rail.
+
+def mode() -> str | None:
+    """"live" or "test", read off the configured key's own prefix — None
+    when no key is set. The desk shows it, so nobody mistakes a rehearsal
+    for a till that takes real money (or the other way round)."""
+    key = get_settings().stripe_secret_key
+    if not key:
+        return None
+    return "live" if key.startswith(("sk_live_", "rk_live_")) else "test"
+
+
+def allowed_payment_methods() -> list[str] | None:
+    """The explicit method filter from STRIPE_PAYMENT_METHODS, or None for
+    Stripe's own automatic choice (the default, and "automatic"/empty).
+
+    None is not "cards only": it is every method the Stripe account has
+    switched on that suits this customer, amount and device — the dashboard
+    decides, and nothing unsupported is ever asked for. A list narrows that
+    automatic set; names the gateway doesn't know drop out with a warning,
+    and a list with nothing usable left is treated as automatic rather than
+    sent to Stripe as a refusal.
     """
     settings = get_settings()
     requested = [
@@ -107,23 +150,29 @@ def payment_method_types() -> list[str]:
         for m in str(settings.stripe_payment_methods or "").split(",")
         if m.strip()
     ]
-    methods = [m for m in requested if m == "card" or m in EXTRA_PAYMENT_METHODS]
-    dropped = [m for m in requested if m not in methods]
+    if not requested or requested == ["automatic"]:
+        return None
+    methods = [m for m in dict.fromkeys(requested) if m in KNOWN_PAYMENT_METHODS]
+    dropped = [m for m in requested if m not in KNOWN_PAYMENT_METHODS and m != "automatic"]
     if dropped:
         logger.warning(
             "STRIPE_PAYMENT_METHODS contains unsupported entr%s (%s) — offering %s",
             "y" if len(dropped) == 1 else "ies",
             ", ".join(dropped),
-            ", ".join(methods) or "card",
+            ", ".join(methods) or "Stripe's automatic set",
         )
     if not methods:
-        return ["card"]
+        return None
     # Card first when asked for, so the familiar rail is never buried under
     # wallet options on the hosted page.
     if "card" in methods:
         methods.remove("card")
         methods.insert(0, "card")
     return methods
+
+
+def _native_paypal_configured(settings) -> bool:
+    return bool(settings.paypal_client_id and settings.paypal_client_secret)
 
 
 def cents(amount: float) -> int:
@@ -227,7 +276,7 @@ def create_checkout_session(order, base_url: str) -> dict:
     Returns {"id", "url"}; raises GatewayUnavailable on any failure.
     """
     settings = get_settings()
-    stripe.api_key = settings.stripe_secret_key
+    _ready()
     # Validated before anything touches Stripe: the currency every line, the
     # coupon and (through the payment intent it creates) any later refund
     # moves in is the order's own, whatever the shop charges today.
@@ -257,7 +306,6 @@ def create_checkout_session(order, base_url: str) -> dict:
             "customer_email": order.user.email,
             "expires_at": int(time.time()) + SESSION_LIFETIME_SECONDS,
             "line_items": _line_items(order, base_url, settings, currency),
-            "payment_method_types": payment_method_types(),
             "branding_settings": {
                 "background_color": BRAND_BACKGROUND_COLOR,
                 "button_color": BRAND_BUTTON_COLOR,
@@ -275,6 +323,20 @@ def create_checkout_session(order, base_url: str) -> dict:
                 "metadata": {"order_id": str(order.id)},
             },
         }
+        # Which methods the page offers is Stripe's to compute (the default);
+        # an explicit list only filters that set. The old static
+        # "payment_method_types" list is deliberately no longer sent: the
+        # SDK's pinned API version has dropped it from session creation.
+        allowed = allowed_payment_methods()
+        if _native_paypal_configured(settings):
+            # PayPal is its own button at the shop's checkout — it must not
+            # also appear inside Stripe's page as a second, different PayPal.
+            if allowed is None:
+                session_kwargs["excluded_payment_method_types"] = ["paypal"]
+            else:
+                allowed = [m for m in allowed if m != "paypal"] or None
+        if allowed:
+            session_kwargs["allowed_payment_method_types"] = allowed
         if discounts:
             session_kwargs["discounts"] = discounts
         session = stripe.checkout.Session.create(**session_kwargs)
@@ -287,8 +349,7 @@ def create_checkout_session(order, base_url: str) -> dict:
 def retrieve_session(session_id: str) -> dict:
     """The live state of a checkout session — the synchronous answer while
     the webhook is still in flight."""
-    settings = get_settings()
-    stripe.api_key = settings.stripe_secret_key
+    _ready()
     try:
         session = stripe.checkout.Session.retrieve(session_id)
         # SDK objects refuse dict access on purpose — their API fields may
@@ -302,6 +363,10 @@ def retrieve_session(session_id: str) -> dict:
         "payment_status": data.get("payment_status"),
         "payment_intent": data.get("payment_intent"),
         "url": data.get("url"),
+        # What the page actually charged — reconciliation compares it with
+        # the order's own total instead of assuming they agree.
+        "amount_total": data.get("amount_total"),
+        "currency": data.get("currency"),
     }
 
 
@@ -316,8 +381,7 @@ def expire_session(session_id: str) -> bool:
     error here — the caller treats False as "money may still land" and the
     payment webhook's own guards send back whatever does.
     """
-    settings = get_settings()
-    stripe.api_key = settings.stripe_secret_key
+    _ready()
     try:
         stripe.checkout.Session.expire(session_id)
     except Exception as exc:
@@ -328,7 +392,7 @@ def expire_session(session_id: str) -> bool:
     return True
 
 
-def refund(payment_intent: str, amount_cents: int) -> None:
+def refund(payment_intent: str, amount_cents: int, sequence: int = 0) -> dict:
     """Send money back to the card, less any amount the shop keeps.
 
     Refunds follow their payment intent's currency by Stripe's own rule —
@@ -344,18 +408,31 @@ def refund(payment_intent: str, amount_cents: int) -> None:
     issuing a second one, while a genuinely different amount gets its own
     key and proceeds. Raises GatewayUnavailable on failure — the caller
     decides how honest to be about a refund that hasn't actually happened.
+
+    Returns {"id", "status"} — Stripe's own id for the refund and its word
+    on where it stands ("succeeded" for cards; bank methods may answer
+    "pending" and confirm later by webhook), so the ledger records what the
+    provider said, not what the shop hoped.
     """
-    settings = get_settings()
-    stripe.api_key = settings.stripe_secret_key
+    _ready()
     try:
-        stripe.Refund.create(
+        created = stripe.Refund.create(
             payment_intent=payment_intent,
             amount=amount_cents,
-            idempotency_key=f"refund:{payment_intent}:{amount_cents}",
+            # `sequence` is how many refunds this payment already has: the
+            # first keeps the long-standing key; a deliberate further refund
+            # of the same amount gets its own, so it is not mistaken for a
+            # retry of the first and swallowed.
+            idempotency_key=f"refund:{payment_intent}:{amount_cents}"
+            + (f":{sequence}" if sequence else ""),
         )
     except Exception:
         logger.exception("refunding payment intent %s failed", payment_intent)
         raise GatewayUnavailable("Stripe did not answer") from None
+    return {
+        "id": getattr(created, "id", None),
+        "status": getattr(created, "status", None) or "succeeded",
+    }
 
 
 def verify_webhook(payload: bytes, signature: str) -> dict:

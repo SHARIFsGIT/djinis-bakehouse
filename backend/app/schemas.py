@@ -435,9 +435,14 @@ class OrderDetailOut(OrderOut):
     # What a cancellation right now would cost (non-zero only once baking
     # has started and the admin keeps a late-cancel fee) — shown pre-cancel.
     cancellation_fee: float = 0
-    # Stripe's hosted checkout page, set on the checkout response for card
-    # orders (and on a fresh pay link) — null everywhere else.
+    # The provider's pay page — Stripe's hosted checkout or PayPal's
+    # approval page — set on the checkout response for online orders (and
+    # on a fresh pay link); null everywhere else.
     payment_url: str | None = None
+    # Who takes this order's money: "stripe", "paypal", or null for cash.
+    payment_provider: str | None = None
+    # How much of the payment the provider has confirmed sent back.
+    refunded_amount: float = 0
 
 
 class OrderListResponse(BaseModel):
@@ -490,6 +495,11 @@ class StorefrontOut(BaseModel):
     marquee: list[str] = []
     demo_accounts: bool = False
     card_payments: bool = False
+    # PayPal as its own way to pay — true the moment its credentials exist.
+    paypal_payments: bool = False
+    # True while an online rail is a rehearsal (Stripe test keys, PayPal
+    # sandbox): checkout says so, because real cards are declined there.
+    payments_test_mode: bool = False
     facebook_login: bool = False
     phone_login: bool = False
     contact_address: str | None = None
@@ -721,6 +731,104 @@ class OrderStatusUpdateRequest(BaseModel):
 
 class PaymentStatusUpdateRequest(BaseModel):
     payment_status: str = Field(pattern="^(pending|paid|refunded)$")
+
+
+class RefundRequest(BaseModel):
+    """A refund asked for at the desk. `amount` is in the order's currency;
+    left out, everything still held is sent back. The reason is kept on
+    the refund's record (and never shown to the customer)."""
+
+    amount: float | None = Field(default=None, gt=0)
+    reason: str | None = Field(default=None, max_length=255)
+
+
+class PaymentRefundOut(ORMModel):
+    id: int
+    provider: str
+    provider_refund_id: str | None = None
+    amount: float
+    currency: str
+    status: str
+    reason: str | None = None
+    failure_reason: str | None = None
+    initiated_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class PaymentTransactionOut(ORMModel):
+    """One provider pay page and what became of it, as the desk reads it."""
+
+    id: int
+    provider: str
+    provider_reference: str
+    provider_payment_id: str | None = None
+    amount: float
+    currency: str
+    status: str
+    refunded_amount: float = 0
+    refundable_amount: float = 0
+    dispute_status: str | None = None
+    failure_reason: str | None = None
+    paid_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    refunds: list[PaymentRefundOut] = []
+
+
+class PaymentEventOut(ORMModel):
+    id: int
+    provider: str
+    event_id: str | None = None
+    event_type: str
+    from_status: str | None = None
+    to_status: str | None = None
+    detail: str | None = None
+    created_at: datetime
+
+
+class OrderPaymentsOut(BaseModel):
+    """Everything the ledger holds about one order's money."""
+
+    order_id: int
+    order_number: str
+    payment_method: str
+    payment_status: str
+    provider: str | None = None
+    total: float
+    currency: str
+    paid_amount: float = 0
+    refunded_amount: float = 0
+    refundable_amount: float = 0
+    transactions: list[PaymentTransactionOut] = []
+    events: list[PaymentEventOut] = []
+    # Set only on the answer to "check with the provider": what it said.
+    sync_outcome: str | None = None
+
+
+class ReconciliationIssueOut(BaseModel):
+    """One thing in the payment book that does not add up, with what to do."""
+
+    kind: str
+    severity: Literal["action", "watch"]
+    order_id: int | None = None
+    order_number: str | None = None
+    provider: str | None = None
+    detail: str
+    suggestion: str
+
+
+class PaymentProviderStatusOut(BaseModel):
+    provider: str
+    configured: bool
+    mode: str | None = None  # live | test (Stripe) · live | sandbox (PayPal)
+    webhook_ready: bool = False
+
+
+class ReconciliationOut(BaseModel):
+    checked_at: datetime
+    providers: list[PaymentProviderStatusOut] = []
+    issues: list[ReconciliationIssueOut] = []
 
 
 class UserAdminUpdateRequest(BaseModel):

@@ -20,10 +20,19 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
-from . import stripe_gateway
+from . import paypal_gateway, stripe_gateway
 from .config import get_settings
 from .database import Base, engine
-from .routers import admin, auth, content, marketing, orders, payments, products
+from .routers import (
+    admin,
+    admin_payments,
+    auth,
+    content,
+    marketing,
+    orders,
+    payments,
+    products,
+)
 # Aliased on purpose: a plain `from .routers import costing` would rebind
 # the app package's `costing` attribute to the router module, shadowing
 # the app.costing engine module everywhere `from app import costing` runs.
@@ -379,21 +388,40 @@ async def lifespan(app: FastAPI):
             ", ".join(pending_rules),
         )
 
-    # Self-heal for payment webhooks: card orders stuck pending past their
-    # pay-by window are reconciled with Stripe — at boot, then every few
-    # minutes. A moved or dead webhook endpoint must not freeze the book.
+    # Self-heal for payment webhooks: online orders stuck pending past
+    # their pay-by window are reconciled with their provider — at boot,
+    # then every few minutes. A moved or dead webhook endpoint must not
+    # freeze the book.
     sweep_task: asyncio.Task | None = None
-    if stripe_gateway.configured():
+    if stripe_gateway.configured() or paypal_gateway.configured():
 
         async def _payment_sweep() -> None:
             while True:
                 try:
                     await run_in_threadpool(payments.reconcile_stale_card_orders)
                 except Exception:
-                    logger.exception("Stripe reconciliation sweep failed")
+                    logger.exception("payment reconciliation sweep failed")
                 await asyncio.sleep(payments.SWEEP_INTERVAL_SECONDS)
 
         sweep_task = asyncio.create_task(_payment_sweep())
+
+    # Which tills are real, said once at boot — nobody should have to
+    # guess from a dashboard whether the shop is rehearsing or charging.
+    logger.info(
+        "Payments: Stripe %s · PayPal %s",
+        f"{stripe_gateway.mode()} mode" if stripe_gateway.configured() else "off",
+        (
+            f"{paypal_gateway.environment()}"
+            + ("" if paypal_gateway.webhook_ready() else " (no PAYPAL_WEBHOOK_ID — its webhooks are refused)")
+        )
+        if paypal_gateway.configured()
+        else "off",
+    )
+    if stripe_gateway.configured() and not settings.stripe_webhook_secret:
+        logger.warning(
+            "STRIPE_WEBHOOK_SECRET is not set — Stripe's webhooks are refused; payments "
+            "land only when the customer returns or the reconciliation sweep runs."
+        )
 
     logger.info("%s API ready (%s)", settings.bakery_name, settings.app_env)
     yield
@@ -494,6 +522,7 @@ def create_app() -> FastAPI:
     app.include_router(orders.router)
     app.include_router(payments.router)
     app.include_router(admin.router)
+    app.include_router(admin_payments.router)
     app.include_router(costing_routes.router)
     app.include_router(marketing.router)
     app.include_router(content.router)

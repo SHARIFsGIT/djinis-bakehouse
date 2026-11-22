@@ -502,9 +502,12 @@ def test_a_personal_voucher_cannot_become_a_tiers_code():
 # The desk's payment label says what it is
 # --------------------------------------------------------------------------
 
-def test_relabelling_a_card_payment_by_hand_says_no_money_moved():
-    """"Mark refunded" on a card order only rewrites the label — the
-    timeline must not let that pass for a refund that was sent."""
+def test_the_desks_payment_label_is_never_mistaken_for_money_moving():
+    """The label buttons only rewrite the book. Where a provider holds the
+    order's money they are refused outright — "refunded" there has to be a
+    refund the provider confirmed (the real refund has its own endpoint,
+    pinned in test_payment_ledger.py). Where the label is all there is —
+    a cash order — it works as it always did."""
     headers = auth_header(api.register_and_login("relabel@hardening.example.com", "Relabel123!"))
     api._top_up_stock("butter-croissant")
     api._top_up_stock("beef-curry-puff")
@@ -515,11 +518,11 @@ def test_relabelling_a_card_payment_by_hand_says_no_money_moved():
     refunds_before = len([c for c in api.gateway_calls if c[0] == "refund"])
     marked = client.put(
         f"/api/admin/orders/{card['id']}/payment", json={"payment_status": "refunded"}, headers=admin
-    ).json()
-    assert marked["payment_status"] == "refunded"
-    assert marked["timeline"][-1]["comment"] == (
-        "Payment marked Refunded by hand at the desk — no money was moved by this change"
     )
+    assert marked.status_code == 400
+    assert "Use Refund to send money back" in marked.json()["detail"]
+    still = client.get(f"/api/orders/{card['id']}", headers=headers).json()
+    assert still["payment_status"] == "paid"  # the label did not move
     assert len([c for c in api.gateway_calls if c[0] == "refund"]) == refunds_before
 
     # a cash order's label IS the whole truth — its wording is unchanged

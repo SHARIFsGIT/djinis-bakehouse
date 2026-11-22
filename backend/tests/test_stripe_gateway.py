@@ -67,11 +67,16 @@ class StubStripe:
                 "url": "https://checkout.stripe.test/cs_test_page",
             }
         )
+        self.expired: list[str] = []
+        self.raise_on_expire = False
         self.checkout = SimpleNamespace(
-            Session=SimpleNamespace(create=self._session, retrieve=self._retrieve)
+            Session=SimpleNamespace(
+                create=self._session, retrieve=self._retrieve, expire=self._expire
+            )
         )
         self.Coupon = SimpleNamespace(create=self._coupon)
         self.refunds: list[dict] = []
+        self.refund_status: str | None = None
         self.Refund = SimpleNamespace(create=self._refund)
 
     def _coupon(self, **kwargs):
@@ -90,9 +95,18 @@ class StubStripe:
         self.retrieved.append(session_id)
         return self.retrieve_result
 
+    def _expire(self, session_id: str):
+        if self.raise_on_expire:
+            # what Stripe answers for a session that is already paid or lapsed
+            raise RuntimeError("Only Checkout Sessions with a status of open can be expired")
+        self.expired.append(session_id)
+
     def _refund(self, **kwargs):
         self.refunds.append(kwargs)
-        return SimpleNamespace(id=f"re_{len(self.refunds)}")
+        refund = SimpleNamespace(id=f"re_{len(self.refunds)}")
+        if self.refund_status is not None:
+            refund.status = self.refund_status
+        return refund
 
 
 def load_real_gateway(stub: StubStripe | None = None):
@@ -508,7 +522,19 @@ def test_retrieve_session_returns_plain_values() -> None:
         "payment_status": "paid",
         "payment_intent": "pi_test_1",
         "url": "https://checkout.stripe.test/cs_test_page",
+        # what the page charged rides along for reconciliation — absent
+        # from this sparse stub, so both read None rather than raising
+        "amount_total": None,
+        "currency": None,
     }
+
+    # ...and when Stripe does say what it charged, the figures come through
+    stub.retrieve_result = StubSession(
+        {"id": "cs_test_page", "status": "complete", "payment_status": "paid",
+         "payment_intent": "pi_test_1", "amount_total": 1820, "currency": "eur"}
+    )
+    charged = gateway.retrieve_session("cs_test_page")
+    assert (charged["amount_total"], charged["currency"]) == (1820, "eur")
 
     # A sparse session — still open, nothing paid yet — yields Nones, never
     # an attribute error; an unreachable Stripe stays GatewayUnavailable.
@@ -518,48 +544,143 @@ def test_retrieve_session_returns_plain_values() -> None:
         "payment_status": None,
         "payment_intent": None,
         "url": None,
+        "amount_total": None,
+        "currency": None,
     }
     stub.raise_on_retrieve = True
     with pytest.raises(gateway.GatewayUnavailable):
         gateway.retrieve_session("cs_test_page")
 
 
-def test_payment_methods_default_to_the_card_rail(monkeypatch) -> None:
-    gateway = load_real_gateway(StubStripe())
-    monkeypatch.setattr(gateway.get_settings(), "stripe_payment_methods", "card", raising=True)
-    assert gateway.payment_method_types() == ["card"]
-    # an empty setting is the same decision, not an error
-    monkeypatch.setattr(gateway.get_settings(), "stripe_payment_methods", " ", raising=True)
-    assert gateway.payment_method_types() == ["card"]
+# ── Which payment methods the hosted page offers ────────────────────────
+#
+# These replace the tests that pinned a static `payment_method_types` list.
+# The SDK the shop runs (16.x, API 2026-10-28) no longer has that parameter
+# on session creation: Stripe computes the eligible methods itself, and a
+# shop may only *filter* that set (allowed_payment_method_types) or exclude
+# from it. Sending the old list is exactly what these tests now forbid.
+
+def test_by_default_stripe_chooses_the_payment_methods(monkeypatch) -> None:
+    """No list, no filter: every method switched on in the Stripe dashboard
+    that suits the customer and device — cards, wallets, bank methods —
+    without the shop hardcoding (and so possibly mis-asking for) any."""
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+    for unset in ("automatic", "", "  ", "Automatic"):
+        monkeypatch.setattr(gateway.get_settings(), "stripe_payment_methods", unset, raising=True)
+        assert gateway.allowed_payment_methods() is None
+
+    monkeypatch.setattr(gateway.get_settings(), "stripe_payment_methods", "automatic", raising=True)
+    gateway.create_checkout_session(make_order(), BASE_URL)
+    sent = stub.sessions[0]
+    assert "payment_method_types" not in sent  # the retired parameter is never sent
+    assert "allowed_payment_method_types" not in sent
+    assert "excluded_payment_method_types" not in sent
 
 
-def test_extra_payment_methods_ride_along_card_first(monkeypatch) -> None:
-    gateway = load_real_gateway(StubStripe())
-    monkeypatch.setattr(
-        gateway.get_settings(), "stripe_payment_methods", "paypal,card,klarna", raising=True
-    )
-    methods = gateway.payment_method_types()
-    assert methods == ["card", "paypal", "klarna"]  # the universal rail stays on top
-
-
-def test_unknown_payment_methods_drop_back_to_card(monkeypatch) -> None:
-    gateway = load_real_gateway(StubStripe())
-    # nothing here is supported (giropay included: Stripe retired it), so
-    # the page falls back to the one method that always works
-    monkeypatch.setattr(
-        gateway.get_settings(), "stripe_payment_methods", "crypto,giropay", raising=True
-    )
-    assert gateway.payment_method_types() == ["card"]
-
-
-def test_the_session_offers_the_configured_methods(monkeypatch) -> None:
+def test_an_explicit_list_only_filters_stripes_own_set(monkeypatch) -> None:
     stub = StubStripe()
     gateway = load_real_gateway(stub)
     monkeypatch.setattr(
-        gateway.get_settings(), "stripe_payment_methods", "card,klarna", raising=True
+        gateway.get_settings(), "stripe_payment_methods", "paypal,card,klarna,card", raising=True
     )
+    assert gateway.allowed_payment_methods() == ["card", "paypal", "klarna"]  # card first, no repeats
+
     gateway.create_checkout_session(make_order(), BASE_URL)
-    assert stub.sessions[0]["payment_method_types"] == ["card", "klarna"]
+    sent = stub.sessions[0]
+    assert sent["allowed_payment_method_types"] == ["card", "paypal", "klarna"]
+    assert "payment_method_types" not in sent
+
+
+def test_unknown_method_names_drop_out_and_never_reach_stripe(monkeypatch) -> None:
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+    # a typo and a method Stripe retired — with one real name among them
+    monkeypatch.setattr(
+        gateway.get_settings(), "stripe_payment_methods", "crypto,giropay,sepa_debit", raising=True
+    )
+    assert gateway.allowed_payment_methods() == ["sepa_debit"]
+
+    # nothing usable left: Stripe's automatic set, never an empty filter
+    monkeypatch.setattr(
+        gateway.get_settings(), "stripe_payment_methods", "crypto,giropay", raising=True
+    )
+    assert gateway.allowed_payment_methods() is None
+    gateway.create_checkout_session(make_order(), BASE_URL)
+    assert "allowed_payment_method_types" not in stub.sessions[0]
+
+
+def test_stripes_page_never_shows_a_second_paypal(monkeypatch) -> None:
+    """With PayPal configured as its own provider, the shop's checkout has
+    a PayPal button already — Stripe's page must not offer another."""
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+    settings = gateway.get_settings()
+    monkeypatch.setattr(settings, "paypal_client_id", "client", raising=True)
+    monkeypatch.setattr(settings, "paypal_client_secret", "secret", raising=True)
+
+    monkeypatch.setattr(settings, "stripe_payment_methods", "automatic", raising=True)
+    gateway.create_checkout_session(make_order(), BASE_URL)
+    assert stub.sessions[0]["excluded_payment_method_types"] == ["paypal"]
+
+    monkeypatch.setattr(settings, "stripe_payment_methods", "card,paypal,klarna", raising=True)
+    gateway.create_checkout_session(make_order(), BASE_URL)
+    assert stub.sessions[1]["allowed_payment_method_types"] == ["card", "klarna"]
+    assert "excluded_payment_method_types" not in stub.sessions[1]
+
+
+def test_closing_a_session_reports_whether_stripe_closed_it() -> None:
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+
+    assert gateway.expire_session("cs_test_page") is True
+    assert stub.expired == ["cs_test_page"]
+
+    # already paid or lapsed: not an error, just "may still hold money"
+    stub.raise_on_expire = True
+    assert gateway.expire_session("cs_test_page") is False
+
+
+def test_a_refund_hands_back_stripes_own_id_and_status() -> None:
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+
+    assert gateway.refund("pi_test_1", 500) == {"id": "re_1", "status": "succeeded"}
+
+    stub.refund_status = "pending"  # a bank method still settling
+    assert gateway.refund("pi_test_1", 700) == {"id": "re_2", "status": "pending"}
+
+
+def test_a_deliberate_further_refund_gets_its_own_idempotency_key() -> None:
+    """The first refund on a payment keeps the long-standing key. A second
+    one of the same amount is a new decision, not a retry — without its
+    own key Stripe would answer with the first refund and send nothing."""
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+
+    gateway.refund("pi_test_1", 500)
+    gateway.refund("pi_test_1", 500, 1)
+    gateway.refund("pi_test_1", 500, 1)  # ...whose own retry still collapses
+
+    assert [call["idempotency_key"] for call in stub.refunds] == [
+        "refund:pi_test_1:500",
+        "refund:pi_test_1:500:1",
+        "refund:pi_test_1:500:1",
+    ]
+
+
+def test_the_key_names_the_mode_it_would_charge_in(monkeypatch) -> None:
+    gateway = load_real_gateway(StubStripe())
+    settings = gateway.get_settings()
+    for key, expected in (
+        ("", None),
+        ("sk_test_abc", "test"),
+        ("rk_test_abc", "test"),
+        ("sk_live_abc", "live"),
+        ("rk_live_abc", "live"),
+    ):
+        monkeypatch.setattr(settings, "stripe_secret_key", key, raising=True)
+        assert gateway.mode() == expected
 
 
 def test_inclusive_mode_never_adds_a_second_tax_row(monkeypatch) -> None:

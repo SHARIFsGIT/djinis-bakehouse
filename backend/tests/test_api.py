@@ -94,7 +94,9 @@ def fake_retrieve_session(session_id):
     return dict(session)
 
 
-def fake_refund(payment_intent, amount_cents):
+def fake_refund(payment_intent, amount_cents, sequence=0):
+    # (the call log keeps its three-field shape; `sequence` only tells the
+    # real gateway a deliberate further refund from a retry of the first)
     gateway_calls.append(("refund", payment_intent, amount_cents))
 
 

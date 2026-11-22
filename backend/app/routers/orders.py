@@ -7,12 +7,26 @@ Card orders are placed unpaid and only become paid when Stripe says so
 """
 
 import random
+import re
 from datetime import date, timedelta
+from decimal import Decimal
+from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import object_session
 
-from .. import stripe_gateway, pricing
+from .. import ledger, payment_ops, pricing, stripe_gateway
 from ..config import get_settings
 from ..database import utcnow
 from ..email import send_order_receipt, send_order_status_email
@@ -20,7 +34,9 @@ from ..money import money
 from ..loyalty import loyalty_tier
 from ..notifications import notify_admin
 from ..models import (
+    PAYMENT_PROVIDERS,
     Address,
+    CheckoutAttempt,
     Coupon,
     Order,
     OrderEvent,
@@ -30,6 +46,7 @@ from ..models import (
     PaymentMethod,
     PaymentStatus,
     Product,
+    TransactionStatus,
     User,
     get_store_setting,
 )
@@ -330,7 +347,23 @@ def _serialize(
         customer_email=order.user.email if order.user else None,
         cancellation_fee=round(cancel_fee_preview, 2),
         payment_url=payment_url,
+        **_payment_overview(order),
     )
+
+
+def _payment_overview(order: Order) -> dict:
+    """Which provider took this order's money and how much of it has gone
+    back — read fresh from the ledger, so the page a customer (or the
+    desk) sees right after a refund already says so."""
+    provider = ledger.provider_for(order)
+    db = object_session(order)
+    if provider is None or db is None:
+        return {"payment_provider": provider, "refunded_amount": 0.0}
+    tx = ledger.money_transaction(db, order)
+    return {
+        "payment_provider": provider,
+        "refunded_amount": float(tx.refunded_amount or 0) if tx is not None else 0.0,
+    }
 
 
 def _receipt_dict(order: Order) -> dict:
@@ -390,36 +423,60 @@ def queue_status_email(
 
 
 def mark_order_paid(
-    order: Order, db, background: BackgroundTasks, *, payment_intent: str | None = None
+    order: Order,
+    db,
+    background: BackgroundTasks,
+    *,
+    payment_intent: str | None = None,
+    provider: str = "stripe",
+    reference: str | None = None,
+    payment_id: str | None = None,
 ) -> bool:
-    """A completed Stripe payment landed on this order.
+    """A completed payment landed on this order — through Stripe (the
+    session `reference`, the `payment_intent`) or PayPal (the PayPal order
+    `reference`, the capture `payment_id`).
 
     Idempotent — it only acts while the order is still pending, so the
     webhook and the customer-facing confirm check can race safely and the
-    receipt goes out exactly once.
+    receipt goes out exactly once. The order's flip to paid and the
+    ledger's "succeeded" are one transaction: neither exists without the
+    other.
     """
     if order.payment_status != PaymentStatus.PENDING.value:
         return False
     order.payment_status = PaymentStatus.PAID.value
-    if payment_intent:
-        order.stripe_payment_intent_id = payment_intent
+    if provider == "stripe":
+        if payment_intent:
+            order.stripe_payment_intent_id = payment_intent
+        reference = reference or order.stripe_session_id
+        payment_id = payment_intent or payment_id
+    ledger.settle(db, order, provider=provider, reference=reference, payment_id=payment_id)
     db.add(
         OrderEvent(
-            order_id=order.id, status=order.status, comment="Payment received — paid by card"
+            order_id=order.id,
+            status=order.status,
+            comment=f"Payment received — {payment_ops.PAID_PHRASE.get(provider, 'paid online')}",
         )
     )
     db.commit()
     db.refresh(order)
-    # The card receipt travels with the payment, not the placement — by
-    # now it can honestly say "paid".
+    # The receipt travels with the payment, not the placement — by now it
+    # can honestly say "paid".
     background.add_task(send_order_receipt, _receipt_dict(order))
     return True
 
 
 def refund_payment_on_cancelled_order(
-    order: Order, db, background: BackgroundTasks, *, payment_intent: str | None = None
+    order: Order,
+    db,
+    background: BackgroundTasks,
+    *,
+    payment_intent: str | None = None,
+    provider: str = "stripe",
+    reference: str | None = None,
+    payment_id: str | None = None,
 ) -> bool:
-    """A Stripe payment landed on an order that was already cancelled.
+    """A payment landed on an order that was already cancelled.
 
     The pay page outlived the order — a tab left open while the customer
     (or the desk) cancelled, and Stripe could not close it in time. The
@@ -437,15 +494,22 @@ def refund_payment_on_cancelled_order(
     if order.payment_status != PaymentStatus.PENDING.value:
         return False
     order.payment_status = PaymentStatus.PAID.value
-    if payment_intent:
-        order.stripe_payment_intent_id = payment_intent
+    if provider == "stripe":
+        if payment_intent:
+            order.stripe_payment_intent_id = payment_intent
+        reference = reference or order.stripe_session_id
+        payment_id = payment_intent or payment_id
+    tx = ledger.settle(db, order, provider=provider, reference=reference, payment_id=payment_id)
     fee = float(order.cancel_fee or 0)
-    if order.stripe_payment_intent_id:
-        refund_note = _refund_paid_order(order, fee)
+    if tx.provider_payment_id:
+        refund_note = _refund_paid_order(
+            order, fee, db, initiated_by="late payment on a cancelled order"
+        )
     else:
         # Nothing to refund against — never claim a refund that cannot have
         # been sent. The order honestly stays "paid" until the desk settles it.
-        refund_note = "refund could not be sent — refund it from the Stripe dashboard"
+        label = payment_ops.PROVIDER_LABELS.get(provider, provider)
+        refund_note = f"refund could not be sent — refund it from the {label} dashboard"
 
     if refund_note:
         text = f"Payment arrived after the order was cancelled — {refund_note}"
@@ -496,15 +560,33 @@ def checkout(
     db: DbSession,
     background: BackgroundTasks,
     request: Request,
+    response: Response,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
-    # Cash on delivery is always real. Card orders run through Stripe —
-    # until STRIPE_SECRET_KEY is configured there is no honest card option
-    # to offer, so the request is refused before any side effects.
-    if payload.payment_method == PaymentMethod.CARD and not stripe_gateway.configured():
+    # Cash on delivery is always real. The online rails each need their
+    # provider's keys — until those exist there is no honest option to
+    # offer, so the request is refused before any side effects.
+    if not payment_ops.available(payload.payment_method.value):
         raise HTTPException(
             status_code=400,
-            detail="Online payments aren't set up yet — please choose cash on delivery",
+            detail=(
+                "PayPal isn't set up yet — please choose another way to pay"
+                if payload.payment_method == PaymentMethod.PAYPAL
+                else "Online payments aren't set up yet — please choose cash on delivery"
+            ),
         )
+
+    # One press of the pay button, one order. The browser names each
+    # checkout attempt; the same name arriving again (a double click, a
+    # retry after a dropped connection) is answered with the order that
+    # press already placed — never a second order, never a second charge.
+    if idempotency_key is not None:
+        if not _IDEMPOTENCY_KEY.fullmatch(idempotency_key):
+            raise HTTPException(status_code=400, detail="Idempotency-Key is not usable")
+        placed = _replayed_order(db, user, idempotency_key)
+        if placed is not None:
+            response.status_code = status.HTTP_200_OK
+            return _serialize(placed, detailed=True, payment_url=_resume_url(placed, db))
 
     # The charge currency every figure this order stores will be read in —
     # validated up front so no row is ever written with money the pipeline
@@ -559,6 +641,24 @@ def checkout(
     priced = _price_basket(db, merged, by_id, coupon, user)
     inclusive = isinstance(priced, pricing.InclusiveBasket)
 
+    # A provider cannot take less than its own minimum (and nothing at all
+    # for an order a voucher has already paid for). Said here, before the
+    # order exists — not by placing it, being refused and cancelling it.
+    provider = PAYMENT_PROVIDERS.get(payload.payment_method.value)
+    if provider and Decimal(str(priced.total)) < payment_ops.MIN_ONLINE_TOTAL[provider]:
+        if priced.total <= 0:
+            detail = (
+                "There is nothing left to pay on this order — "
+                "choose cash on delivery to place it"
+            )
+        else:
+            floor = money(float(payment_ops.MIN_ONLINE_TOTAL[provider]), charge_currency)
+            detail = (
+                f"{payment_ops.PROVIDER_LABELS[provider]} can't take less than {floor} — "
+                "choose another way to pay for this order"
+            )
+        raise HTTPException(status_code=400, detail=detail)
+
     # Both rails start pending: cash settles at the door, card settles when
     # Stripe confirms the payment.
     payment_status = PaymentStatus.PENDING.value
@@ -594,6 +694,10 @@ def checkout(
     )
     db.add(order)
     db.flush()
+    if idempotency_key is not None:
+        db.add(
+            CheckoutAttempt(user_id=user.id, idempotency_key=idempotency_key, order_id=order.id)
+        )
 
     for product_id, quantity in merged.items():
         product = by_id[product_id]
@@ -668,43 +772,85 @@ def checkout(
         link=f"/admin/orders?search={order.order_number}",
         background=background,
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # The same press arrived twice at once and the other request got
+        # there first (the unique key on checkout_attempts is the referee).
+        # Everything this request wrote — order, stock, desk ping — is
+        # undone; the answer is the order the winner placed.
+        db.rollback()
+        background.tasks.clear()
+        placed = _replayed_order(db, user, idempotency_key) if idempotency_key else None
+        if placed is None:
+            raise
+        response.status_code = status.HTTP_200_OK
+        return _serialize(placed, detailed=True, payment_url=_resume_url(placed, db))
     db.refresh(order)
 
-    # Card orders now need a hosted Stripe page to pay at. If Stripe can't
-    # be reached, the order is cancelled on the spot — no order may sit in
-    # the book with no way to pay it. An unchargeable currency is the same
-    # dead end for a card order (the gateway refuses to guess one), and the
+    # An online order now needs its provider's pay page. If the provider
+    # can't be reached, the order is cancelled on the spot — no order may
+    # sit in the book with no way to pay it. An unchargeable currency is the
+    # same dead end (the gateways refuse to guess one), and the
     # freshly-placed order is rolled back the same way.
     payment_url = None
-    if payload.payment_method == PaymentMethod.CARD:
+    if provider:
         try:
-            session = stripe_gateway.create_checkout_session(
-                order, str(request.base_url).rstrip("/")
-            )
-        except (stripe_gateway.GatewayUnavailable, stripe_gateway.InvalidOrderCurrency):
+            payment_url = payment_ops.open_pay_page(db, order, payment_ops.public_base(request))
+        except (payment_ops.PayPageUnavailable, payment_ops.UnchargeableCurrency):
             _cancel_order(
                 order,
                 db,
                 by_customer=False,
                 comment="Payment provider unreachable — cancelled automatically",
             )
+            # The press is forgotten with the order it placed: trying again
+            # must place a fresh order, not be handed this cancelled one.
+            for attempt in db.scalars(
+                select(CheckoutAttempt).where(CheckoutAttempt.order_id == order.id)
+            ):
+                db.delete(attempt)
             db.commit()
             raise HTTPException(
                 status_code=503,
                 detail="The payment provider didn't answer — nothing was charged. Please try again.",
             )
-        order.stripe_session_id = session["id"]
         db.commit()
-        payment_url = session["url"]
 
     # The receipt every order earns as proof of purchase — cash orders get
-    # theirs at placement (the bill to settle); card orders get theirs when
-    # the payment lands, when it can honestly say "paid".
-    if payload.payment_method != PaymentMethod.CARD:
+    # theirs at placement (the bill to settle); online orders get theirs
+    # when the payment lands, when it can honestly say "paid".
+    if not provider:
         background.add_task(send_order_receipt, _receipt_dict(order))
 
     return _serialize(order, detailed=True, payment_url=payment_url)
+
+
+# What a checkout attempt may call itself: long enough not to collide,
+# short and plain enough to store and log.
+_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{8,80}$")
+
+
+def _replayed_order(db, user: User, key: str) -> Order | None:
+    """The order this user's earlier press under the same key placed."""
+    attempt = db.scalar(
+        select(CheckoutAttempt).where(
+            CheckoutAttempt.user_id == user.id, CheckoutAttempt.idempotency_key == key
+        )
+    )
+    return db.get(Order, attempt.order_id) if attempt is not None else None
+
+
+def _resume_url(order: Order, db) -> str | None:
+    """Where to send the customer to finish paying an order that already
+    exists — its open pay page, if it still has one."""
+    if (
+        order.status == OrderStatus.CANCELLED.value
+        or order.payment_status != PaymentStatus.PENDING.value
+    ):
+        return None
+    tx = ledger.open_for_order(db, order.id)
+    return tx.checkout_url if tx is not None else None
 
 
 @router.post("/quote", response_model=QuoteOut)
@@ -858,56 +1004,79 @@ def order_detail(order_id: int, user: CurrentUser, db: DbSession):
     return _serialize(order, detailed=True, cancel_fee_preview=_late_cancel_fee(order, db))
 
 
-def _refund_paid_order(order: Order, fee: float) -> str | None:
+def _refund_paid_order(
+    order: Order, fee: float, db, *, initiated_by: str = "order cancellation"
+) -> str | None:
     """Settle the money side of cancelling a paid order. Returns a note for
     the timeline when the settlement needs a human's eye, else None.
 
-    Card refunds go back to the card through Stripe (the total less any
-    kept fee); cash refunds are handed back in person or by transfer, so
-    only the status flips. A card order with no payment intent is demo
-    history from the old simulated branch — no money ever moved.
+    A payment taken online goes back the way it came — through Stripe or
+    PayPal — for whatever of it is still held, less any kept fee; the
+    ledger records the provider's own answer, and the order's payment
+    status follows only a refund the provider has confirmed. Cash refunds
+    are handed back in person, so only the status flips. A card order with
+    no payment intent is demo history from the old simulated branch — no
+    money ever moved.
 
-    One asymmetry is documented, not hidden: Stripe's refund cannot be
-    rolled back with this transaction. If the commit fails after Stripe
-    accepted, the order honestly stays "paid" while the customer holds
-    the money — the refund's idempotency key keeps any retry from paying
-    twice, and settling the book is then a human's (or a future sweep's)
-    job.
+    One asymmetry is documented, not hidden: a provider's refund cannot be
+    rolled back with this transaction. If the commit fails after the
+    provider accepted, the order honestly stays "paid" while the customer
+    holds the money — the refund's idempotency key keeps any retry from
+    paying twice, and the reconciliation report names the mismatch.
     """
-    if order.payment_status != PaymentStatus.PAID.value:
-        return None  # nothing collected, nothing owed
-    refund_cents = stripe_gateway.cents(float(order.total)) - stripe_gateway.cents(fee)
-    if refund_cents <= 0:
-        # The kept fee is the whole total (a 100 % late-cancellation
-        # setting): nothing goes back, so the payment simply stands — no
-        # zero-amount refund for Stripe to refuse, no refund claimed.
+    tx = None
+    if ledger.provider_for(order):
+        tx = ledger.money_transaction(db, order) or ledger.adopt_order_payment(db, order)
+
+    if tx is None:
+        if order.payment_status != PaymentStatus.PAID.value:
+            return None  # nothing collected, nothing owed
+        if stripe_gateway.cents(float(order.total)) - stripe_gateway.cents(fee) <= 0:
+            return None  # the kept fee is the whole total — nothing goes back
+        order.payment_status = (
+            PaymentStatus.PARTIALLY_REFUNDED.value if fee else PaymentStatus.REFUNDED.value
+        )
         return None
-    refunded_status = (
-        PaymentStatus.PARTIALLY_REFUNDED.value if fee else PaymentStatus.REFUNDED.value
+
+    if order.payment_status not in (
+        PaymentStatus.PAID.value,
+        PaymentStatus.PARTIALLY_REFUNDED.value,
+    ):
+        return None  # nothing collected, or everything already returned
+    refund_cents = ledger.cents(ledger.refundable(db, tx)) - stripe_gateway.cents(fee)
+    if refund_cents <= 0:
+        # The kept fee covers all that is left (a 100 % late-cancellation
+        # setting): nothing goes back, so the payment simply stands — no
+        # zero-amount refund for a provider to refuse, no refund claimed.
+        return None
+    refund = payment_ops.issue_refund(
+        db, order, tx, refund_cents, reason="Order cancelled", initiated_by=initiated_by
     )
-    if order.payment_method == PaymentMethod.CARD.value and order.stripe_payment_intent_id:
-        try:
-            stripe_gateway.refund(order.stripe_payment_intent_id, refund_cents)
-        except stripe_gateway.GatewayUnavailable:
-            # The cancellation stands; the money doesn't. Say so on the
-            # timeline rather than promising a refund that hasn't happened.
-            return "refund could not be sent — retry it from the Stripe dashboard"
-    order.payment_status = refunded_status
+    label = payment_ops.PROVIDER_LABELS.get(tx.provider, tx.provider)
+    if refund.status == "failed":
+        # The cancellation stands; the money doesn't. Say so on the
+        # timeline rather than promising a refund that hasn't happened.
+        return f"refund could not be sent — retry it from the {label} dashboard"
+    if refund.status == "pending":
+        return f"refund is on its way — {label} has yet to confirm it"
     return None
 
 
-def _close_pay_page(order: Order) -> None:
+def _close_pay_page(order: Order, db) -> None:
     """A card order cancelled before its money landed still has a live pay
     page at Stripe — close it, so nobody can pay for a box that will never
     be baked. Best effort by design: when Stripe can't close it (paid a
     heartbeat ago, already lapsed, unreachable), the payment webhook's own
-    guard sends back whatever still lands (refund_payment_on_cancelled_order)."""
-    if (
-        order.payment_method == PaymentMethod.CARD.value
-        and order.payment_status == PaymentStatus.PENDING.value
-        and order.stripe_session_id
-    ):
+    guard sends back whatever still lands (refund_payment_on_cancelled_order).
+
+    PayPal has no page to close: it only ever takes money when the shop
+    asks it to capture, and a cancelled order is never captured. Either
+    way the ledger stops counting the page as one that may still be paid."""
+    if order.payment_status != PaymentStatus.PENDING.value:
+        return
+    if order.payment_method == PaymentMethod.CARD.value and order.stripe_session_id:
         stripe_gateway.expire_session(order.stripe_session_id)
+    ledger.close_open(db, order, TransactionStatus.CANCELLED.value, detail="order cancelled")
 
 
 def _cancel_order(
@@ -933,9 +1102,9 @@ def _cancel_order(
 
     order.status = OrderStatus.CANCELLED.value
     order.cancel_fee = fee
-    refund_note = _refund_paid_order(order, fee)
+    refund_note = _refund_paid_order(order, fee, db)
     if close_pay_page:
-        _close_pay_page(order)
+        _close_pay_page(order, db)
 
     # Return reserved stock — an additive UPDATE against the current
     # database value, never a number computed from a loaded ORM object,

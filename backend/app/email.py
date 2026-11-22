@@ -174,7 +174,7 @@ def bulk_reply_email(reply: dict) -> tuple[str, str, str]:
     return subject, html, text
 
 
-_PAYMENT_LABELS = {"card": "Card", "cash_on_delivery": "Cash on delivery"}
+_PAYMENT_LABELS = {"card": "Card", "paypal": "PayPal", "cash_on_delivery": "Cash on delivery"}
 
 
 def order_receipt_email(receipt: dict) -> tuple[str, str, str]:
@@ -392,6 +392,55 @@ _ORDER_STATUS_COPY = {
         "Your order has been cancelled and the reserved bakes are back on the shelf.",
     ),
 }
+
+
+def refund_email(refund: dict) -> tuple[str, str, str]:
+    """The customer's word that money is on its way back — sent only once
+    the provider has confirmed the refund, never on the desk merely asking.
+
+    `refund` carries plain values (first_name, order_number, amount,
+    currency, provider, full) so the background task touches no session.
+    It names no arrival date: that is the bank's or PayPal's to keep."""
+    shop = get_settings().bakery_name
+    number = refund["order_number"]
+    amount = money(refund["amount"], refund.get("currency") or "eur")
+    where = "your PayPal account" if refund.get("provider") == "paypal" else "the card you paid with"
+    scope = "in full" if refund.get("full") else "in part"
+    subject = f"Refund sent — order {number}"
+    line = (
+        f"We have refunded {amount} for order {number} ({scope}). "
+        f"It goes back to {where}; it can take a few days to show there."
+    )
+    text = (
+        f"Hi {refund['first_name']},\n\n"
+        f"{line}\n\n"
+        f"If anything about it looks wrong, just reply to this email.\n"
+    )
+    html = f"""\
+<div style="margin:0;padding:24px;background:#f6f1ee;font-family:Georgia,'Times New Roman',serif;color:#33322e;">
+  <div style="max-width:480px;margin:0 auto;background:#fffdf9;border-radius:14px;padding:32px;
+              border:1px solid #e7ddd6;">
+    <p style="margin:0 0 4px;font-size:15px;color:{_BRAND};font-weight:bold;">{shop}</p>
+    <h1 style="margin:0 0 12px;font-size:22px;color:#33322e;">Your refund is on its way</h1>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.6;">
+      Hi {escape(refund['first_name'])}, {escape(line)}
+    </p>
+    <p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:#8a837a;">
+      If anything about it looks wrong, just reply to this email.
+    </p>
+  </div>
+</div>
+"""
+    return subject, html, text
+
+
+def send_refund_email(refund: dict) -> None:
+    """Queue-safe entry point for the refund-confirmation background task."""
+    try:
+        subject, html, text = refund_email(refund)
+        send_email(refund["email"], subject, html, text)
+    except Exception:
+        logger.exception("building the refund email for %s failed", refund.get("order_number"))
 
 
 def restock_email(alert: dict) -> tuple[str, str, str]:

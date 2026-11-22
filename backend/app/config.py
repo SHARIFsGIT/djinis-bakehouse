@@ -97,12 +97,33 @@ class Settings(BaseSettings):
     # Any other value pauses checkout fail-closed rather than charging money
     # the pipeline hasn't approved — see routers/orders._charge_currency.
     stripe_currency: str = "eur"
-    # Which payment methods the hosted Checkout page offers, comma-separated
-    # (default just cards). Values the gateway doesn't know are dropped with
-    # a warning; an empty result falls back to card, so the page never stops
-    # offering the one method that always works. Availability is Stripe's to
-    # decide per country — see their payment-methods docs before enabling.
-    stripe_payment_methods: str = "card"
+    # Which payment methods Stripe's hosted page offers. "automatic" (the
+    # default) leaves the choice to Stripe: every method switched on in the
+    # Stripe dashboard that suits the customer, the amount and the device —
+    # cards, Apple Pay and Google Pay, Link, and whatever bank or pay-later
+    # methods the account is eligible for. Nothing is hardcoded, so nothing
+    # unsupported is ever requested. A comma-separated list instead narrows
+    # that automatic set to the named methods (it can only filter — Stripe
+    # still shows a method only where it is genuinely available).
+    stripe_payment_methods: str = "automatic"
+
+    # PayPal Checkout, as its own provider beside Stripe. The PayPal option
+    # appears at checkout the moment both the client id and the secret are
+    # set; PAYPAL_WEBHOOK_ID (from the webhook created in PayPal's developer
+    # dashboard) is what lets the shop verify PayPal's notifications — until
+    # it is set, they are refused. PAYPAL_ENVIRONMENT picks the API the
+    # credentials belong to: "sandbox" for rehearsal, "live" for real money.
+    # Sandbox credentials never work against live and vice versa, so a
+    # mismatch fails loudly at the first call rather than charging anyone.
+    paypal_client_id: str = ""
+    paypal_client_secret: str = ""
+    paypal_webhook_id: str = ""
+    paypal_environment: str = "sandbox"
+
+    # The shop's own public address (https://djinisbakehouse.com), used for
+    # the links a payment provider sends the customer back to. Empty = taken
+    # from the request that started the payment, as it always was.
+    public_base_url: str = ""
 
     # "Continue with Facebook" — Facebook Login for the web. Set the App ID
     # and secret from the app's dashboard and the button appears on the login
@@ -185,6 +206,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"TAX_MODE must be 'exclusive' or 'inclusive', not {self.tax_mode!r} — "
                 "the pricing mode is a financial decision, never a guess."
+            )
+        if self.paypal_environment.strip().lower() not in ("sandbox", "live"):
+            raise ValueError(
+                f"PAYPAL_ENVIRONMENT must be 'sandbox' or 'live', not {self.paypal_environment!r} — "
+                "which PayPal takes the money is never a guess."
             )
 
 

@@ -32,7 +32,6 @@ from ..models import (
     OrderEvent,
     OrderItem,
     OrderStatus,
-    PaymentMethod,
     PaymentStatus,
     Product,
     ProductVatEvent,
@@ -91,6 +90,7 @@ from ..schemas import (
     UserOut,
     VoucherLinkRequest,
 )
+from .. import ledger, payment_ops
 from ..loyalty import loyalty_tier as _loyalty
 from ..security import CurrentAdmin, DbSession
 from ..serialize import csv_safe, product_to_card, review_summary, verified_buyers
@@ -472,13 +472,28 @@ def update_payment_status(
     order = _lock_for_cancellation(order, db)
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
+    # This control only relabels the book — it never reaches a provider.
+    # Where a provider holds (or held) this order's money, the label is not
+    # the desk's to change: "refunded" there has to be a refund the
+    # provider confirmed, and the truth of "paid" is the provider's word.
+    # Both have their own buttons — Refund, and Check with the provider.
+    holds_provider_money = bool(order.stripe_payment_intent_id) or (
+        ledger.money_transaction(db, order) is not None
+    )
+    if holds_provider_money:
+        label = payment_ops.PROVIDER_LABELS.get(ledger.provider_for(order) or "", "the provider")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"This order was paid through {label} — its payment status follows {label}. "
+                "Use Refund to send money back, or Check with the provider to re-read it."
+            ),
+        )
     order.payment_status = payload.payment_status
     comment = f"Payment marked {_plain_word(payload.payment_status)}"
-    if order.payment_method == PaymentMethod.CARD.value:
-        # This control only relabels the book — it never reaches Stripe. On
-        # a card order that difference is the customer's money, so the
-        # timeline says so in as many words (a refund marked here that was
-        # never sent at Stripe would otherwise look settled forever).
+    if ledger.provider_for(order):
+        # An online order with nothing from its provider on record: the
+        # label is the desk's own claim, and the timeline says so.
         comment += " by hand at the desk — no money was moved by this change"
     db.add(OrderEvent(order_id=order.id, status=order.status, comment=comment))
     db.commit()
