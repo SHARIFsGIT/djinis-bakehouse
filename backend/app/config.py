@@ -112,7 +112,8 @@ class Settings(BaseSettings):
     # set; PAYPAL_WEBHOOK_ID (from the webhook created in PayPal's developer
     # dashboard) is what lets the shop verify PayPal's notifications — until
     # it is set, they are refused. PAYPAL_ENVIRONMENT picks the API the
-    # credentials belong to: "sandbox" for rehearsal, "live" for real money.
+    # credentials belong to: "sandbox" for rehearsal, "live" for real money
+    # (empty = sandbox; any other word switches PayPal off, never guessed).
     # Sandbox credentials never work against live and vice versa, so a
     # mismatch fails loudly at the first call rather than charging anyone.
     paypal_client_id: str = ""
@@ -207,11 +208,13 @@ class Settings(BaseSettings):
                 f"TAX_MODE must be 'exclusive' or 'inclusive', not {self.tax_mode!r} — "
                 "the pricing mode is a financial decision, never a guess."
             )
-        if self.paypal_environment.strip().lower() not in ("sandbox", "live"):
-            raise ValueError(
-                f"PAYPAL_ENVIRONMENT must be 'sandbox' or 'live', not {self.paypal_environment!r} — "
-                "which PayPal takes the money is never a guess."
-            )
+        # A dashboard field left empty arrives as "" — that is "not set", and
+        # not set means the rehearsal default. (Anything else that is not
+        # "sandbox" or "live" is never guessed at: PayPal simply stays off —
+        # see paypal_gateway.configured — and the boot log says why. A
+        # payment setting must not be able to take the whole shop down.)
+        if not self.paypal_environment.strip():
+            self.paypal_environment = "sandbox"
 
 
 @lru_cache

@@ -7,18 +7,22 @@ import client from "../api/client";
  * every product page — so nothing here over-promises. Review before launch
  * and whenever local rules change. */
 
-function useContactEmail() {
-  // The baker's real contact email from Settings, when it's been filled in —
-  // until then these pages point at the footer instead of promising a
-  // mailbox that may not exist yet.
-  const [email, setEmail] = useState(null);
+function useShopFacts() {
+  // Two things these pages may only say if they are true of this shop right
+  // now. The baker's real contact email from Settings, when it's been
+  // filled in — until then the pages point at the footer instead of
+  // promising a mailbox that may not exist yet. And whether PayPal is
+  // switched on: a payment processor is named here exactly while it is one.
+  const [facts, setFacts] = useState({ email: null, paypal: false });
   useEffect(() => {
     client
       .get("/store")
-      .then(({ data }) => setEmail(data.contact_email || null))
-      .catch(() => setEmail(null));
+      .then(({ data }) =>
+        setFacts({ email: data.contact_email || null, paypal: Boolean(data.paypal_payments) })
+      )
+      .catch(() => setFacts({ email: null, paypal: false }));
   }, []);
-  return email;
+  return facts;
 }
 
 function ReachUs({ email }) {
@@ -59,7 +63,7 @@ function Section({ heading, children }) {
 const UPDATED = "November 2026";
 
 export function PrivacyPolicy() {
-  const contactEmail = useContactEmail();
+  const { email: contactEmail, paypal } = useShopFacts();
   return (
     <LegalPage eyebrow="The paperwork" title="Privacy policy" updated={UPDATED}>
       <p>
@@ -87,8 +91,16 @@ export function PrivacyPolicy() {
           enquiries, and to send the newsletter if you asked for it. Online card
           payments are processed by Stripe as our payment service provider —
           card details are entered on Stripe's own pages and never reach our
-          servers. That is the whole list. We never sell or rent your details
-          to anyone.
+          servers.{" "}
+          {paypal && (
+            <>
+              If you choose PayPal, you approve the payment in your own PayPal
+              account on PayPal&rsquo;s site; PayPal processes it under its own
+              privacy statement, and your PayPal sign-in never reaches us.{" "}
+            </>
+          )}
+          That is the whole list. We never sell or rent your details to
+          anyone.
         </p>
       </Section>
 
@@ -124,6 +136,7 @@ export function PrivacyPolicy() {
 }
 
 export function TermsOfService() {
+  const { paypal } = useShopFacts();
   return (
     <LegalPage eyebrow="The paperwork" title="Terms of service" updated={UPDATED}>
       <p>
@@ -143,8 +156,9 @@ export function TermsOfService() {
         <p>
           Whatever the checkout offers is what we take: card — paid online
           through Stripe's secure checkout page, where your card details are
-          entered on Stripe's site and never touch ours — or cash on delivery,
-          settled with the courier at your door.
+          entered on Stripe's site and never touch ours —{" "}
+          {paypal && <>PayPal, approved in your own account on PayPal&rsquo;s site — </>}
+          or cash on delivery, settled with the courier at your door.
         </p>
       </Section>
 
@@ -188,7 +202,7 @@ export function TermsOfService() {
 }
 
 export function RefundPolicy() {
-  const contactEmail = useContactEmail();
+  const { email: contactEmail, paypal } = useShopFacts();
   return (
     <LegalPage eyebrow="The paperwork" title="Refunds & cancellations" updated={UPDATED}>
       <Section heading="Cancelling an order">
@@ -213,7 +227,9 @@ export function RefundPolicy() {
       <Section heading="How money comes back to you">
         <p>
           Card payments are refunded to the same card automatically — usually
-          within a few business days, the exact timing your bank's. Cash
+          within a few business days, the exact timing your bank's.{" "}
+          {paypal && <>PayPal payments go back to your PayPal account the same way. </>}
+          Cash
           payments are refunded in cash or by a transfer to an account you
           nominate, arranged with you directly when the refund is agreed.
         </p>

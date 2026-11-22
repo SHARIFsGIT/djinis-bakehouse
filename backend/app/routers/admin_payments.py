@@ -58,6 +58,7 @@ def _transaction_out(db, tx: PaymentTransaction) -> PaymentTransactionOut:
         provider=tx.provider,
         provider_reference=tx.provider_reference,
         provider_payment_id=tx.provider_payment_id,
+        method_label=payment_ops.method_label(tx.method_type),
         amount=float(tx.amount),
         currency=tx.currency,
         status=tx.status,
@@ -244,7 +245,7 @@ def sync_order_payment(
     words = {
         "paid": "The provider confirms the payment — the order is marked paid.",
         "refunded": "A payment had landed on this cancelled order — it was sent back.",
-        "processing": "The provider is still settling this payment.",
+        "processing": "The customer has paid — the provider is still settling it.",
         "awaiting": "The provider has not received a payment for this order yet.",
         "expired": "The pay page lapsed unpaid.",
         "declined": "The provider declined the customer's funding source.",
@@ -312,6 +313,19 @@ def payment_reconciliation(admin: CurrentAdmin, db: DbSession):
             Order.created_at < now - PAY_WINDOW,
         )
     ):
+        in_flight = ledger.open_for_order(db, order.id)
+        if in_flight is not None and in_flight.status == TransactionStatus.PROCESSING.value:
+            # Not stuck — the customer has paid with something that settles
+            # later, and the provider has yet to say how it ended.
+            add(
+                "processing_payment", "watch", order,
+                "The customer has paid; the provider is still settling it "
+                "(a bank debit, or a payment PayPal is reviewing).",
+                "Nothing to do yet — the provider confirms or fails it on its own. "
+                "Hold the bake until it is marked paid.",
+                provider=in_flight.provider,
+            )
+            continue
         add(
             "stuck_pending", "action", order,
             "Still waiting for its payment well past the pay window.",
@@ -422,7 +436,17 @@ def payment_reconciliation(admin: CurrentAdmin, db: DbSession):
         if refund.status == "failed":
             tx = db.get(PaymentTransaction, refund.transaction_id)
             if tx is not None and ledger.refundable(db, tx) <= Decimal("0.00"):
-                continue  # a later attempt went through — nothing is owed
+                continue  # everything has gone back since — nothing is owed
+            if db.scalar(
+                select(PaymentRefund.id)
+                .where(
+                    PaymentRefund.transaction_id == refund.transaction_id,
+                    PaymentRefund.id > refund.id,
+                    PaymentRefund.status.in_(["succeeded", "pending"]),
+                )
+                .limit(1)
+            ):
+                continue  # a later attempt on the same payment went through
             add(
                 "failed_refund", "action", order,
                 f"A refund of {amount} could not be sent ({refund.failure_reason or 'no reason given'}).",

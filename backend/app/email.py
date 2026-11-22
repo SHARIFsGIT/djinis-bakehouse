@@ -186,7 +186,11 @@ def order_receipt_email(receipt: dict) -> tuple[str, str, str]:
     shop = get_settings().bakery_name
     number = receipt["order_number"]
     subject = f"Receipt {number} — {shop}"
-    payment = _PAYMENT_LABELS.get(receipt["payment_method"], receipt["payment_method"])
+    # The method the provider reported, when it did ("Klarna", "Card (Apple
+    # Pay)") — else the order's own way of paying.
+    payment = receipt.get("payment_label") or _PAYMENT_LABELS.get(
+        receipt["payment_method"], receipt["payment_method"]
+    )
     paid = receipt["payment_status"] == "paid"
 
     lines = [
@@ -404,7 +408,13 @@ def refund_email(refund: dict) -> tuple[str, str, str]:
     shop = get_settings().bakery_name
     number = refund["order_number"]
     amount = money(refund["amount"], refund.get("currency") or "eur")
-    where = "your PayPal account" if refund.get("provider") == "paypal" else "the card you paid with"
+    # Stripe's page takes more than cards (wallets, bank and pay-later
+    # methods), so its refunds are described by what is always true of them.
+    where = (
+        "your PayPal account"
+        if refund.get("provider") == "paypal"
+        else "the card or account you paid with"
+    )
     scope = "in full" if refund.get("full") else "in part"
     subject = f"Refund sent — order {number}"
     line = (

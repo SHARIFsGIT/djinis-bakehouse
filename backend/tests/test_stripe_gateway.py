@@ -713,3 +713,115 @@ def test_inclusive_mode_never_adds_a_second_tax_row(monkeypatch) -> None:
     assert names == ["Butter Croissant", "Delivery"]  # no Tax row
     # and the lines still sum to the invoice, VAT inside
     assert line_total_cents(kwargs) == gateway.cents(float(order.total)) == 1750
+
+
+# ── What the customer actually paid with ─────────────────────────────────
+
+def _gateway_with_intent(intent_data: dict | None, *, fail: bool = False):
+    stub = StubStripe()
+    asked: list[tuple] = []
+
+    def retrieve(payment_intent, expand=None):
+        asked.append((payment_intent, expand))
+        if fail:
+            raise RuntimeError("stripe down")
+        return StubSession(intent_data)
+
+    stub.PaymentIntent = SimpleNamespace(retrieve=retrieve)
+    return load_real_gateway(stub), asked
+
+
+def test_the_method_is_read_off_the_payments_own_charge():
+    gateway, asked = _gateway_with_intent(
+        {"id": "pi_1", "latest_charge": {"payment_method_details": {"type": "klarna", "klarna": {}}}}
+    )
+    assert gateway.payment_method("pi_1") == "klarna"
+    # one question, with the charge expanded — the session never says which method was used
+    assert asked == [("pi_1", ["latest_charge"])]
+
+
+def test_a_card_paid_through_a_wallet_names_the_wallet():
+    gateway, _ = _gateway_with_intent(
+        {"latest_charge": {"payment_method_details": {
+            "type": "card", "card": {"brand": "visa", "wallet": {"type": "apple_pay"}}}}}
+    )
+    assert gateway.payment_method("pi_1") == "card:apple_pay"
+
+    plain, _ = _gateway_with_intent(
+        {"latest_charge": {"payment_method_details": {"type": "card", "card": {"wallet": None}}}}
+    )
+    assert plain.payment_method("pi_1") == "card"
+
+
+def test_the_method_is_only_wording_so_nothing_about_it_can_fail_a_payment():
+    down, _ = _gateway_with_intent(None, fail=True)
+    assert down.payment_method("pi_1") is None  # Stripe unreachable: unknown, not an error
+
+    for shape in (
+        {},                                             # no charge yet
+        {"latest_charge": "ch_not_expanded"},           # an id, not the object
+        {"latest_charge": {}},                          # no details
+        {"latest_charge": {"payment_method_details": {"type": None}}},
+        {"latest_charge": {"payment_method_details": "odd"}},
+    ):
+        gateway, _ = _gateway_with_intent(shape)
+        assert gateway.payment_method("pi_1") is None, shape
+
+
+# ── Read-only diagnostics ────────────────────────────────────────────────
+
+def test_the_readiness_reads_come_back_as_plain_values_and_change_nothing():
+    stub = StubStripe()
+    stub.Account = SimpleNamespace(
+        retrieve=lambda: StubSession(
+            {"id": "acct_1", "charges_enabled": True, "payouts_enabled": False,
+             "details_submitted": True, "country": "DE", "default_currency": "eur",
+             "email": "owner@example.com"}
+        )
+    )
+    stub.WebhookEndpoint = SimpleNamespace(
+        list=lambda limit=None: StubSession(
+            {"data": [{"id": "we_1", "url": "https://shop.test/api/payments/webhook", "status": "enabled",
+                       "enabled_events": ["checkout.session.completed"], "secret": None}]}
+        )
+    )
+    stub.PaymentMethodConfiguration = SimpleNamespace(
+        list=lambda limit=None: StubSession(
+            {"data": [
+                {"id": "pmc_other", "is_default": False, "card": {"available": True, "display_preference": {"value": "off"}}},
+                {"id": "pmc_default", "is_default": True, "name": "Default",
+                 "card": {"available": True, "display_preference": {"value": "on"}},
+                 "klarna": {"available": True, "display_preference": {"value": "on"}},
+                 "sepa_debit": {"available": False, "display_preference": {"value": "on"}},
+                 "paypal": {"available": True, "display_preference": {"value": "off"}}},
+            ]}
+        )
+    )
+    gateway = load_real_gateway(stub)
+
+    assert gateway.account_status() == {
+        "charges_enabled": True, "payouts_enabled": False, "details_submitted": True,
+        "country": "DE", "default_currency": "eur",
+    }  # nothing personal (the account's email) comes along
+    assert gateway.webhook_endpoints() == [
+        {"id": "we_1", "url": "https://shop.test/api/payments/webhook", "status": "enabled",
+         "enabled_events": ["checkout.session.completed"]}
+    ]
+    # only what the default configuration has switched on AND the account can use
+    assert gateway.dashboard_payment_methods() == ["card", "klarna"]
+    assert stub.sessions == [] and stub.refunds == [] and stub.coupons == []
+
+
+def test_a_readiness_read_stripe_refuses_is_unavailable_not_a_crash():
+    stub = StubStripe()
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("permission denied for restricted key")
+
+    stub.Account = SimpleNamespace(retrieve=refuse)
+    stub.WebhookEndpoint = SimpleNamespace(list=refuse)
+    stub.PaymentMethodConfiguration = SimpleNamespace(list=refuse)
+    gateway = load_real_gateway(stub)
+    for read in (gateway.account_status, gateway.webhook_endpoints, gateway.dashboard_payment_methods):
+        with pytest.raises(gateway.GatewayUnavailable):
+            read()

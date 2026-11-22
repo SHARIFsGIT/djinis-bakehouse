@@ -48,6 +48,22 @@ REQUEST_TIMEOUT_SECONDS = 20
 # gateway (EUR only, by the owner's 2026-11-05 decision).
 SUPPORTED_CURRENCIES = ("eur",)
 
+# The events the shop's webhook must be subscribed to at PayPal — each one
+# is acted on by app/routers/payments.py. The capture the customer's return
+# (or CHECKOUT.ORDER.APPROVED) triggers is confirmed without any of them;
+# refunds and disputes made at PayPal are only ever heard of through these.
+WEBHOOK_EVENTS = (
+    "CHECKOUT.ORDER.APPROVED",
+    "PAYMENT.CAPTURE.COMPLETED",
+    "PAYMENT.CAPTURE.PENDING",
+    "PAYMENT.CAPTURE.DENIED",
+    "PAYMENT.CAPTURE.DECLINED",
+    "PAYMENT.CAPTURE.REFUNDED",
+    "PAYMENT.CAPTURE.REVERSED",
+    "CUSTOMER.DISPUTE.CREATED",
+    "CUSTOMER.DISPUTE.RESOLVED",
+)
+
 # PayPal order states in which the customer can still approve the payment.
 AWAITING_APPROVAL = ("CREATED", "SAVED", "PAYER_ACTION_REQUIRED")
 
@@ -79,9 +95,25 @@ class BadSignature(Exception):
 
 
 def configured() -> bool:
-    """The PayPal option goes live the moment both credentials exist."""
+    """The PayPal option goes live the moment both credentials exist — and
+    the environment they belong to is one of the two PayPals there are. A
+    PAYPAL_ENVIRONMENT that is neither is not guessed at: PayPal stays off."""
     settings = get_settings()
-    return bool(settings.paypal_client_id and settings.paypal_client_secret)
+    return bool(
+        settings.paypal_client_id and settings.paypal_client_secret and environment() in API_BASES
+    )
+
+
+def misconfigured() -> str | None:
+    """Why PayPal is off although credentials exist — for the boot log —
+    or None when there is nothing to say."""
+    settings = get_settings()
+    if settings.paypal_client_id and settings.paypal_client_secret and environment() not in API_BASES:
+        return (
+            f"PAYPAL_ENVIRONMENT is {settings.paypal_environment!r} — it must be 'sandbox' or "
+            "'live'. PayPal stays OFF until it is; which PayPal takes the money is never a guess."
+        )
+    return None
 
 
 def environment() -> str:
@@ -123,7 +155,12 @@ _token: dict = {"value": None, "expires": 0.0, "identity": None}
 
 
 def _base_url() -> str:
-    return API_BASES[environment()]
+    base = API_BASES.get(environment())
+    if base is None:
+        # Reachable only around configured() — a webhook arriving while the
+        # setting is wrong, say. Refused like any other unreachable PayPal.
+        raise GatewayUnavailable("PAYPAL_ENVIRONMENT is neither 'sandbox' nor 'live'")
+    return base
 
 
 def _read_error(exc: urllib.error.HTTPError) -> tuple[str, str, str]:
@@ -429,6 +466,26 @@ def refund_capture(capture_id: str, amount_cents: int, currency: str, request_id
     return {"id": data.get("id"), "status": data.get("status")}
 
 
+def list_webhooks() -> list[dict]:
+    """The webhooks registered for these credentials, as plain values:
+    [{"id", "url", "event_types"}]. Read-only — the readiness check uses it
+    to see that PAYPAL_WEBHOOK_ID names a real webhook pointing at this shop."""
+    data = _call("GET", "/v1/notifications/webhooks")
+    return [
+        {
+            "id": hook.get("id"),
+            "url": hook.get("url"),
+            "event_types": [
+                str(event.get("name"))
+                for event in hook.get("event_types") or []
+                if isinstance(event, dict) and event.get("name")
+            ],
+        }
+        for hook in data.get("webhooks") or []
+        if isinstance(hook, dict)
+    ]
+
+
 # --------------------------------------------------------------------------
 # Webhooks
 # --------------------------------------------------------------------------
@@ -468,6 +525,14 @@ def verify_webhook(headers, raw_body: bytes) -> dict:
     }
     if not all(envelope.values()):
         raise BadSignature("PayPal's signature headers are missing")
+    # PayPal signs with a certificate served from its own domain. A delivery
+    # naming any other address is not PayPal's, and is turned away here —
+    # before it can cost the shop a call to PayPal for every forged request
+    # somebody cares to send.
+    cert = urllib.parse.urlsplit(envelope["cert_url"])
+    cert_host = (cert.hostname or "").lower()
+    if cert.scheme != "https" or not (cert_host == "paypal.com" or cert_host.endswith(".paypal.com")):
+        raise BadSignature("the signing certificate is not served by PayPal")
     envelope["webhook_id"] = settings.paypal_webhook_id
     request_body = (
         json.dumps(envelope)[:-1].encode() + b', "webhook_event": ' + raw_body.strip() + b"}"

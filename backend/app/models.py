@@ -1099,6 +1099,11 @@ class PaymentTransaction(Base):
     # The money itself, once it moved: Stripe's payment intent, PayPal's
     # capture id. NULL until then (several NULLs never collide).
     provider_payment_id: Mapped[str | None] = mapped_column(String(255))
+    # What the customer actually paid with, in the provider's own word —
+    # "card", "card:apple_pay", "klarna", "sepa_debit", "paypal"… NULL until
+    # the money lands, and when the provider could not be asked. Wording
+    # only: no money decision ever reads it.
+    method_type: Mapped[str | None] = mapped_column(String(40))
     amount: Mapped[float] = mapped_column(Numeric(10, 2))
     currency: Mapped[str] = mapped_column(String(3))
     status: Mapped[str] = mapped_column(String(20), default=TransactionStatus.PENDING.value)

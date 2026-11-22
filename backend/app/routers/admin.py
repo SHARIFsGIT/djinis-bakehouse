@@ -33,6 +33,7 @@ from ..models import (
     OrderItem,
     OrderStatus,
     PaymentStatus,
+    PaymentTransaction,
     Product,
     ProductVatEvent,
     Recipe,
@@ -509,9 +510,31 @@ def export_orders(admin: CurrentAdmin, db: DbSession):
     writer.writerow(
         ["order_number", "date", "customer", "email", "status", "payment_method",
          "payment_status", "coupon_code", "subtotal", "discount", "tax", "shipping", "total",
-         "currency"]
+         "refunded", "payment_provider", "payment_reference", "currency"]
     )
+    # The ledger, read once: which payment holds each order's money, what
+    # of it went back, and the provider's own id for it — the three things
+    # that let this sheet be checked against Stripe's and PayPal's own.
+    ledger_rows: dict[int, list[PaymentTransaction]] = {}
+    for tx in db.scalars(select(PaymentTransaction).order_by(PaymentTransaction.id)):
+        ledger_rows.setdefault(tx.order_id, []).append(tx)
     for order in db.scalars(select(Order).order_by(Order.created_at.desc())):
+        held = ledger.pick_money_transaction(order, ledger_rows.get(order.id, []))
+        if held is not None:
+            refunded = float(held.refunded_amount or 0)
+            provider, reference = held.provider, held.provider_payment_id or ""
+        else:
+            # No ledger row: cash, or a card payment from before the ledger.
+            # The order's own record is all there is, read the way the
+            # ledger itself would adopt it.
+            if order.payment_status == PaymentStatus.REFUNDED.value:
+                refunded = float(order.total)
+            elif order.payment_status == PaymentStatus.PARTIALLY_REFUNDED.value:
+                refunded = max(float(order.total) - float(order.cancel_fee or 0), 0.0)
+            else:
+                refunded = 0.0
+            reference = order.stripe_payment_intent_id or ""
+            provider = "stripe" if reference else ""
         writer.writerow(
             [
                 order.order_number,
@@ -528,6 +551,9 @@ def export_orders(admin: CurrentAdmin, db: DbSession):
                 float(order.tax),
                 float(order.shipping_fee),
                 float(order.total),
+                round(refunded, 2),
+                provider,
+                reference,
                 # Every money column above reads in this code — bookkeeping
                 # must never have to guess which side of a cutover a row is
                 # from. A blank reads "unknown", the same label the stats

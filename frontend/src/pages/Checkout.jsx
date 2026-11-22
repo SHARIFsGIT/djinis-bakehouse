@@ -1,5 +1,5 @@
-import { Banknote, CreditCard, Lock } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Banknote, CreditCard, FlaskConical, Lock, Wallet } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import client, { apiError, checkoutPaused } from "../api/client";
 import EmptyState from "../components/EmptyState";
@@ -29,6 +29,52 @@ function StepHead({ n, title }) {
     </div>
   );
 }
+
+/* The ways to pay, in the order they are offered. A rail appears only
+   when /api/store says the shop can genuinely take it — a provider with no
+   keys behind it is never a dead button. The card rail's own page decides
+   which cards and wallets it shows this customer on this device, so the
+   hint promises no particular one. */
+const PAYMENT_OPTIONS = [
+  {
+    value: "card",
+    Icon: CreditCard,
+    title: "Card & online payment",
+    hint: "On Stripe's secure page — your card, or another method it offers you",
+    summary: "Paid on Stripe's secure page — card details never touch this shop",
+    action: (total) => `Pay ${total}`,
+    lock: "Card details are entered on Stripe's page, never here",
+  },
+  {
+    value: "paypal",
+    Icon: Wallet,
+    title: "PayPal",
+    hint: "Approve the payment in your PayPal account",
+    summary: "You approve the payment on PayPal's own site, then come straight back",
+    // The button that places the order says it costs money, and how much —
+    // "continue" would undersell what pressing it commits the customer to.
+    action: (total) => `Pay ${total} with PayPal`,
+    lock: "You sign in on PayPal's site, never here",
+  },
+  {
+    value: "cash_on_delivery",
+    Icon: Banknote,
+    title: "Cash on delivery",
+    hint: "Pay the courier at your door",
+    summary: "Cash on delivery — pay at the door",
+    action: () => "Place order",
+    lock: "Prices & stock re-checked before baking",
+  },
+];
+
+/* One press of the pay button gets one name. If the request is sent twice —
+   a double tap, a retry after the connection dropped mid-answer — the
+   server recognises the name and hands back the order that press already
+   placed instead of placing (and charging for) a second one. */
+const newPressKey = () =>
+  typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
 
 const EMPTY_ADDRESS = {
   label: "Home",
@@ -71,14 +117,15 @@ export default function Checkout() {
   const [deliveryDate, setDeliveryDate] = useState("");
   const [note, setNote] = useState("");
   const [placing, setPlacing] = useState(false);
-  // Card appears only when the shop has Stripe configured (/api/store says
-  // so) — until then cash on delivery is the one honest option.
-  const [cardAvailable, setCardAvailable] = useState(false);
+  // Which rails are real on this shop (/api/store says so) — until an
+  // online provider is configured, cash on delivery is the one honest option.
+  const [rails, setRails] = useState({ card: false, paypal: false, rehearsing: {} });
   const [method, setMethod] = useState("cash_on_delivery");
-  // Set when a card payment couldn't be STARTED (the provider didn't
-  // answer) — the honest state: nothing charged, basket intact, and two
+  // Set when an online payment couldn't be STARTED (the provider didn't
+  // answer) — the honest state: nothing charged, basket intact, and the
   // ways forward, right where the pay button is.
   const [cardError, setCardError] = useState(null);
+  const pressKey = useRef(newPressKey());
 
   const [couponInput, setCouponInput] = useState("");
   const [coupon, setCoupon] = useState(null); // { code, percent_off, description, min_subtotal }
@@ -157,16 +204,46 @@ export default function Checkout() {
       .catch(() => setVouchers([]));
   }, []);
 
-  // Does this shop take cards? (Stripe configured = yes)
+  // Which ways of paying does this shop really have? Card first when it
+  // exists, then PayPal — cash stays the fallback that always works.
   useEffect(() => {
     client
       .get("/store")
       .then(({ data }) => {
-        setCardAvailable(Boolean(data.card_payments));
-        if (data.card_payments) setMethod("card");
+        const card = Boolean(data.card_payments);
+        const paypal = Boolean(data.paypal_payments);
+        setRails({
+          card,
+          paypal,
+          // Per option: the two providers go live separately, and a live
+          // card page must never wear the sandbox PayPal's notice.
+          rehearsing: {
+            card: Boolean(data.card_test_mode),
+            paypal: Boolean(data.paypal_test_mode),
+          },
+        });
+        if (card) setMethod("card");
+        else if (paypal) setMethod("paypal");
       })
-      .catch(() => setCardAvailable(false));
+      .catch(() => setRails({ card: false, paypal: false, rehearsing: {} }));
   }, []);
+
+  // A different basket, code, address, day or way of paying is a different
+  // purchase — it gets a fresh name. The same purchase sent again keeps its
+  // name, which is what lets the server recognise the repeat.
+  const purchase = JSON.stringify([
+    items.map((i) => [i.product_id, i.quantity]),
+    coupon?.code ?? "",
+    method,
+    mode,
+    addressId,
+    mode === "new" ? newAddress : null,
+    deliveryDate,
+    note,
+  ]);
+  useEffect(() => {
+    pressKey.current = newPressKey();
+  }, [purchase]);
 
   if (addresses === null) return <Loading label="Fetching your address book…" />;
 
@@ -188,6 +265,12 @@ export default function Checkout() {
   const submittable = canSubmitWith(quoteState);
 
   const setField = (key, value) => setNewAddress((a) => ({ ...a, [key]: value }));
+
+  // Only the rails this shop can genuinely take (cash always can).
+  const offered = PAYMENT_OPTIONS.filter(
+    (option) => option.value === "cash_on_delivery" || rails[option.value],
+  );
+  const chosen = offered.find((option) => option.value === method) ?? offered.at(-1);
 
   const applyCoupon = async (codeArg) => {
     const code = (codeArg ?? couponInput).trim();
@@ -215,12 +298,15 @@ export default function Checkout() {
       if (note.trim()) payload.note = note.trim();
       if (coupon) payload.coupon_code = coupon.code;
 
-      const { data: order } = await client.post("/orders", payload);
+      const { data: order } = await client.post("/orders", payload, {
+        headers: { "Idempotency-Key": pressKey.current },
+      });
       clear();
       storeCoupon(""); // the code was spent with the order
       if (order.payment_url) {
-        // Card orders finish on Stripe's hosted page — card details never
-        // touch this site. Back here afterwards, the order page confirms.
+        // Online orders finish on the provider's own page (Stripe's or
+        // PayPal's) — payment details never touch this site. Back here
+        // afterwards, the order page confirms with the provider itself.
         window.location.assign(order.payment_url);
         return;
       }
@@ -228,11 +314,15 @@ export default function Checkout() {
       navigate(`/account/orders/${order.id}?placed=1`, { replace: true });
     } catch (err) {
       toast.error(apiError(err, "Couldn't place the order"));
-      if (method === "card") {
+      // The server answered, and the answer was no: that press is over, so
+      // trying again is a new one. (No answer at all keeps the name — the
+      // order may exist, and the retry must find it rather than repeat it.)
+      if (err?.response) pressKey.current = newPressKey();
+      if (method !== "cash_on_delivery") {
         // Nothing was charged and the order was rolled back server-side —
-        // say that plainly at the button, with the two ways forward.
+        // say that plainly at the button, with the ways forward.
         setCardError(
-          apiError(err, "The card payment couldn't be started — nothing was charged."),
+          apiError(err, "The payment couldn't be started — nothing was charged."),
         );
       }
       if (err?.response?.status === 400) navigate("/cart");
@@ -363,13 +453,14 @@ export default function Checkout() {
               <p className="mt-1.5 text-xs opacity-60">Leave blank for the next delivery run.</p>
             </div>
 
-            <div className="mt-5">
-              <p className="label mb-1.5 text-xs font-semibold">Payment</p>
+            <fieldset className="mt-5">
+              <legend className="label mb-1.5 text-xs font-semibold">How would you like to pay?</legend>
               <div className="grid gap-2 sm:grid-cols-2">
-                {cardAvailable && (
+                {offered.map(({ value, Icon, title, hint }) => (
                   <label
-                    className={`flex cursor-pointer items-center gap-3 rounded-xl border-2 p-3.5 transition ${
-                      method === "card"
+                    key={value}
+                    className={`flex cursor-pointer items-center gap-3 rounded-xl border-2 p-3.5 transition focus-within:ring-2 focus-within:ring-secondary/40 ${
+                      method === value
                         ? "border-secondary bg-secondary/10"
                         : "border-base-300 hover:border-base-content/30"
                     }`}
@@ -378,38 +469,43 @@ export default function Checkout() {
                       type="radio"
                       name="payment"
                       className="radio radio-secondary radio-sm"
-                      checked={method === "card"}
-                      onChange={() => setMethod("card")}
+                      checked={method === value}
+                      onChange={() => {
+                        setMethod(value);
+                        setCardError(null);
+                      }}
                     />
-                    <CreditCard size={20} className="shrink-0 text-secondary" />
+                    <Icon size={20} className="shrink-0 text-secondary" aria-hidden="true" />
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold">Card</p>
-                      <p className="text-xs opacity-60">Secure payment on Stripe's page</p>
+                      <p className="text-sm font-semibold">{title}</p>
+                      <p className="text-xs opacity-60">{hint}</p>
                     </div>
                   </label>
-                )}
-                <label
-                  className={`flex cursor-pointer items-center gap-3 rounded-xl border-2 p-3.5 transition ${
-                    method === "cash_on_delivery"
-                      ? "border-secondary bg-secondary/10"
-                      : "border-base-300 hover:border-base-content/30"
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="payment"
-                    className="radio radio-secondary radio-sm"
-                    checked={method === "cash_on_delivery"}
-                    onChange={() => setMethod("cash_on_delivery")}
-                  />
-                  <Banknote size={20} className="shrink-0 text-secondary" />
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold">Cash on delivery</p>
-                    <p className="text-xs opacity-60">Pay the courier at your door</p>
-                  </div>
-                </label>
+                ))}
               </div>
-            </div>
+              {/* A rehearsal says so, on the option it is true of: on test
+                  keys a real card is declined, and nobody should be left
+                  wondering why. */}
+              {rails.rehearsing[method] && (
+                <p className="mt-2 flex items-start gap-2 rounded-lg bg-warning/15 px-3 py-2 text-xs" role="note">
+                  <FlaskConical size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+                  <span>
+                    {method === "paypal" ? (
+                      <>
+                        PayPal is in <strong>test mode</strong> on this shop right now — no real
+                        money is taken, and only PayPal sandbox accounts can pay.
+                      </>
+                    ) : (
+                      <>
+                        Card payments are in <strong>test mode</strong> on this shop right now — no
+                        real money is taken and real cards are declined.
+                      </>
+                    )}{" "}
+                    Cash on delivery works as usual.
+                  </span>
+                </p>
+              )}
+            </fieldset>
 
             <div className="mt-5">
               <label className="label mb-1.5 text-xs font-semibold" htmlFor="order-note">
@@ -531,11 +627,7 @@ export default function Checkout() {
               </div>
               <div className="mt-3 space-y-1 text-xs opacity-70">
                 {deliveryDate && <p>Delivery on {formatDate(deliveryDate)}</p>}
-                <p>
-                  {method === "card"
-                    ? "Paid by card on Stripe's secure page"
-                    : "Cash on delivery — pay at the door"}
-                </p>
+                <p>{chosen.summary}</p>
               </div>
             </div>
           ) : quoteState.status === "error" ? (
@@ -558,10 +650,10 @@ export default function Checkout() {
           )}
           {/* A card payment that couldn't start — honest words and two ways
               forward, not a dead end. */}
-          {cardError && method === "card" && (
+          {cardError && method !== "cash_on_delivery" && (
             <div className="alert alert-warning mt-5 text-sm" role="alert">
               <span>
-                <p className="font-semibold">The card payment didn&rsquo;t start</p>
+                <p className="font-semibold">The payment didn&rsquo;t start</p>
                 <p className="opacity-80">
                   {cardError} Your basket is exactly as you left it — try
                   again, or pay cash at the door.
@@ -572,7 +664,7 @@ export default function Checkout() {
                     className="btn btn-secondary btn-xs text-secondary-content"
                     onClick={() => setCardError(null)}
                   >
-                    Try the card again
+                    Try again
                   </button>
                   <button
                     type="button"
@@ -590,18 +682,14 @@ export default function Checkout() {
           )}
           <button type="submit" className="btn btn-secondary btn-lg mt-6 w-full text-secondary-content" disabled={placing || !submittable}>
             {placing || !submittable ? (
-              <span className="loading loading-spinner loading-sm" />
-            ) : method === "card" ? (
-              `Pay ${money(quote.total)}`
+              <span className="loading loading-spinner loading-sm" aria-label="Working" />
             ) : (
-              "Place order"
+              chosen.action(money(quote.total))
             )}
           </button>
           <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-xs opacity-60">
-            <Lock size={16} className="shrink-0" />
-            {method === "card"
-              ? "Card details are entered on Stripe's page, never here"
-              : "Prices & stock re-checked before baking"}
+            <Lock size={16} className="shrink-0" aria-hidden="true" />
+            {chosen.lock}
           </p>
         </aside>
       </form>

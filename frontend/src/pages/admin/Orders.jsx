@@ -13,6 +13,8 @@ import {
   ORDER_STATUSES,
   PAYMENT_METHODS,
   PAYMENT_STATUSES,
+  paysOnline,
+  providerLabel,
   statusBadge,
   statusLabel,
 } from "../../lib/format";
@@ -20,6 +22,7 @@ import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import { LoadError, Loading } from "../../components/Loading";
 import { useEscape, useFocusHandoff, useScrollLock } from "../../components/Drawer";
+import { PaymentsPanel, providerHoldsMoney, ReconciliationReport } from "./OrderPayments";
 
 /** The frame both rails open their drawer in — a dialog to assistive tech,
     closed by Escape or a click on the scrim, with the keyboard handed over
@@ -62,6 +65,18 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
   // A payment relabel waiting for a yes: "paid" | "refunded" | null.
   const [confirmingPayment, setConfirmingPayment] = useState(null);
   const [paymentBusy, setPaymentBusy] = useState(false);
+  // The provider's side of an online order — its pay pages, what is held,
+  // what went back. null while it loads (and for cash, which has none).
+  const [payments, setPayments] = useState(null);
+  const [paymentsFailed, setPaymentsFailed] = useState(null);
+
+  const loadPayments = () => {
+    setPaymentsFailed(null);
+    client
+      .get(`/admin/orders/${orderId}/payments`)
+      .then(({ data }) => setPayments(data))
+      .catch((e) => setPaymentsFailed(apiError(e, "The payment ledger didn't load.")));
+  };
 
   const open = () => {
     setFailed(null);
@@ -70,8 +85,18 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
       .then(({ data }) => {
         setOrder(data);
         setStatus(data.status);
+        if (data.payment_provider) loadPayments();
       })
       .catch((e) => setFailed(apiError(e, "That order didn't open.")));
+  };
+
+  // A refund or a provider check changed the money: take the fresh ledger
+  // the action handed back (or re-read it), then the order and the rail —
+  // the badge, the timeline and the list all follow the provider's word.
+  const paymentsUpdated = (fresh) => {
+    if (fresh) setPayments(fresh);
+    open();
+    onChanged();
   };
 
   useEffect(() => {
@@ -103,7 +128,14 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
       label: statusLabel(order.payment_status),
       badge: "badge-ghost",
     };
-  const isCard = order.payment_method === "card";
+  const online = paysOnline(order.payment_method);
+  const provider = providerLabel(order.payment_provider);
+  // Once a provider has taken money for the order, its payment status is
+  // the provider's to set — the hand labels below step aside (the server
+  // refuses them anyway). Until the ledger has loaded, assume it has.
+  const providerHolds = online && (payments ? providerHoldsMoney(payments) : !paymentsFailed);
+  // What a cancellation sends back: everything the provider still holds.
+  const heldAmount = payments ? payments.refundable_amount : order.total;
 
   const sendStatus = async () => {
     setBusy(true);
@@ -117,6 +149,8 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
       setStatus(data.status);
       setComment("");
       onChanged();
+      // A cancellation refunds what the provider holds — show it at once.
+      if (data.payment_provider) loadPayments();
       toast.success(
         `Order moved to “${statusLabel(data.status)}”${notify ? " — customer emailed" : ""}`
       );
@@ -153,29 +187,31 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
     }
   };
 
-  // These buttons only relabel the book — they never reach Stripe. On a
-  // cash order that is the whole job; on a card order the label and the
-  // money can part company, so it asks first and says so.
+  // These buttons only relabel the book — they never reach a provider. On
+  // a cash order that is the whole job. On an online order they exist only
+  // while no provider payment is on record (then the label and the money
+  // can part company, so it asks first and says so); once Stripe or PayPal
+  // holds the money, the Refund button in the payment panel is the way.
   const setPayment = (payment_status) => {
-    if (isCard) setConfirmingPayment(payment_status);
+    if (online) setConfirmingPayment(payment_status);
     else sendPayment(payment_status);
   };
 
   const PAYMENT_RELABEL = {
     paid: {
-      title: "Mark this card order paid by hand?",
+      title: "Mark this online order paid by hand?",
       confirm: "Mark paid",
-      body: "Card orders mark themselves paid the moment Stripe confirms the payment. Doing it by hand only changes the label here — use it only if the money really arrived another way.",
+      body: `Online orders mark themselves paid the moment ${provider} confirms the payment — “Check with ${provider}” in the payment panel asks it directly. Marking it by hand only changes the label here: use it only if the money really arrived another way.`,
     },
     refunded: {
-      title: "Mark this card payment refunded?",
+      title: "Mark this order refunded by hand?",
       confirm: "Mark refunded",
-      body: "This only changes the label in the book — no money goes back to the card. To send the money back, cancel the order (the refund goes out automatically) or refund it in the Stripe dashboard.",
+      body: `This only changes the label in the book — nothing is sent back through ${provider}.`,
     },
     pending: {
-      title: "Reset this card payment to pending?",
+      title: "Reset this payment to pending?",
       confirm: "Reset to pending",
-      body: "This only changes the label — any card payment already taken stays taken.",
+      body: "This only changes the label — it does not move any money.",
     },
   };
 
@@ -233,6 +269,19 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
             </div>
           </div>
         </section>
+
+        {/* The provider's side of the money — online orders only */}
+        {online && (
+          <section>
+            <PaymentsPanel
+              order={order}
+              payments={payments}
+              failed={paymentsFailed}
+              onRetry={loadPayments}
+              onUpdated={paymentsUpdated}
+            />
+          </section>
+        )}
 
         {/* Address + note */}
         <section className="rounded-box bg-base-200/60 p-4 text-sm">
@@ -312,25 +361,32 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
             </span>
           </label>
         </form>
-        {/* Labels only — these never move money (see setPayment). */}
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="opacity-60">Payment label:</span>
-          {order.payment_status !== "paid" && (
-            <button type="button" className="btn btn-success btn-xs" onClick={() => setPayment("paid")} disabled={paymentBusy}>
-              Mark paid
-            </button>
-          )}
-          {order.payment_status === "paid" && (
-            <button type="button" className="btn btn-warning btn-xs" onClick={() => setPayment("refunded")} disabled={paymentBusy}>
-              Mark refunded
-            </button>
-          )}
-          {order.payment_status !== "pending" && (
-            <button type="button" className="btn btn-ghost btn-xs" onClick={() => setPayment("pending")} disabled={paymentBusy}>
-              Reset to pending
-            </button>
-          )}
-        </div>
+        {providerHolds ? (
+          <p className="text-xs opacity-70">
+            Payment status follows {provider} — to send money back, use <strong>Refund</strong> in
+            the payment panel above.
+          </p>
+        ) : (
+          /* Labels only — these never move money (see setPayment). */
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="opacity-60">Payment label:</span>
+            {order.payment_status !== "paid" && (
+              <button type="button" className="btn btn-success btn-xs" onClick={() => setPayment("paid")} disabled={paymentBusy}>
+                Mark paid
+              </button>
+            )}
+            {order.payment_status === "paid" && (
+              <button type="button" className="btn btn-warning btn-xs" onClick={() => setPayment("refunded")} disabled={paymentBusy}>
+                Mark refunded
+              </button>
+            )}
+            {order.payment_status !== "pending" && (
+              <button type="button" className="btn btn-ghost btn-xs" onClick={() => setPayment("pending")} disabled={paymentBusy}>
+                Reset to pending
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {confirmingCancel && (
@@ -344,10 +400,11 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
         >
           <p>
             The reserved bakes go back on the shelf
-            {order.payment_status === "paid" &&
-              (isCard
-                ? ` and ${money(order.total, order.currency)} is refunded to the card`
-                : " and the payment is marked refunded — hand the cash back yourself")}
+            {providerHolds && heldAmount > 0
+              ? ` and ${money(heldAmount, order.currency)} is refunded through ${provider}`
+              : !online && order.payment_status === "paid"
+                ? " and the payment is marked refunded — hand the cash back yourself"
+                : ""}
             {notify ? ", and the customer is emailed" : ""}.
           </p>
           <p className="mt-2 font-semibold">A cancelled order can&rsquo;t be reopened.</p>
@@ -732,6 +789,9 @@ function OrdersTab() {
                       <span className={`badge badge-sm ${PAYMENT_STATUSES[o.payment_status]?.badge ?? "badge-ghost"} whitespace-nowrap`}>
                         {PAYMENT_STATUSES[o.payment_status]?.label ?? statusLabel(o.payment_status)}
                       </span>
+                      <span className="mt-0.5 block whitespace-nowrap opacity-60">
+                        {PAYMENT_METHODS[o.payment_method] ?? o.payment_method}
+                      </span>
                     </td>
                     <td className="text-right font-bold whitespace-nowrap">{money(o.total, o.currency)}</td>
                     {/* The delivery day the customer picked at checkout —
@@ -966,45 +1026,69 @@ function BulkTab() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Tab 3 — the payment check                                           */
+/* ------------------------------------------------------------------ */
+
+function PaymentsTab() {
+  const [selectedId, setSelectedId] = useState(null);
+  // Bumped whenever the desk acts on an order from here, so the report
+  // re-reads the ledger and a settled line leaves the list.
+  const [version, setVersion] = useState(0);
+
+  return (
+    <div>
+      <ReconciliationReport onOpenOrder={setSelectedId} version={version} />
+      {selectedId !== null && (
+        <DrawerFrame label="Order details" onClose={() => setSelectedId(null)}>
+          <OrderDrawer
+            orderId={selectedId}
+            onClose={() => setSelectedId(null)}
+            onChanged={() => setVersion((v) => v + 1)}
+          />
+        </DrawerFrame>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+const TABS = [
+  { value: "orders", label: "Orders" },
+  { value: "bulk", label: "Bulk enquiries" },
+  { value: "payments", label: "Payment check" },
+];
 
 export default function AdminOrders() {
   const [params, setParams] = useSearchParams();
 
-  const tab = params.get("tab") === "bulk" ? "bulk" : "orders";
+  const asked = params.get("tab");
+  const tab = TABS.some((t) => t.value === asked) ? asked : "orders";
 
   const switchTab = (value) => {
     // A fresh sheet per tab — no stale filters carried across
     const next = new URLSearchParams();
-    if (value === "bulk") next.set("tab", "bulk");
+    if (value !== "orders") next.set("tab", value);
     setParams(next);
   };
 
   return (
     <div>
       <div role="tablist" aria-label="Order desks" className="tabs tabs-boxed mb-5 inline-flex">
-        <button
-          role="tab"
-          aria-selected={tab === "orders"}
-          className={`tab ${tab === "orders" ? "tab-active" : ""}`}
-          onClick={() => switchTab("orders")}
-        >
-          Orders
-        </button>
-        <button
-          role="tab"
-          aria-selected={tab === "bulk"}
-          className={`tab ${tab === "bulk" ? "tab-active" : ""}`}
-          onClick={() => switchTab("bulk")}
-        >
-          Bulk enquiries
-        </button>
+        {TABS.map((t) => (
+          <button
+            key={t.value}
+            role="tab"
+            aria-selected={tab === t.value}
+            className={`tab ${tab === t.value ? "tab-active" : ""}`}
+            onClick={() => switchTab(t.value)}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
-      {tab === "orders" ? (
-        <OrdersTab />
-      ) : (
-        <BulkTab />
-      )}
+      {tab === "orders" ? <OrdersTab /> : tab === "bulk" ? <BulkTab /> : <PaymentsTab />}
     </div>
   );
 }

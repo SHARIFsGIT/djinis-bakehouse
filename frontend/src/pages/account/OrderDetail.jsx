@@ -18,6 +18,8 @@ import {
   ORDER_STATUSES,
   PAYMENT_METHODS,
   PAYMENT_STATUSES,
+  paysOnline,
+  providerLabel,
   statusBadge,
   statusLabel,
   statusStep,
@@ -51,20 +53,26 @@ export default function OrderDetail() {
   const [reordering, setReordering] = useState(false);
   const [paying, setPaying] = useState(false);
   const [checking, setChecking] = useState(false);
+  // Whether the provider has been asked at least once since this page
+  // opened — before that, "we haven't received it" would be a guess.
+  const [asked, setAsked] = useState(false);
 
-  // Reconcile with the gateway on demand — the button's word is true: it
-  // asks Stripe directly, so a webhook still in flight can't hold the
-  // answer hostage. Idempotent and row-locked server-side.
+  // Reconcile with the provider on demand — the button's word is true: it
+  // asks Stripe or PayPal directly, so a webhook still in flight can't hold
+  // the answer hostage. For PayPal this is also the moment the payment the
+  // customer approved is actually taken. Idempotent and row-locked
+  // server-side, so asking twice never charges twice.
   const checkPayment = useCallback(async () => {
     setChecking(true);
     try {
       const { data } = await client.post(`/payments/confirm/${id}`);
       setOrder(data);
     } catch {
-      // The gateway didn't answer — the honest "still landing" line stays,
-      // and the button stays for another go.
+      // The provider didn't answer — the honest "not received yet" line
+      // stays, and the button stays for another go.
     } finally {
       setChecking(false);
+      setAsked(true);
     }
   }, [id]);
 
@@ -74,18 +82,21 @@ export default function OrderDetail() {
       .get(`/orders/${id}`)
       .then(({ data }) => {
         setOrder(data);
-        // Back from Stripe with the payment in flight — reconcile with the
-        // gateway now so the page tells the truth without waiting on the
-        // webhook.
+        // Back from the provider's page with the payment in flight —
+        // reconcile with the provider now so the page tells the truth
+        // without waiting on the webhook. Coming back is not proof of
+        // anything; the provider's answer is. (A cancelled order is asked
+        // about too: money that landed on a pay page which outlived its
+        // order is sent straight back, and this is what notices it.)
         if (
           params.get("placed") === "1" &&
-          data.payment_method === "card" &&
+          paysOnline(data.payment_method) &&
           data.payment_status === "pending"
         ) {
           checkPayment();
-          // Stripe's own bookkeeping can land a beat after the redirect —
-          // one quiet retry catches it without the customer lifting a
-          // finger.
+          // The provider's own bookkeeping can land a beat after the
+          // redirect — one quiet retry catches it without the customer
+          // lifting a finger.
           retryTimer = setTimeout(checkPayment, 4000);
         }
       })
@@ -105,6 +116,15 @@ export default function OrderDetail() {
 
   const step = statusStep(order.status);
   const cancelled = order.status === "cancelled";
+  const online = paysOnline(order.payment_method);
+  const provider = providerLabel(order.payment_provider);
+  const unpaid = order.payment_status === "pending";
+  // The customer has done their part and the provider is still settling
+  // (a bank debit on its way, a payment PayPal is reviewing): nothing to
+  // pay again, nothing to do but wait for the receipt.
+  const settling = unpaid && order.payment_state === "processing";
+  const leftPayPage =
+    params.get("stripe") === "cancelled" || params.get("paypal") === "cancelled";
   const payment = PAYMENT_STATUSES[order.payment_status] ?? {
     label: order.payment_status,
     badge: "badge-ghost",
@@ -128,8 +148,9 @@ export default function OrderDetail() {
     }
   };
 
-  // A card order that was placed but never paid gets a fresh Stripe link —
-  // the customer shouldn't have to rebuild the basket from scratch.
+  // An online order that was placed but never paid gets its pay page back
+  // (a fresh Stripe link, or the PayPal page it already has) — the customer
+  // shouldn't have to rebuild the basket from scratch.
   const completePayment = async () => {
     if (paying) return;
     setPaying(true);
@@ -139,10 +160,17 @@ export default function OrderDetail() {
         window.location.assign(data.payment_url);
         return;
       }
-      // No link came back: the payment had already landed on the earlier
-      // one. Nothing left to pay — show the order as it now stands.
+      // No link came back: there is nothing (more) to pay — the payment
+      // landed on the earlier page, or the provider is still settling one
+      // already made. Show the order as it now stands, and say which.
       setOrder(data);
-      toast.success("This order is already paid — nothing more to do");
+      if (data.payment_status === "paid") {
+        toast.success("This order is already paid — nothing more to do");
+      } else if (data.payment_state === "processing") {
+        toast.info("Your payment is still being confirmed — nothing more to do");
+      } else {
+        toast.info("There is no payment to complete on this order right now");
+      }
       setPaying(false);
     } catch (err) {
       toast.error(apiError(err, "Couldn't open the payment page — try again"));
@@ -194,16 +222,46 @@ export default function OrderDetail() {
 
   return (
     <div>
-      {params.get("placed") === "1" && (
-        <div className={`alert animate-pop mb-6 shadow-md ${order.payment_status === "paid" ? "alert-success" : "alert-info"}`}>
+      {params.get("placed") === "1" && !cancelled && (
+        <div
+          className={`alert animate-pop mb-6 shadow-md ${
+            order.payment_status === "paid" || !online ? "alert-success" : "alert-info"
+          }`}
+          role="status"
+        >
           <div>
-            <p className="font-bold">Order confirmed</p>
-            {order.payment_method === "card" ? (
+            {/* "Confirmed" is a word for an order the shop can start on:
+                paid, or cash at the door. Until an online payment lands,
+                the order is placed — and says what it is waiting for. */}
+            <p className="font-bold">
+              {!online || order.payment_status === "paid"
+                ? "Order confirmed"
+                : settling
+                  ? "Order placed — payment being confirmed"
+                  : "Order placed — waiting for your payment"}
+            </p>
+            {online ? (
               order.payment_status === "paid" ? (
                 <p className="text-sm">Paid — your receipt was emailed to you.</p>
+              ) : order.payment_status !== "pending" ? (
+                <p className="text-sm">{payment.label}.</p>
+              ) : settling ? (
+                <p className="text-sm">
+                  {provider} is still confirming your payment — with some ways
+                  of paying that takes a while. There is nothing more to do:
+                  your receipt is emailed the moment it clears.
+                </p>
               ) : (
                 <div className="text-sm">
-                  <p>Payment is still landing — it usually takes a moment.</p>
+                  {asked ? (
+                    <p>
+                      {provider} hasn&rsquo;t confirmed a payment for this order
+                      yet. If you just paid, give it a moment and check again —
+                      otherwise you can complete the payment below.
+                    </p>
+                  ) : (
+                    <p>Checking with {provider} that your payment arrived…</p>
+                  )}
                   <button
                     type="button"
                     className="btn btn-outline btn-xs mt-2"
@@ -217,9 +275,11 @@ export default function OrderDetail() {
             ) : (
               <p className="text-sm">Pay the courier at the door — cash only, please.</p>
             )}
+            {/* The banner's own ink, underlined — the brand burgundy sinks
+                into the darker of the two banner colours. */}
             <Link
               to={`/account/orders/${order.id}/receipt`}
-              className="link link-secondary mt-1 inline-block text-sm font-semibold"
+              className="link mt-1 inline-block text-sm font-semibold"
             >
               View receipt
             </Link>
@@ -227,13 +287,13 @@ export default function OrderDetail() {
         </div>
       )}
 
-      {params.get("stripe") === "cancelled" && order.payment_status !== "paid" && (
-        <div className="alert alert-warning mb-6">
+      {leftPayPage && unpaid && !settling && !cancelled && (
+        <div className="alert alert-warning mb-6" role="status">
           <div>
             <p className="font-bold">You left the payment page before paying</p>
             <p className="text-sm">
-              The order is saved — complete the payment below, or it cancels
-              itself and the stock goes back to the case.
+              Nothing was charged. The order is saved — complete the payment
+              below, or it cancels itself and the stock goes back to the case.
             </p>
           </div>
         </div>
@@ -278,7 +338,13 @@ export default function OrderDetail() {
             This order was cancelled.{" "}
             {order.payment_status === "refunded" && "Your payment was refunded in full."}
             {order.payment_status === "partially_refunded" &&
-              `Your payment was refunded less the ${money(order.cancel_fee, order.currency)} late-cancellation fee — the ovens had already started.`}
+              (order.cancel_fee > 0
+                ? `Your payment was refunded less the ${money(order.cancel_fee, order.currency)} late-cancellation fee — the ovens had already started.`
+                : `${money(order.refunded_amount, order.currency)} of your payment was refunded.`)}
+            {/* Cancelled while the provider still holds the money: the
+                refund has not been confirmed, so it isn't claimed. */}
+            {online && order.payment_status === "paid" &&
+              "Your refund hasn't been confirmed yet — if it doesn't reach you within a few days, please contact the bakery."}
           </span>
         </div>
       )}
@@ -373,6 +439,12 @@ export default function OrderDetail() {
                   <span>{money(order.cancel_fee, order.currency)}</span>
                 </div>
               )}
+              {order.refunded_amount > 0 && (
+                <div className="flex justify-between pt-1">
+                  <span className="opacity-70">Refunded to you</span>
+                  <span>{money(order.refunded_amount, order.currency)}</span>
+                </div>
+              )}
             </div>
             {/* "Paid via" only once it is — an unpaid order names its method
                 without claiming the money arrived. */}
@@ -401,25 +473,48 @@ export default function OrderDetail() {
             )}
           </section>
 
-          {order.payment_method === "card" &&
-            order.payment_status === "pending" &&
-            order.status !== "cancelled" && (
-              <section className="rounded-box border border-dashed border-secondary/50 bg-secondary/5 p-5">
-                <p className="text-sm font-semibold">Payment not completed</p>
-                <p className="mt-1 text-xs opacity-70">
-                  This order is saved but not paid yet. If it stays unpaid, it
-                  cancels itself automatically and the stock goes back.
-                </p>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-sm mt-3 w-full text-secondary-content"
-                  onClick={completePayment}
-                  disabled={paying}
-                >
-                  {paying ? "Opening Stripe…" : "Complete payment"}
-                </button>
-              </section>
-            )}
+          {online && unpaid && !cancelled && settling && (
+            <section className="rounded-box border border-dashed border-info/50 bg-info/5 p-5">
+              <p className="text-sm font-semibold">Payment being confirmed</p>
+              <p className="mt-1 text-xs opacity-70">
+                You&rsquo;ve done your part — {provider} is still settling this
+                payment. Your receipt is emailed the moment it clears, and
+                there is nothing to pay again.
+              </p>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm mt-3 w-full"
+                onClick={checkPayment}
+                disabled={checking}
+              >
+                {checking ? "Checking…" : "Check again"}
+              </button>
+            </section>
+          )}
+
+          {online && unpaid && !cancelled && !settling && (
+            <section className="rounded-box border border-dashed border-secondary/50 bg-secondary/5 p-5">
+              <p className="text-sm font-semibold">Payment not completed</p>
+              <p className="mt-1 text-xs opacity-70">
+                This order is saved but not paid yet. If it stays unpaid, it
+                cancels itself automatically and the stock goes back.
+              </p>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm mt-3 w-full text-secondary-content"
+                onClick={completePayment}
+                disabled={paying}
+              >
+                {paying
+                  ? order.payment_method === "paypal"
+                    ? "Opening PayPal…"
+                    : "Opening the payment page…"
+                  : order.payment_method === "paypal"
+                    ? "Complete payment with PayPal"
+                    : "Complete payment"}
+              </button>
+            </section>
+          )}
 
           {order.can_be_cancelled && (
             <section className="rounded-box border border-dashed border-base-300 p-5">
@@ -432,8 +527,14 @@ export default function OrderDetail() {
                           order.payment_status === "paid" ? " and your refund is reduced by it" : ""
                         }.`
                       : `Stock goes back in the case${
-                          order.payment_status === "paid" ? " and your payment is refunded" : ""
+                          order.payment_status === "paid"
+                            ? " and your payment is refunded"
+                            : order.payment_status === "partially_refunded"
+                              ? " and the rest of your payment is refunded"
+                              : ""
                         }.`}
+                    {settling &&
+                      " The payment still being confirmed is sent back to you as soon as it lands."}
                   </p>
                   <div className="flex gap-2">
                     <button type="button" className="btn btn-error btn-sm" onClick={cancelOrder} disabled={cancelling}>

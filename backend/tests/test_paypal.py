@@ -24,7 +24,7 @@ from test_api import admin_headers, auth_header, checkout_payload, client
 
 from app import paypal_gateway
 from app.config import get_settings
-from app.database import SessionLocal
+from app.database import SessionLocal, utcnow
 from app.models import Order, PaymentEvent
 from app.routers.payments import reconcile_stale_card_orders
 
@@ -201,6 +201,21 @@ def test_the_paypal_option_exists_only_while_its_credentials_do(monkeypatch):
     store = client.get("/api/store").json()
     assert store["paypal_payments"] is True
     assert store["payments_test_mode"] is True  # sandbox PayPal, test-key Stripe: a rehearsal
+    assert (store["card_test_mode"], store["paypal_test_mode"]) == (True, True)
+
+    # the two providers go live separately — each option says only what is true of it
+    test_key = get_settings().stripe_secret_key
+    monkeypatch.setattr(get_settings(), "paypal_environment", "live")
+    live_paypal = client.get("/api/store").json()
+    assert (live_paypal["card_test_mode"], live_paypal["paypal_test_mode"]) == (True, False)
+    monkeypatch.setattr(get_settings(), "stripe_secret_key", "sk_live_notarealkey")
+    all_live = client.get("/api/store").json()
+    assert (all_live["card_test_mode"], all_live["paypal_test_mode"]) == (False, False)
+    assert all_live["payments_test_mode"] is False
+    monkeypatch.setattr(get_settings(), "paypal_environment", "sandbox")
+    mixed = client.get("/api/store").json()
+    assert (mixed["card_test_mode"], mixed["paypal_test_mode"]) == (False, True)
+    monkeypatch.setattr(get_settings(), "stripe_secret_key", test_key)
 
     monkeypatch.setattr(get_settings(), "paypal_client_secret", "")
     assert client.get("/api/store").json()["paypal_payments"] is False
@@ -245,6 +260,7 @@ def test_a_paypal_order_is_placed_unpaid_and_captured_when_the_customer_returns(
     assert paid["timeline"][-1]["comment"] == "Payment received — paid with PayPal"
     (tx,) = _payments(order["id"])["transactions"]
     assert tx["status"] == "succeeded" and tx["provider_payment_id"] == f"CAP-{paypal_id}"
+    assert tx["method_label"] == "PayPal" and paid["payment_label"] == "PayPal"
     logged = "\n".join(r.getMessage() for r in caplog.records)
     assert f"Receipt {order['order_number']}" in logged
     assert "Paid by PayPal — this email is your proof of purchase" in logged
@@ -527,7 +543,8 @@ def test_a_refund_paypal_refuses_keeps_the_book_honest(monkeypatch):
     # and on cancellation the timeline says where to finish the job
     cancelled = client.post(f"/api/orders/{order['id']}/cancel", headers=headers).json()
     assert cancelled["payment_status"] == "paid"
-    assert "retry it from the PayPal dashboard" in cancelled["timeline"][-1]["comment"]
+    note = cancelled["timeline"][-1]["comment"]
+    assert "refund could not be sent" in note and "PayPal dashboard" in note
 
 
 def test_a_paypal_dispute_is_flagged_and_a_lost_one_is_booked():
@@ -560,7 +577,7 @@ def test_a_paypal_dispute_is_flagged_and_a_lost_one_is_booked():
 def _age(order_ids: list[int], minutes: int = 120) -> None:
     db = SessionLocal()
     try:
-        stale = datetime.datetime.utcnow() - datetime.timedelta(minutes=minutes)
+        stale = utcnow() - datetime.timedelta(minutes=minutes)
         db.query(Order).filter(Order.id.in_(order_ids)).update({"created_at": stale}, synchronize_session=False)
         db.commit()
     finally:
@@ -608,3 +625,220 @@ def test_paypal_being_unreachable_never_cancels_an_order(monkeypatch):
 
     assert _detail(order["id"], headers)["status"] == "pending"  # left for the next round
     assert _confirm(order["id"], headers).status_code == 503
+
+
+# --------------------------------------------------------------------------
+# When PayPal says no, or no longer knows the order
+# --------------------------------------------------------------------------
+
+def test_a_capture_paypal_flatly_refuses_closes_the_page_and_a_fresh_one_can_be_opened(monkeypatch):
+    headers = _customer("refused")
+    order = _place(headers)
+    refused_id = _approve(order["id"])
+    real_capture = paypal_gateway.capture_order
+
+    def refuse(paypal_id):
+        paypal_calls.append(("capture_order", paypal_id))
+        raise paypal_gateway.PayPalRefused(422, "UNPROCESSABLE_ENTITY", "TRANSACTION_REFUSED", "no")
+
+    monkeypatch.setattr(paypal_gateway, "capture_order", refuse)
+    back = _confirm(order["id"], headers)
+
+    assert back.status_code == 200  # an answer, not "the provider didn't answer"
+    assert (back.json()["payment_status"], back.json()["payment_state"]) == ("pending", "failed")
+    (tx,) = _payments(order["id"])["transactions"]
+    assert tx["status"] == "failed" and "TRANSACTION_REFUSED" in tx["failure_reason"]
+
+    # the customer tries again: a new PayPal order, never the refused one
+    monkeypatch.setattr(paypal_gateway, "capture_order", real_capture)
+    fresh = client.post(f"/api/payments/{order['id']}/session", headers=headers)
+    assert fresh.status_code == 201
+    new_id = _paypal_id(order["id"])
+    assert new_id != refused_id and fresh.json()["payment_url"] == paypal_orders[new_id]["url"]
+    _approve(order["id"])
+    assert _confirm(order["id"], headers).json()["payment_status"] == "paid"
+    assert _captures(new_id) == 1
+
+
+def test_a_refusal_never_buries_a_capture_that_went_through(monkeypatch):
+    """PayPal answers the capture with an error, yet holds the money (a
+    retry crossing a first attempt that had landed). The order's own state
+    at PayPal is what gets believed."""
+    headers = _customer("refused-but-captured")
+    order = _place(headers)
+    paypal_id = _approve(order["id"])
+
+    def captured_then_refused(paypal_id_):
+        paypal_calls.append(("capture_order", paypal_id_))
+        target = paypal_orders[paypal_id_]
+        target.update(
+            status="COMPLETED", capture_id=f"CAP-{paypal_id_}", capture_status="COMPLETED",
+            capture_amount=target["amount"], capture_currency=target["currency"],
+        )
+        raise paypal_gateway.PayPalRefused(422, "UNPROCESSABLE_ENTITY", "ORDER_COMPLETED_OR_VOIDED", "no")
+
+    monkeypatch.setattr(paypal_gateway, "capture_order", captured_then_refused)
+    back = _confirm(order["id"], headers).json()
+
+    assert back["payment_status"] == "paid"
+    (tx,) = _payments(order["id"])["transactions"]
+    assert tx["status"] == "succeeded" and tx["provider_payment_id"] == f"CAP-{paypal_id}"
+
+
+def test_a_rate_limit_is_not_a_verdict_on_the_payment(monkeypatch):
+    headers = _customer("rate-limited")
+    order = _place(headers)
+    _approve(order["id"])
+    real_capture = paypal_gateway.capture_order
+
+    def slow_down(paypal_id):
+        raise paypal_gateway.PayPalRefused(429, "RATE_LIMIT_REACHED", "", "slow down")
+
+    monkeypatch.setattr(paypal_gateway, "capture_order", slow_down)
+    assert _confirm(order["id"], headers).status_code == 503
+    assert _payments(order["id"])["transactions"][0]["status"] == "pending"  # the page stays open
+
+    monkeypatch.setattr(paypal_gateway, "capture_order", real_capture)
+    assert _confirm(order["id"], headers).json()["payment_status"] == "paid"
+
+
+def test_an_order_paypal_no_longer_knows_is_a_lapsed_page_not_an_outage(monkeypatch):
+    headers = _customer("forgotten")
+    order = _place(headers)
+    abandoned = _place(headers)
+    forgotten = {_paypal_id(order["id"]), _paypal_id(abandoned["id"])}
+    real_get = paypal_gateway.get_order
+
+    def get(paypal_id):
+        if paypal_id in forgotten:
+            raise paypal_gateway.PayPalRefused(404, "RESOURCE_NOT_FOUND", "INVALID_RESOURCE_ID", "gone")
+        return real_get(paypal_id)
+
+    monkeypatch.setattr(paypal_gateway, "get_order", get)
+
+    back = _confirm(order["id"], headers)
+    assert back.status_code == 200 and back.json()["payment_state"] == "expired"
+
+    # "complete payment" simply opens a new PayPal page
+    fresh = client.post(f"/api/payments/{order['id']}/session", headers=headers)
+    assert fresh.status_code == 201 and _paypal_id(order["id"]) not in forgotten
+
+    # and an order nobody returns to lapses on the sweep instead of hanging forever
+    _age([abandoned["id"]])
+    reconcile_stale_card_orders()
+    assert _detail(abandoned["id"], headers)["status"] == "cancelled"
+    assert _payments(abandoned["id"])["transactions"][0]["status"] == "expired"
+    assert _detail(order["id"], headers)["status"] == "pending"  # the one being paid is untouched
+
+
+def test_a_declined_order_nobody_returns_to_lapses_with_its_window():
+    headers = _customer("declined-and-left")
+    order = _place(headers)
+    paypal_id = _approve(order["id"])
+    paypal_orders[paypal_id]["on_capture"] = "INSTRUMENT_DECLINED"
+    assert _confirm(order["id"], headers).json()["payment_status"] == "pending"
+    stock = api.get_product("butter-croissant")["stock"]
+
+    _age([order["id"]])
+    reconcile_stale_card_orders()
+
+    lapsed = _detail(order["id"], headers)
+    assert lapsed["status"] == "cancelled" and lapsed["payment_status"] == "pending"
+    assert api.get_product("butter-croissant")["stock"] == stock + 2
+    assert _captures(paypal_id) == 2  # asked on return and by the sweep — never charged
+
+
+def test_a_capture_paypal_is_holding_shows_as_processing_and_blocks_a_second_page():
+    headers = _customer("held-page")
+    order = _place(headers)
+    paypal_id = _approve(order["id"])
+    paypal_orders[paypal_id]["on_capture"] = "PENDING"
+
+    held = _confirm(order["id"], headers).json()
+    assert (held["payment_status"], held["payment_state"]) == ("pending", "processing")
+
+    created = len([c for c in paypal_calls if c[0] == "create_order"])
+    again = client.post(f"/api/payments/{order['id']}/session", headers=headers)
+    assert again.status_code == 200 and again.json()["payment_url"] is None
+    assert len([c for c in paypal_calls if c[0] == "create_order"]) == created
+
+
+def test_every_event_the_shop_asks_paypal_for_is_one_it_acts_on(caplog):
+    with caplog.at_level(logging.INFO, logger="bakery.payments"):
+        for event_type in paypal_gateway.WEBHOOK_EVENTS:
+            assert _webhook(event_type, {}).status_code == 200, event_type
+    ignored = [r.getMessage() for r in caplog.records if r.getMessage().startswith("ignoring PayPal event")]
+    assert ignored == []
+    with caplog.at_level(logging.INFO, logger="bakery.payments"):
+        assert _webhook("BILLING.PLAN.CREATED", {}).status_code == 200
+    assert any("ignoring PayPal event BILLING.PLAN.CREATED" in r.getMessage() for r in caplog.records)
+
+
+def test_the_keys_paypal_dedupes_on_cannot_collide_with_another_databases(monkeypatch):
+    """PayPal remembers idempotency keys per merchant account, not per
+    database. A key built from a bare row id would repeat wherever the same
+    credentials meet a second database — and hand one customer another
+    order's pay page, or book a refund that never left."""
+    order, _headers, paypal_id = _paid("unique-keys")
+
+    create_key = next(c[2] for c in paypal_calls if c[0] == "create_order" and c[1] == order["id"])
+    db = SessionLocal()
+    try:
+        placed = db.get(Order, order["id"]).created_at
+    finally:
+        db.close()
+    import calendar
+
+    # the order's id AND the second it was placed — two databases never share both
+    assert create_key == f"bh-{order['id']}-{calendar.timegm(placed.timetuple())}-1"
+
+    assert client.post(
+        f"/api/admin/orders/{order['id']}/refunds", json={"amount": 1.0}, headers=admin_headers()
+    ).status_code == 200
+    refund_key = next(c[4] for c in paypal_calls if c[0] == "refund" and c[1] == f"CAP-{paypal_id}")
+    # keyed on PayPal's own capture id, which exists nowhere else
+    assert refund_key == f"refund-CAP-{paypal_id}-0-100"
+
+
+def test_a_paypal_refund_still_on_its_way_is_confirmed_by_paypals_own_event(monkeypatch, caplog):
+    order, headers, paypal_id = _paid("refund-pending")
+    monkeypatch.setattr(
+        paypal_gateway, "refund_capture",
+        lambda capture_id, cents, currency, request_id: {"id": "REF-ECHECK-1", "status": "PENDING"},
+    )
+
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        asked = client.post(
+            f"/api/admin/orders/{order['id']}/refunds", json={"amount": 3.0}, headers=admin_headers()
+        )
+    assert asked.status_code == 200
+    assert asked.json()["payment_status"] == "paid" and asked.json()["refunded_amount"] == 0
+    assert "Refund sent" not in caplog.text
+
+    event = {
+        "id": "REF-ECHECK-1", "status": "COMPLETED", "amount": {"value": "3.00", "currency_code": "EUR"},
+        "links": [{"rel": "up", "href": f"https://api.paypal.test/v2/payments/captures/CAP-{paypal_id}"}],
+    }
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        assert _webhook("PAYMENT.CAPTURE.REFUNDED", event).status_code == 200
+        assert _webhook("PAYMENT.CAPTURE.REFUNDED", event).status_code == 200  # redelivered
+    assert caplog.text.count(f"Refund sent — order {order['order_number']}") == 1
+
+    mine = _detail(order["id"], headers)
+    assert (mine["payment_status"], mine["refunded_amount"]) == ("partially_refunded", 3.0)
+    assert mine["timeline"][-1]["comment"] == "PayPal confirmed the refund — payment marked partially refunded"
+    assert len(_payments(order["id"])["transactions"][0]["refunds"]) == 1  # confirmed, not doubled
+
+
+def test_a_paypal_order_is_in_the_bookkeeping_export_under_its_capture_id():
+    import csv
+    import io
+
+    order, _headers, paypal_id = _paid("export-row")
+    response = client.get("/api/admin/orders/export", headers=admin_headers())
+    header, *rows = list(csv.reader(io.StringIO(response.text)))
+    row = dict(zip(header, next(r for r in rows if r[0] == order["order_number"])))
+    assert (row["payment_method"], row["payment_provider"], row["payment_reference"]) == (
+        "paypal", "paypal", f"CAP-{paypal_id}",
+    )

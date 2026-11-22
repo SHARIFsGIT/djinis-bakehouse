@@ -5,9 +5,10 @@
 #   2. Render dashboard -> New -> Blueprint -> pick the repo.
 #   3. Render asks for the "sync: false" values — ADMIN_EMAIL and
 #      ADMIN_PASSWORD are the shop's first login; the STRIPE_* keys come
-#      from the Stripe dashboard (optional: without them the shop runs on
+#      from the Stripe dashboard and the PAYPAL_* ones from PayPal's
+#      developer dashboard (both optional: without them the shop runs on
 #      cash on delivery alone). Everything else (SECRET_KEY, the Postgres
-#      URL) is created for you.
+#      URL) is created for you. No key is ever written in this file.
 #   4. Deploy. Attach your domain in the service settings; TLS is automatic.
 #
 # Docs: https://render.com/docs/blueprint-spec
@@ -49,10 +50,21 @@ services:
         value: "25.00"
       - key: VIP_FREE_DELIVERY_THRESHOLD
         value: "15.00"
+      # Online payments. Every value below is set by hand in the dashboard —
+      # the going-live procedure is docs/operations/PAYMENTS_GO_LIVE.md, and
+      # `python backend/scripts/check_payments.py` (Render shell) verifies it.
       - key: STRIPE_SECRET_KEY
-        sync: false # from the Stripe dashboard — set it and card checkout goes live (leave empty for cash-only)
+        sync: false # from the Stripe dashboard — set it and card checkout appears (sk_test_… rehearses, sk_live_… charges; empty = no card option)
       - key: STRIPE_WEBHOOK_SECRET
-        sync: false # signing secret of the webhook endpoint you create in the Stripe dashboard
+        sync: false # signing secret (whsec_…) of the endpoint delivering to /api/payments/webhook — test and live endpoints have different ones
+      - key: PAYPAL_CLIENT_ID
+        sync: false # PayPal REST app credentials — set both and the PayPal option appears (empty = no PayPal)
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_ENVIRONMENT
+        sync: false # "sandbox" or "live" — which PayPal the credentials belong to (empty = sandbox)
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false # id of the PayPal webhook delivering to /api/payments/paypal/webhook
       - key: FACEBOOK_APP_ID
         sync: false # from developers.facebook.com — set with the secret and "Continue with Facebook" appears on the login page
       - key: FACEBOOK_APP_SECRET

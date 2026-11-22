@@ -443,6 +443,16 @@ class OrderDetailOut(OrderOut):
     payment_provider: str | None = None
     # How much of the payment the provider has confirmed sent back.
     refunded_amount: float = 0
+    # Where the payment itself stands, in the ledger's nine words (pending,
+    # processing, succeeded, failed, cancelled, expired, partially_refunded,
+    # refunded, disputed) — null for cash, and for a payment that predates
+    # the ledger. "processing" is the one the pages act on: the customer has
+    # done their part and the provider is still settling.
+    payment_state: str | None = None
+    # What the customer actually paid with, as the provider reported it —
+    # "Card (Apple Pay)", "Klarna", "PayPal". Null until the money lands
+    # (and for cash); the pages then name the order's way of paying instead.
+    payment_label: str | None = None
 
 
 class OrderListResponse(BaseModel):
@@ -499,6 +509,11 @@ class StorefrontOut(BaseModel):
     paypal_payments: bool = False
     # True while an online rail is a rehearsal (Stripe test keys, PayPal
     # sandbox): checkout says so, because real cards are declined there.
+    # Per rail, since the two providers go live separately — a live card
+    # option must never wear the sandbox PayPal's notice.
+    card_test_mode: bool = False
+    paypal_test_mode: bool = False
+    # Either of the above (kept for older pages still reading one flag).
     payments_test_mode: bool = False
     facebook_login: bool = False
     phone_login: bool = False
@@ -763,6 +778,8 @@ class PaymentTransactionOut(ORMModel):
     provider: str
     provider_reference: str
     provider_payment_id: str | None = None
+    # What was used on the provider's page ("Klarna", "Card (Apple Pay)").
+    method_label: str | None = None
     amount: float
     currency: str
     status: str

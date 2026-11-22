@@ -183,6 +183,27 @@ def test_configured_needs_both_halves_of_the_credentials(paypal, monkeypatch):
     assert paypal.configured() is False
 
 
+def test_an_environment_that_is_neither_paypal_switches_it_off_without_guessing(paypal, monkeypatch):
+    for word in ("production", "Live!", "test"):
+        monkeypatch.setattr(paypal.get_settings(), "paypal_environment", word)
+        assert paypal.configured() is False, word
+        assert "must be 'sandbox' or 'live'" in paypal.misconfigured()
+    # spelled with stray case or spaces, it is still the PayPal it names
+    monkeypatch.setattr(paypal.get_settings(), "paypal_environment", " LIVE ")
+    assert paypal.configured() is True and paypal.environment() == "live"
+    assert paypal.misconfigured() is None
+
+
+def test_an_empty_environment_is_the_rehearsal_default_and_never_stops_the_boot():
+    """A dashboard field left blank arrives as "". It must mean "sandbox",
+    not a crash at start-up: a PayPal setting cannot take the shop down."""
+    from app.config import Settings
+
+    assert Settings(paypal_environment="").paypal_environment == "sandbox"
+    assert Settings(paypal_environment="   ").paypal_environment == "sandbox"
+    assert Settings(paypal_environment="nonsense").paypal_environment == "nonsense"  # boots; PayPal off
+
+
 # ── Creating an order ────────────────────────────────────────────────────
 
 def test_the_order_paypal_receives_adds_up_and_points_home(paypal):
@@ -405,3 +426,51 @@ def test_only_paypals_own_yes_makes_a_webhook_genuine(paypal, monkeypatch):
     with pytest.raises(paypal.BadSignature):  # no registered webhook to verify against
         paypal.verify_webhook(HEADERS, RAW_EVENT)
     assert len(paypal.wire.calls) == calls_so_far
+
+
+def test_a_delivery_signed_from_anywhere_but_paypal_is_never_even_asked_about(paypal):
+    for cert_url in (
+        "https://evil.example/v1/notifications/certs/CERT-1",
+        "https://api.paypal.com.evil.example/certs/CERT-1",  # PayPal's name as a prefix, not the domain
+        "http://api.paypal.com/v1/notifications/certs/CERT-1",  # not https
+        "https://notpaypal.com/certs/CERT-1",
+        "not a url",
+    ):
+        with pytest.raises(paypal.BadSignature):
+            paypal.verify_webhook(dict(HEADERS, **{"paypal-cert-url": cert_url}), RAW_EVENT)
+    assert paypal.wire.requests == []  # no token, no verification call — nothing left the shop
+
+    # PayPal's own live and sandbox hosts are asked about as before
+    for cert_url in (
+        "https://api.paypal.com/v1/notifications/certs/CERT-1",
+        "https://api.sandbox.paypal.com/v1/notifications/certs/CERT-1",
+    ):
+        paypal.wire.answer({"verification_status": "SUCCESS"})
+        assert paypal.verify_webhook(dict(HEADERS, **{"paypal-cert-url": cert_url}), RAW_EVENT)["id"] == "WH-1"
+
+
+def test_the_registered_webhooks_come_back_as_plain_values(paypal):
+    paypal.wire.answer(
+        {"webhooks": [
+            {"id": "WH-REGISTERED", "url": "https://shop.test/api/payments/paypal/webhook",
+             "event_types": [{"name": "CHECKOUT.ORDER.APPROVED"}, {"name": "PAYMENT.CAPTURE.COMPLETED"}]},
+            {"id": "WH-OTHER", "url": "https://elsewhere.test/hook", "event_types": [{"name": "*"}]},
+        ]}
+    )
+    hooks = paypal.list_webhooks()
+    assert hooks == [
+        {"id": "WH-REGISTERED", "url": "https://shop.test/api/payments/paypal/webhook",
+         "event_types": ["CHECKOUT.ORDER.APPROVED", "PAYMENT.CAPTURE.COMPLETED"]},
+        {"id": "WH-OTHER", "url": "https://elsewhere.test/hook", "event_types": ["*"]},
+    ]
+    (call,) = paypal.wire.calls
+    assert (call.method, call.url) == ("GET", f"{SANDBOX}/v1/notifications/webhooks")
+
+
+def test_a_call_made_under_a_wrong_environment_is_unavailable_not_a_crash(paypal, monkeypatch):
+    monkeypatch.setattr(paypal.get_settings(), "paypal_environment", "production")
+    with pytest.raises(paypal.GatewayUnavailable):
+        paypal.get_order("A")
+    with pytest.raises(paypal.BadSignature):  # a webhook arriving meanwhile is refused, not a 500
+        paypal.verify_webhook(HEADERS, RAW_EVENT)
+    assert paypal.wire.requests == []

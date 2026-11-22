@@ -77,6 +77,8 @@ def storefront(db: DbSession):
         demo_accounts=get_settings().demo_data_enabled,
         card_payments=stripe_gateway.configured(),
         paypal_payments=paypal_gateway.configured(),
+        card_test_mode=payment_ops.test_modes()["card"],
+        paypal_test_mode=payment_ops.test_modes()["paypal"],
         payments_test_mode=payment_ops.test_mode(),
         facebook_login=facebook_gateway.configured(),
         # Phone codes only need Twilio in production — in dev the code comes

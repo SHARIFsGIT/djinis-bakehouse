@@ -30,6 +30,7 @@ from sqlalchemy import select
 
 from .. import ledger, payment_ops, paypal_gateway, stripe_gateway
 from ..database import SessionLocal, utcnow
+from ..email import send_refund_email
 from ..models import (
     PAYMENT_PROVIDERS,
     Order,
@@ -69,6 +70,22 @@ SWEEP_INTERVAL_SECONDS = 15 * 60
 PAY_WINDOW = timedelta(seconds=stripe_gateway.SESSION_LIFETIME_SECONDS + 10 * 60)
 
 
+# The most a provider's event may weigh. Real ones are a few kilobytes; the
+# endpoints are public and read their body before any signature can be
+# checked, so the size is bounded before the read rather than after.
+MAX_WEBHOOK_BYTES = 1024 * 1024
+
+
+async def _webhook_body(request: Request) -> bytes:
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_WEBHOOK_BYTES:
+        raise HTTPException(status_code=413, detail="Webhook rejected: the payload is too large")
+    body = await request.body()
+    if len(body) > MAX_WEBHOOK_BYTES:
+        raise HTTPException(status_code=413, detail="Webhook rejected: the payload is too large")
+    return body
+
+
 def _drain(background: BackgroundTasks) -> None:
     """Run tasks queued on a BackgroundTasks no response will carry — the
     sweep reconciles outside a request, so it sends its own receipts."""
@@ -78,6 +95,35 @@ def _drain(background: BackgroundTasks) -> None:
 
 def _order_link(order: Order) -> str:
     return f"/admin/orders?search={order.order_number}"
+
+
+def _holds_order_money(order: Order, tx: PaymentTransaction, db) -> bool:
+    """Whether this transaction is the one the order's own payment status
+    speaks for — not, say, a duplicate payment that was sent straight back
+    and keeps a ledger row of its own."""
+    held = ledger.money_transaction(db, order)
+    return held is not None and held.id == tx.id
+
+
+def _tell_customer_refund_confirmed(order: Order, tx: PaymentTransaction, amount, background) -> None:
+    """A refund the shop asked for was still on its way when it was made;
+    the provider has now confirmed it. This is the first moment the
+    customer can honestly be told the money is coming back."""
+    user = order.user
+    if background is None or user is None or not user.is_active:
+        return
+    background.add_task(
+        send_refund_email,
+        {
+            "email": user.email,
+            "first_name": user.first_name,
+            "order_number": order.order_number,
+            "amount": float(amount),
+            "currency": order.currency,
+            "provider": tx.provider,
+            "full": order.payment_status == PaymentStatus.REFUNDED.value,
+        },
+    )
 
 
 # --------------------------------------------------------------------------
@@ -106,6 +152,17 @@ def _order_for_session(session: dict, db) -> Order | None:
     return order
 
 
+def _with_method(session: dict) -> dict:
+    """A paid session, plus what the customer actually paid with. Stripe is
+    asked before the order's row is locked: this is wording for the receipt
+    and the timeline, and wording must never hold a lock — or a payment — up.
+    Unknown stays unknown (None); nothing downstream depends on it."""
+    intent = session.get("payment_intent")
+    if "method_type" in session or not isinstance(intent, str) or not intent:
+        return session
+    return {**session, "method_type": stripe_gateway.payment_method(intent)}
+
+
 def _record_completed_payment(session: dict, background: BackgroundTasks, db) -> None:
     if session.get("payment_status") != "paid":
         # Delayed payment methods (bank debit and friends) may still be
@@ -129,6 +186,7 @@ def _record_completed_payment(session: dict, background: BackgroundTasks, db) ->
     # pending -> paid transition, and refresh it in place — the identity map
     # would otherwise keep the first, unlocked load's stale attributes
     # (SQLite ignores FOR UPDATE; Postgres doesn't).
+    session = _with_method(session)
     order = _lock_for_cancellation(order, db)
     if order is None:
         return  # the row vanished between the lookup and the lock
@@ -149,9 +207,10 @@ def _land_payment(order: Order, session: dict, background: BackgroundTasks, db) 
     """
     intent = session.get("payment_intent")
     reference = session.get("id") or order.stripe_session_id
+    method = session.get("method_type")
     if order.status == OrderStatus.CANCELLED.value:
         if refund_payment_on_cancelled_order(
-            order, db, background, payment_intent=intent, reference=reference
+            order, db, background, payment_intent=intent, reference=reference, method_type=method
         ):
             logger.warning(
                 "order %s: payment landed after cancellation (session %s) — sent back",
@@ -159,7 +218,9 @@ def _land_payment(order: Order, session: dict, background: BackgroundTasks, db) 
                 session.get("id"),
             )
             return
-    elif mark_order_paid(order, db, background, payment_intent=intent, reference=reference):
+    elif mark_order_paid(
+        order, db, background, payment_intent=intent, reference=reference, method_type=method
+    ):
         logger.info("order %s paid via Stripe session %s", order.order_number, session.get("id"))
         _flag_amount_mismatch(order, session.get("amount_total"), session.get("currency"), background, db)
         return
@@ -362,7 +423,7 @@ def _order_for_intent(charge: dict, db) -> Order | None:
     return order
 
 
-def _record_external_refund(charge: dict, db) -> None:
+def _record_external_refund(charge: dict, db, background: BackgroundTasks | None = None) -> None:
     """Stripe says money went back on a charge — bring the book in line.
 
     The app's own refunds are already in the ledger when this arrives
@@ -396,11 +457,13 @@ def _record_external_refund(charge: dict, db) -> None:
     paid_cents = ledger.cents(tx.amount)
     known = ledger.cents(ledger.confirmed_refund_total(db, tx))
     pending = ledger.cents(ledger.pending_refund_total(db, tx))
+    confirmed_now = 0
     if pending and refunded >= known + pending:
         # Refunds the shop asked for and Stripe had still to confirm are
         # inside this total — this event is their confirmation.
         ledger.confirm_pending_refunds(db, tx)
         known += pending
+        confirmed_now = pending
     # Stripe's own figures decide: a charge refunded in full means whatever
     # was still held has gone back; otherwise the part its total exceeds
     # the ledger's by. Never more than the payment itself.
@@ -417,7 +480,7 @@ def _record_external_refund(charge: dict, db) -> None:
             initiated_by="Stripe dashboard",
             reason="Refund issued at Stripe",
         )
-    elif not pending:
+    elif not confirmed_now:
         db.commit()  # nothing new — the app's own refund, arriving as an event
         return
     holds_order_money = intent == (order.stripe_payment_intent_id or "")
@@ -429,15 +492,20 @@ def _record_external_refund(charge: dict, db) -> None:
         word = (
             "refunded" if order.payment_status == PaymentStatus.REFUNDED.value else "partially refunded"
         )
+        # Said for what it was: a refund made at Stripe, or Stripe's
+        # confirmation of one the shop itself had asked for.
+        source = "Refund recorded from the Stripe dashboard" if new_cents > 0 else "Stripe confirmed the refund"
         db.add(
             OrderEvent(
                 order_id=order.id,
                 status=order.status,
-                comment=f"Refund recorded from the Stripe dashboard — payment marked {word}",
+                comment=f"{source} — payment marked {word}",
             )
         )
-        logger.info("order %s payment marked %s by a dashboard refund", order.order_number, word)
+        logger.info("order %s payment marked %s by Stripe's refund event", order.order_number, word)
     db.commit()
+    if confirmed_now:
+        _tell_customer_refund_confirmed(order, tx, Decimal(confirmed_now) / 100, background)
 
 
 def _record_refund_update(refund: dict, background: BackgroundTasks, db) -> None:
@@ -505,6 +573,8 @@ def _record_refund_update(refund: dict, background: BackgroundTasks, db) -> None
             )
         )
     db.commit()
+    if state == "succeeded" and was == "pending":
+        _tell_customer_refund_confirmed(order, tx, row.amount, background)
 
 
 def _record_dispute(dispute: dict, background: BackgroundTasks, db) -> None:
@@ -529,8 +599,16 @@ def _record_dispute(dispute: dict, background: BackgroundTasks, db) -> None:
         )
         db.commit()
         return
+    # Locked like every other write to an order's money — a refund may be
+    # settling on the same payment this very second.
+    order = _lock_for_cancellation(order, db)
+    if order is None:
+        return
     tx = ledger.find(db, "stripe", payment_id=str(dispute.get("payment_intent") or ""))
     tx = tx or ledger.adopt_order_payment(db, order)
+    if tx is not None and tx.dispute_status == "open":
+        db.commit()
+        return  # already on record — the same notice, delivered again
     if tx is not None:
         tx.dispute_status = "open"
         ledger.set_status(
@@ -584,7 +662,11 @@ def _close_dispute(
                 initiated_by="chargeback (dispute lost)",
                 reason="The customer's bank reversed the payment",
             )
-        payment_ops.sync_order_payment_status(order, tx)
+        # Whatever the dispute took, the row's state follows its totals again
+        # (a payment already refunded in full reads "refunded", not "paid").
+        ledger.apply_refunds(db, tx)
+        if _holds_order_money(order, tx, db):
+            payment_ops.sync_order_payment_status(order, tx)
         comment = (
             f"Dispute lost — the customer's bank took back {money(float(lost), order.currency)}"
         )
@@ -646,7 +728,7 @@ def _handle_stripe_event(event: dict, background: BackgroundTasks, db) -> None:
             closed_as=TransactionStatus.FAILED.value,
         )
     elif event_type == "charge.refunded":
-        _record_external_refund(obj, db)
+        _record_external_refund(obj, db, background)
     elif event_type in ("refund.updated", "refund.failed", "charge.refund.updated"):
         _record_refund_update(obj, background, db)
     elif event_type == "charge.dispute.created":
@@ -667,7 +749,7 @@ async def stripe_webhook(request: Request, background: BackgroundTasks, db: DbSe
     body untouched: signature verification needs the exact bytes Stripe
     sent, so nothing parses the payload before it verifies.
     """
-    payload = await request.body()
+    payload = await _webhook_body(request)
     try:
         event = stripe_gateway.verify_webhook(
             payload, request.headers.get("stripe-signature", "")
@@ -683,6 +765,11 @@ async def stripe_webhook(request: Request, background: BackgroundTasks, db: DbSe
 # --------------------------------------------------------------------------
 # PayPal
 # --------------------------------------------------------------------------
+
+# Capture refusals that mean "this funding source, not this payment": the
+# customer goes back to the same PayPal page and picks another.
+_PAYPAL_OTHER_FUNDING = ("INSTRUMENT_DECLINED", "REDIRECT_PAYER_FOR_ALTERNATE_FUNDING")
+
 
 def _is_current_paypal_page(order: Order, tx: PaymentTransaction, db) -> bool:
     """Whether this PayPal order is the one the shop means to be paid: its
@@ -754,12 +841,40 @@ def _capture_paypal(order: Order, tx: PaymentTransaction, background, db) -> str
     except paypal_gateway.PayPalRefused as refusal:
         if refusal.issue in ("ORDER_NOT_APPROVED", "PAYER_ACTION_REQUIRED"):
             return "awaiting"  # the customer has not finished on PayPal's side
-        if refusal.issue == "INSTRUMENT_DECLINED":
+        if refusal.issue in _PAYPAL_OTHER_FUNDING:
             tx.failure_reason = "PayPal could not charge the chosen funding source"
             db.commit()
             return "declined"  # the same PayPal page lets them pick another
-        raise
+        if refusal.status not in (404, 422):
+            # A rate limit, a permissions problem, a request PayPal could
+            # not read — none of them a verdict on this payment.
+            raise
+        return _close_refused_paypal(order, tx, refusal, background, db)
     return _land_paypal(order, tx, remote, background, db)
+
+
+def _close_refused_paypal(order: Order, tx: PaymentTransaction, refusal, background, db) -> str:
+    """PayPal's answer to the capture was a flat no. Before the page is
+    written off, PayPal is asked what became of the order itself — a
+    refusal must never bury a capture that did go through — and only when
+    it holds no capture is the page closed as failed, so "complete payment"
+    opens a fresh one and an order nobody returns to can lapse."""
+    try:
+        remote = paypal_gateway.get_order(tx.provider_reference)
+    except paypal_gateway.PayPalRefused as gone:
+        if gone.status != 404:
+            raise
+        remote = {}  # PayPal no longer knows the order at all
+    if remote.get("capture_id"):
+        return _land_paypal(order, tx, remote, background, db)
+    reason = refusal.issue or refusal.name or str(refusal.status)
+    ledger.close_one(
+        db, "paypal", tx.provider_reference, TransactionStatus.FAILED.value,
+        detail=f"PayPal refused the payment ({reason})",
+    )
+    db.commit()
+    logger.warning("order %s: PayPal refused the capture (%s)", order.order_number, reason)
+    return "failed"
 
 
 def _reconcile_paypal(order: Order, background, db) -> str:
@@ -768,7 +883,20 @@ def _reconcile_paypal(order: Order, background, db) -> str:
     tx = ledger.open_for_order(db, order.id, "paypal")
     if tx is None:
         return "nothing open"
-    remote = paypal_gateway.get_order(tx.provider_reference)
+    try:
+        remote = paypal_gateway.get_order(tx.provider_reference)
+    except paypal_gateway.PayPalRefused as refusal:
+        if refusal.status != 404 or tx.provider_payment_id:
+            raise
+        # PayPal no longer knows this order (it was never approved and has
+        # aged out, or it belongs to the other environment). Nothing can be
+        # approved or captured on it any more — the page is over.
+        ledger.close_one(
+            db, "paypal", tx.provider_reference, TransactionStatus.EXPIRED.value,
+            detail="PayPal no longer holds this order",
+        )
+        db.commit()
+        return "expired"
     state = str(remote.get("status") or "")
     if state == "COMPLETED":
         return _land_paypal(order, tx, remote, background, db)
@@ -891,6 +1019,7 @@ def _record_paypal_refund(resource: dict, event_id, background, db) -> None:
         else None
     )
     was_status = order.payment_status
+    was_pending = known is not None and known.status == "pending" and known.transaction_id == tx.id
     ledger.record_refund(
         db,
         tx,
@@ -901,6 +1030,8 @@ def _record_paypal_refund(resource: dict, event_id, background, db) -> None:
         reason=None if known is not None else "Refund issued at PayPal",
     )
     payment_ops.sync_order_payment_status(order, tx)
+    if was_pending:
+        _tell_customer_refund_confirmed(order, tx, known.amount, background)
     if known is None or order.payment_status != was_status:
         word = (
             "refunded" if order.payment_status == PaymentStatus.REFUNDED.value else "partially refunded"
@@ -976,7 +1107,7 @@ async def paypal_webhook(request: Request, background: BackgroundTasks, db: DbSe
     """PayPal's word on a payment — accepted only once PayPal itself has
     confirmed the delivery is genuine (its verification API is asked about
     the exact bytes and headers that arrived)."""
-    payload = await request.body()
+    payload = await _webhook_body(request)
     try:
         event = await run_in_threadpool(paypal_gateway.verify_webhook, request.headers, payload)
     except paypal_gateway.BadSignature as exc:
@@ -1018,24 +1149,31 @@ def reconcile_order(order: Order, background: BackgroundTasks, db) -> str:
         # wire — judge on a locked, freshly refreshed row, the same re-read
         # the webhook itself takes, so exactly one of the two records the
         # payment and sends the receipt.
-        locked = _lock_for_cancellation(order, db)
-        if locked is None:
-            return "gone"
-        _land_payment(
-            locked,
+        paid = _with_method(
             {
                 "id": order.stripe_session_id,
                 "payment_status": "paid",
                 "payment_intent": session.get("payment_intent"),
                 "amount_total": session.get("amount_total"),
                 "currency": session.get("currency"),
-            },
-            background,
-            db,
+            }
         )
+        locked = _lock_for_cancellation(order, db)
+        if locked is None:
+            return "gone"
+        _land_payment(locked, paid, background, db)
         return "paid"
     if session.get("status") == "expired":
         return "expired"
+    if session.get("status") == "complete":
+        # Checked out with a method that settles later (a bank debit): the
+        # customer has done their part, and Stripe's own success or failure
+        # event will finish the story. The ledger shows the wait as one.
+        tx = ledger.find(db, "stripe", reference=order.stripe_session_id)
+        if tx is not None:
+            ledger.mark_processing(db, tx, detail="awaiting the bank's confirmation")
+            db.commit()
+        return "processing"
     return "awaiting"
 
 
@@ -1093,7 +1231,9 @@ def reconcile_stale_card_orders() -> None:
                     # customer email rides the sweep's own drain — no
                     # response will carry these tasks.
                     _cancel_expired_session({"id": order.stripe_session_id}, db, background)
-                elif provider == "paypal" and outcome in ("awaiting", "expired", "nothing open", "failed"):
+                elif provider == "paypal" and outcome in (
+                    "awaiting", "expired", "nothing open", "failed", "declined"
+                ):
                     # Past the window and PayPal holds no approval: the
                     # order lapses like an expired card session would.
                     locked = _lock_for_cancellation(order, db)
@@ -1186,6 +1326,9 @@ def new_payment_session(
     _approved_money_rules()
 
     def paid_already():
+        """The order as it now stands, with no pay link — because there is
+        nothing (more) for the customer to pay: the money has landed, or
+        the provider is still settling a payment already made."""
         fresh = _get_order_for(order_id, user, db)
         db.refresh(fresh)
         response.status_code = status.HTTP_200_OK
@@ -1209,18 +1352,25 @@ def new_payment_session(
             # payment now (locked, exactly as the webhook would) and hand
             # back the paid order — with no payment_url, because there is
             # nothing left to pay.
-            locked = _lock_for_cancellation(order, db)
-            if locked is None:
-                raise HTTPException(status_code=404, detail="Order not found")
-            _land_payment(
-                locked,
+            paid = _with_method(
                 {"id": superseded, "payment_status": "paid",
                  "payment_intent": previous.get("payment_intent"),
                  "amount_total": previous.get("amount_total"),
-                 "currency": previous.get("currency")},
-                background,
-                db,
+                 "currency": previous.get("currency")}
             )
+            locked = _lock_for_cancellation(order, db)
+            if locked is None:
+                raise HTTPException(status_code=404, detail="Order not found")
+            _land_payment(locked, paid, background, db)
+            return paid_already()
+        if previous.get("status") == "complete":
+            # Checked out on that link with a method that settles later (a
+            # bank debit) — the money is on its way. A second pay page now
+            # would only invite a second payment for the same box.
+            in_flight = ledger.find(db, "stripe", reference=superseded)
+            if in_flight is not None:
+                ledger.mark_processing(db, in_flight, detail="awaiting the bank's confirmation")
+                db.commit()
             return paid_already()
         superseded_open = previous.get("status") in (None, "open")
 

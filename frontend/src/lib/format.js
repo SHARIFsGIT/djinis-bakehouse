@@ -100,15 +100,29 @@ export const hasNonActiveCurrency = (codes, active = shopConfig.currency) => {
   );
 };
 
+/** A timestamp from the API as the moment it names. The server keeps and
+    sends UTC without saying so ("2026-11-22T10:14:03"), and a browser reads
+    a zone-less string as *local* time — which put every "placed" and "paid"
+    an hour or two out for anyone not on UTC. So a timestamp with no zone on
+    it is read as the UTC it is; one that names its zone is taken at its
+    word. (Calendar dates — "2026-11-22" — are not moments and never come
+    through here.) */
+export const apiTime = (value) => {
+  if (value instanceof Date) return value;
+  const text = String(value);
+  const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text);
+  return new Date(zoned || !text.includes("T") ? text : `${text}Z`);
+};
+
 export const formatDate = (value) => {
   if (!value) return "—";
-  const d = new Date(value.length === 10 ? `${value}T12:00:00` : value);
+  const d = value.length === 10 ? new Date(`${value}T12:00:00`) : apiTime(value);
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 };
 
 export const formatDateTime = (value) => {
   if (!value) return "—";
-  return new Date(value).toLocaleString("en-US", {
+  return apiTime(value).toLocaleString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -122,7 +136,7 @@ export const formatDateTime = (value) => {
     calendar words ("Today, 3:45 PM" → "Tue, 3:45 PM" → "Nov 12, 3:45 PM"). */
 export const stampTime = (value) => {
   if (!value) return "—";
-  const d = new Date(value);
+  const d = apiTime(value);
   const now = new Date();
   const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   const sameDay = (a, b) =>
@@ -222,13 +236,57 @@ export const statusStep = (value) => ORDER_STATUSES.findIndex((s) => s.value ===
 
 export const PAYMENT_METHODS = {
   card: "Card",
+  paypal: "PayPal",
   cash_on_delivery: "Cash on delivery",
 };
+
+/** The ways of paying that go through a provider's own page — the order is
+    placed unpaid and becomes paid only on the provider's word. */
+export const ONLINE_PAYMENT_METHODS = ["card", "paypal"];
+export const paysOnline = (method) => ONLINE_PAYMENT_METHODS.includes(method);
+
+/** The companies that actually move the money, as the API names them. */
+export const PAYMENT_PROVIDERS = { stripe: "Stripe", paypal: "PayPal" };
+export const providerLabel = (provider) =>
+  PAYMENT_PROVIDERS[provider] ?? "the payment provider";
+
 export const PAYMENT_STATUSES = {
   pending: { label: "Payment pending", badge: "badge-warning" },
   paid: { label: "Paid", badge: "badge-success" },
   refunded: { label: "Refunded", badge: "badge-neutral" },
   partially_refunded: { label: "Partially refunded", badge: "badge-warning" },
+};
+
+/* One row of the payment ledger — a single pay page and what became of it.
+   The order's badge above is the four-word summary; these nine are the
+   payment's own story, in the words the desk reads them. */
+export const TRANSACTION_STATUSES = {
+  pending: { label: "Awaiting payment", badge: "badge-warning" },
+  processing: { label: "Settling", badge: "badge-info" },
+  succeeded: { label: "Paid", badge: "badge-success" },
+  failed: { label: "Failed", badge: "badge-error" },
+  cancelled: { label: "Closed", badge: "badge-ghost" },
+  expired: { label: "Expired", badge: "badge-ghost" },
+  partially_refunded: { label: "Partially refunded", badge: "badge-warning" },
+  refunded: { label: "Refunded", badge: "badge-neutral" },
+  disputed: { label: "Disputed", badge: "badge-error" },
+};
+
+/* A refund is whatever the provider says it is — "sent" only on its word. */
+export const REFUND_STATUSES = {
+  succeeded: { label: "Sent back", badge: "badge-success" },
+  pending: { label: "On its way", badge: "badge-info" },
+  failed: { label: "Not sent", badge: "badge-error" },
+};
+
+/** Typed money ("12,50", "12.5", " 12 ") as a number of cents, or null when
+    it isn't an amount. Whole cents only — "1.005" is refused, not rounded,
+    because a refund must be exactly what the person meant. */
+export const parseAmountToCents = (text) => {
+  const cleaned = String(text ?? "").trim().replace(",", ".");
+  if (!/^\d{1,7}(\.\d{1,2})?$/.test(cleaned)) return null;
+  const [whole, fraction = ""] = cleaned.split(".");
+  return Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
 };
 
 /** What a code takes off, in the words a shopper reads: "10% off" for a

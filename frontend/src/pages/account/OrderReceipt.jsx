@@ -9,7 +9,51 @@ import {
   money,
   PAYMENT_METHODS,
   PAYMENT_STATUSES,
+  paysOnline,
 } from "../../lib/format";
+
+/** What the receipt may say about the money — only ever what is true of
+    this order right now. A receipt is the one page a customer keeps, so it
+    never calls an unpaid online order "due at the door", or a refunded one
+    "paid". Returns [the payment line, the closing line]. */
+function paymentWords(order) {
+  const online = paysOnline(order.payment_method);
+  const cancelled = order.status === "cancelled";
+  const refunded = money(order.refunded_amount, order.currency);
+  const proof = "This receipt is your proof of purchase — keep it safe.";
+  switch (order.payment_status) {
+    case "paid":
+      return cancelled && online
+        ? ["Paid — the refund for this cancelled order has not been confirmed yet.", ""]
+        : ["Paid in full — thank you.", proof];
+    case "partially_refunded":
+      return [
+        order.refunded_amount > 0 ? `Paid — ${refunded} of it refunded.` : "Paid — partly refunded.",
+        proof,
+      ];
+    case "refunded":
+      return ["Refunded in full.", "This order was refunded — nothing is owed either way."];
+    default:
+      if (cancelled) {
+        return [
+          online ? "Order cancelled — nothing was charged." : "Order cancelled — nothing is due.",
+          "",
+        ];
+      }
+      if (online) {
+        return order.payment_state === "processing"
+          ? [
+              "Payment being confirmed by the provider.",
+              "Your receipt is emailed the moment the payment clears.",
+            ]
+          : [
+              "Not paid yet — this page is not a proof of purchase.",
+              "Your receipt is emailed once the payment is confirmed.",
+            ];
+      }
+      return ["Due to the courier at your door.", "An order confirmation was emailed to you."];
+  }
+}
 
 /** A customer's proof of purchase — on screen and on paper (Print / save
     PDF). Deliberately its own page, free of the account chrome, so what
@@ -42,7 +86,7 @@ export default function OrderReceipt() {
     label: order.payment_status,
     badge: "badge-ghost",
   };
-  const paid = order.payment_status === "paid";
+  const [paymentLine, closingLine] = paymentWords(order);
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-10">
@@ -152,6 +196,12 @@ export default function OrderReceipt() {
               <span>{money(order.cancel_fee, order.currency)}</span>
             </div>
           )}
+          {order.refunded_amount > 0 && (
+            <div className="flex justify-between pt-1">
+              <span className="opacity-70">Refunded</span>
+              <span>{money(order.refunded_amount, order.currency)}</span>
+            </div>
+          )}
         </div>
 
         {/* Address + payment */}
@@ -177,11 +227,7 @@ export default function OrderReceipt() {
             <p className="mt-1.5 font-semibold">
               {PAYMENT_METHODS[order.payment_method] ?? order.payment_method}
             </p>
-            <p className="opacity-70">
-              {paid
-                ? "Paid in full — thank you."
-                : "Due to the courier at your door."}
-            </p>
+            <p className="opacity-70">{paymentLine}</p>
           </div>
         </div>
 
@@ -192,9 +238,8 @@ export default function OrderReceipt() {
         )}
 
         <p className="mt-6 border-t-2 border-dashed border-base-300 pt-4 text-center text-xs opacity-60">
-          {paid
-            ? "This receipt is your proof of purchase — keep it safe."
-            : "An order confirmation was emailed to you."}{" "}
+          {closingLine}
+          {closingLine && " "}
           Thank you for baking with us.
         </p>
         </div>

@@ -10,7 +10,15 @@ PyJWT>=2.8
 python-multipart>=0.0.9
 # Stripe SDK — hosted Checkout sessions, webhook signature verification and
 # refunds. All of it stays behind app/stripe_gateway.py.
-stripe>=7.8
+#
+# Pinned to one major on purpose: each SDK major pins its own Stripe API
+# version, and the gateway speaks the one 16.x pins — Checkout Sessions
+# without the retired `payment_method_types` list, with
+# `allowed_/excluded_payment_method_types` instead. An unpinned install
+# could change the API under a working checkout between two deploys.
+# (PayPal needs no package: app/paypal_gateway.py speaks its REST API with
+# the standard library.)
+stripe>=16.1,<17
 # Postgres driver for production DATABASE_URLs (dev uses SQLite; the
 # psycopg3 dialect is what postgres:// URLs are normalized to in config.py)
 psycopg[binary]>=3.1

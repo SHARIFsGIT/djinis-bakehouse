@@ -160,33 +160,51 @@ standing order that carried the code, it drops off *their* voucher board and
 both preview and checkout refuse it; cancelling that order hands the code back.
 The seeder restores these codes on startup if they're ever deleted from the
 console, because the storefront copy promises them.
-Payment is cash on delivery (settled by staff when the order is marked delivered)
-plus — once Stripe is configured — **online card payments through Stripe's hosted
-Checkout**: the order is placed unpaid, the customer pays on Stripe's page (card
-details never touch this server, and 3-D Secure/SCA is handled there), and the
-`checkout.session.completed` webhook marks the order paid and emails the receipt.
-The hosted page mirrors the shop — one line per product with its photo, delivery
-and tax rows, the coupon as a real discount row, the bakery's cream/burgundy
-palette and a serif face (`app/stripe_gateway.py` builds the session; the lines
-always sum to the stored order total in integer cents). Logo and bank-statement
-descriptor come from the Stripe dashboard's branding settings.
-A synchronous confirm check runs when the customer returns so the page is correct
-even if the webhook is still in flight. Unpaid card orders can be paid again with
-a fresh link (`POST /api/payments/{id}/session`) and cancel themselves — stock
-restored — when their pay window expires. Cancelling a paid card order refunds
-the card through Stripe (the total less any late-cancellation fee); if the refund
-call fails, the timeline says so instead of pretending it happened. A refund
-issued by hand in the Stripe dashboard syncs back through the
-`charge.refunded` webhook, so the book never claims money it has already
-returned, and a `charge.dispute.created` event rings the desk the moment a
-chargeback opens. Set
-`STRIPE_SECRET_KEY` to turn the card option on (checkout offers cash only without
-it); `STRIPE_WEBHOOK_SECRET` verifies the webhook, `STRIPE_CURRENCY` (EUR
-only) sets the charge currency, and `STRIPE_PAYMENT_METHODS` can add local
-rails (Klarna, PayPal, SEPA direct debit, iDEAL, Bancontact) to the hosted
-page. Delivery and tax are calculated server-side from the approved money
-rules — while the EUR delivery figures await the owner's approval, checkout
-pauses fail-closed rather than charge an unapproved figure.
+Payment is cash on delivery (settled by staff when the order is marked
+delivered) plus two online rails, each appearing at checkout only once its
+keys exist — never a dead button:
+
+- **Stripe's hosted Checkout** (`STRIPE_SECRET_KEY`) — cards and wallets,
+  and whatever else the Stripe account has switched on: the shop asks for
+  Stripe's automatic method set, so the dashboard decides what customers
+  see (`STRIPE_PAYMENT_METHODS` can only narrow it). Card details never
+  touch this server and 3-D Secure/SCA is handled on Stripe's page. The
+  page mirrors the shop — one line per product with its photo, delivery and
+  tax rows, the coupon as a real discount row, the bakery's palette
+  (`app/stripe_gateway.py` builds the session; the lines always sum to the
+  stored order total in integer cents).
+- **PayPal Checkout** (`PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET`) — its
+  own option beside Stripe, the Orders v2 way with nothing of PayPal's
+  running in the shop's pages: the server creates the order, the customer
+  approves it on PayPal's site, the server captures it. PayPal never takes
+  money the shop did not ask it to capture, so a cancelled order is simply
+  never charged (`app/paypal_gateway.py`, standard library only).
+
+Either way the order is placed unpaid and **turns paid only on the
+provider's word** — its signed webhook, the shop asking it when the customer
+returns, or the reconciliation sweep (every 15 minutes) for orders nobody
+spoke for. All three end in one idempotent, row-locked transition, so they
+can arrive in any order, or twice, and the order is marked paid and the
+receipt sent exactly once. One press of the pay button is one order
+(`Idempotency-Key`), a webhook delivered twice acts once, and an unpaid
+order can be paid again from its page and cancels itself — stock restored —
+when its window closes.
+
+Behind both sits **one payment ledger** (`payment_transactions`,
+`payment_refunds`, `payment_events`): a row per pay page with the
+provider's own ids, the amount, the method actually used (read back from
+the provider, so a receipt says "Klarna" rather than guessing "card"), its
+state — pending, processing, succeeded, failed, cancelled, expired,
+partially refunded, refunded, disputed — and an audit line for every
+change. **Refunds are the provider's doing**: the desk's Refund button (or a
+cancellation) asks Stripe or PayPal to send the money, and the order reads
+"refunded" only once they confirm; a refused refund stays on record as
+failed. Refunds and disputes made in a provider's own dashboard flow back
+through its webhooks, and the desk's **Payment check** lists whatever does
+not add up. Delivery and tax are calculated server-side from the approved
+money rules — while the EUR delivery figures await the owner's approval,
+checkout pauses fail-closed rather than charge an unapproved figure.
+Going live is a procedure: `docs/operations/PAYMENTS_GO_LIVE.md`.
 
 **Order emails that follow the box** — every move the desk dials (confirmed,
 baking, ready, out for delivery, delivered, cancelled) lands in the
@@ -214,7 +232,7 @@ five wrong tries, and rate-limited; Facebook handshakes never put tokens in a
 URL — the callback issues a one-time code the page exchanges server-side.
 Orders keep a snapshot of the delivery address, so editing addresses later never
 changes past orders. Customers can cancel while an order is pending/confirmed/
-baking — stock is restored, paid card orders auto-refund through Stripe, and cancelling after the
+baking — stock is restored, orders paid online auto-refund through the provider that took the money, and cancelling after the
 ovens start keeps a late-cancellation fee the admin tunes under Settings
 (refunds pay back the total minus the fee; 0% turns it off). Customers can
 reorder a past box with one click. Under Profile they also hold the keys to
@@ -232,8 +250,11 @@ revenue/orders/customers stats, a thirty-day trading chart (one bar per
 day, active currency, kept orders), best sellers, low stock and recent
 orders;
 order management with a status timeline
-(pending → confirmed → baking → ready → out for delivery → delivered), payment
-controls and a CSV export for bookkeeping, plus a Bulk enquiries tab for the
+(pending → confirmed → baking → ready → out for delivery → delivered), each
+online order's payment panel (the provider's ids, what is held, full or
+partial refunds through Stripe or PayPal, "check with the provider" and the
+audit trail), a Payment check tab that names what does not reconcile,
+a CSV export for bookkeeping, plus a Bulk enquiries tab for the
 catering pipeline (fresh leads ring the navbar bell, which deep-links
 straight to them); the reviews desk hides and restores customer reviews, with
 the wall's average always honest; full product CRUD with
@@ -274,25 +295,39 @@ backend/
     schemas.py       Pydantic request/response models
     security.py      bcrypt hashing, JWT create/decode, auth dependencies,
                      client-key extraction + sliding-window rate limiters
+    stripe_gateway.py / paypal_gateway.py
+                     the two provider seams — every call to Stripe or PayPal
+                     goes through one of them, and tests swap them for fakes
+    ledger.py        the payment ledger's own rules (records; never calls a
+                     provider)
+    payment_ops.py   what a payment needs from either provider: opening a pay
+                     page, issuing a refund and recording the answer
     serialize.py     shared model → schema helpers
     seed.py          idempotent demo data (restores what the storefront promises)
     uploads.py       validated photo storage (type/size checks, safe deletes)
     routers/         auth (rate-limited, +avatar), products (+favorites),
-                     orders, admin (+photo uploads), marketing (newsletter,
+                     orders, payments (provider webhooks, confirm, pay-again,
+                     the reconciliation sweep), admin (+photo uploads),
+                     admin_payments (payment history, refunds, provider
+                     check, reconciliation report), marketing (newsletter,
                      +bulk orders & voucher board), content (testimonials,
                      coming-soon)
   static/            product & site photos (generated, see scripts/);
                      uploads/ holds admin- and customer-added photos
   scripts/           reset_customer_order_data.py — the guarded customer/order
-                     reset (dry-run by default; see docs/operations/)
-  tests/             205 backend tests: 124 end-to-end API (test_api.py),
-                     36 costing, 24 reset-script, 21 on the Stripe gateway
-                     seam (signed webhooks, plain-dict handback, payment
-                     methods)
+                     reset (dry-run by default; see docs/operations/);
+                     check_payments.py — the read-only payment readiness
+                     check (rehearsals on test keys / sandbox only)
+  tests/             the backend suite (`pytest tests/`): end-to-end API
+                     (test_api.py), payment integrity and hardening, the
+                     ledger/refund/reconciliation flows, PayPal through a
+                     fake gateway, both real gateways against a stubbed
+                     SDK / stubbed wire, costing, and the two ops scripts
 docs/
   business/          the pricing/costing specification set (v1.2 is live)
                      and the Phase 0/2 audit + delivery records
-  operations/        EUR-migration runbook and the production-reset procedure
+  operations/        EUR-migration runbook, the production-reset procedure
+                     and PAYMENTS_GO_LIVE.md (rehearsal and live switch)
 frontend/
   src/
     api/client.js    axios + token attach + silent refresh on 401
@@ -326,7 +361,12 @@ images/              original photography (source of truth for the pipeline)
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | empty / 587 | the one mail account behind receipts, order updates, password resets, restock notes, desk alerts and campaigns. **Empty host = nothing is sent** (dev logs each message; production logs recipient + subject only and says "Email is OFF" at boot) |
 | `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` | empty | "Continue with Facebook" — the button appears once both are set |
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | empty | phone sign-in codes over SMS; all three together switch it on |
-| `STRIPE_PAYMENT_METHODS` | `card` | comma list of hosted-page methods (`klarna`, `paypal`, `sepa_debit`, `ideal`, `bancontact` alongside `card`; unknown entries drop with a warning) |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | empty | the card option appears once the key is set (`sk_test_…` rehearses, `sk_live_…` charges); the signing secret of the endpoint delivering to `/api/payments/webhook` — without it Stripe's webhooks are refused |
+| `STRIPE_PAYMENT_METHODS` | `automatic` | Stripe offers what its dashboard has switched on; a comma list (`card`, `link`, `klarna`, `sepa_debit`, `ideal`, `bancontact`, `eps`, `p24`, `revolut_pay`, `amazon_pay`, `paypal`) only narrows that set; unknown entries drop with a warning |
+| `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | empty | PayPal as its own checkout option — appears once both are set |
+| `PAYPAL_ENVIRONMENT` | `sandbox` | `sandbox` or `live` — which PayPal the credentials belong to (any other word keeps PayPal off) |
+| `PAYPAL_WEBHOOK_ID` | empty | id of the PayPal webhook delivering to `/api/payments/paypal/webhook`; without it PayPal's webhooks are refused |
+| `PUBLIC_BASE_URL` | empty | where a provider sends customers back; empty = the address they were shopping on (leave it so unless the app cannot see its own public address) |
 | `SEED_DEMO_DATA`         | unset (dev yes, production no)   | demo customers/orders/reviews; production refuses `true` |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | empty                     | first admin on a fresh no-demo database (required then) |
 | `UPLOADS_DIR`            | empty (`static/uploads`)         | absolute path to a persistent disk on ephemeral platforms |
@@ -442,52 +482,49 @@ classification (fail-closed, per product, by design). To open it:
    per-rate snapshots, immutable) all switch together through the one
    shared pricing service. Existing orders are never recalculated.
 
-**Turning on online payments (Stripe)**
+**Turning on online payments (Stripe and PayPal)**
 
-The integration is live in code; it just needs keys. Rehearse in test mode
-first, then swap in live keys — the shop runs on cash on delivery until the
-secret key exists, so nothing breaks in the meantime.
+Both rails are live in code and appear the moment their keys exist; until
+then the shop runs on cash on delivery, so nothing breaks in the meantime.
+The full procedure — backup, deploy, rehearsal on test keys and in the
+PayPal sandbox, the live switch, rollback, and the questions that are the
+owner's to decide — is **`docs/operations/PAYMENTS_GO_LIVE.md`**. In short:
 
-1. Create a Stripe account (standard, not Connect) and confirm the
-   business profile — payouts need it.
-2. In Render (or your `.env`), set `STRIPE_SECRET_KEY` to the **test**
-   secret key (`sk_test_…`, Developers → API keys). Card checkout appears
-   the moment it's set.
-3. In the Stripe dashboard (Developers → Webhooks → Add endpoint), point an
-   endpoint at `https://<your-domain>/api/payments/webhook` with the events
-   `checkout.session.completed`, `checkout.session.expired`,
+1. *Stripe*: set `STRIPE_SECRET_KEY` (test key first). In the Stripe
+   dashboard point a webhook endpoint at
+   `https://<your-domain>/api/payments/webhook` with the events
+   `checkout.session.completed`,
    `checkout.session.async_payment_succeeded`,
-   `checkout.session.async_payment_failed`,
-   `checkout.session.async_payment_expired`,
-   `charge.refunded`, `charge.dispute.created`. Copy its signing secret
-   (`whsec_…`) into `STRIPE_WEBHOOK_SECRET`. (The two charge events keep
-   the book honest when money moves from the Stripe dashboard itself: a
-   by-hand refund syncs the order's payment status, and a dispute rings
-   the desk the moment it opens. `async_payment_failed` returns the reserved
-   bakes to the shelf the moment a delayed payment fails, rather than
-   waiting for the session's expiry.)
-4. Buy something with a Stripe test card (`4242 4242 4242 4242`, any future
-   expiry, any CVC): the order should flip to paid and email the receipt;
-   abandoning the page instead should leave it payable from the order page
-   and auto-cancel it after 30 minutes.
-5. Happy? Switch both Render env vars to the **live** keys (`sk_live_…` and
-   the live webhook endpoint's secret) — and keep cash on delivery on too;
-   most German customers still like it.
-
-Local payment methods (Klarna, PayPal, SEPA direct debit, iDEAL,
-Bancontact) can ride along on the hosted page: set `STRIPE_PAYMENT_METHODS`
-to a comma list (default `card`). Availability is Stripe's to decide per
-country — see their payment-methods docs before enabling one.
+   `checkout.session.async_payment_failed`, `checkout.session.expired`,
+   `charge.refunded`, `refund.updated`, `charge.dispute.created`,
+   `charge.dispute.closed`, and copy its signing secret into
+   `STRIPE_WEBHOOK_SECRET`. Which methods the page offers is decided in the
+   dashboard (Settings → Payment methods).
+2. *PayPal*: create a REST app at developer.paypal.com, set
+   `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` and `PAYPAL_ENVIRONMENT`
+   (`sandbox` first), add a webhook to
+   `https://<your-domain>/api/payments/paypal/webhook` with the events
+   listed in the runbook, and put its id in `PAYPAL_WEBHOOK_ID`.
+3. Run `python backend/scripts/check_payments.py` — read-only; it asks both
+   providers about the account and the webhook and says what, if anything,
+   blocks online payments. `--rehearse` additionally builds a one-euro test
+   pay page at each provider (test keys / sandbox only — with live
+   credentials it refuses).
+4. Rehearse on the site with a Stripe test card (`4242 4242 4242 4242`) and
+   a PayPal sandbox buyer, refund from the desk, then switch to live keys.
+   Keep cash on delivery on too.
 
 Notes: charges go out in `STRIPE_CURRENCY` (EUR only — any other value
-pauses checkout fail-closed); refunds on cancellation are issued
-through the gateway automatically; every gateway call lives behind
-`backend/app/stripe_gateway.py` so the rest of the app never imports the
-Stripe SDK — and everything crossing that seam is a plain dict (the SDK's
-Event/Session objects refuse `.get()` by design, which once turned every
-live webhook delivery into a 500 while the dict-returning test fake kept
-the suite green; `tests/test_stripe_gateway.py` now pins signed payloads
-through the real verification).
+pauses checkout fail-closed). Every provider call lives behind
+`backend/app/stripe_gateway.py` or `backend/app/paypal_gateway.py`, so the
+rest of the app never imports the Stripe SDK or builds a PayPal URL — and
+everything crossing those seams is a plain dict (the SDK's Event/Session
+objects refuse `.get()` by design, which once turned every live webhook
+delivery into a 500 while the dict-returning test fake kept the suite
+green; `tests/test_stripe_gateway.py` pins signed payloads through the real
+verification). The Stripe SDK is pinned to the 16.x line in
+`requirements.txt`: each SDK major pins its own Stripe API version, and the
+session this app builds is written for that one.
 
 **Turning on Facebook and phone sign-in**
 
@@ -514,7 +551,8 @@ before, so no customer ever sees a button that can't work.
 **Still to wire up for the real market**
 
 - An SMTP account (`SMTP_*`) — until it is set the shop sends no email.
-- Stripe live keys — rehearse with the test-mode walkthrough above first.
+- Stripe and PayPal live credentials — follow
+  `docs/operations/PAYMENTS_GO_LIVE.md`; rehearse first.
 - Facebook app + Twilio number, if you want those sign-in rails live.
 - To refresh photography: drop new shots into `images/` and re-run
   `python scripts/prepare_images.py` (requires Pillow).

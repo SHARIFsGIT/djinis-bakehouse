@@ -33,7 +33,7 @@ from test_api import (
     stripe_gateway,
 )
 
-from app.database import SessionLocal
+from app.database import SessionLocal, utcnow
 from app.models import CheckoutAttempt, Order, PaymentEvent, PaymentRefund, PaymentTransaction
 
 SIGNED = {"stripe-signature": "t=1,v1=fake"}
@@ -526,7 +526,7 @@ def test_the_report_names_what_does_not_add_up(monkeypatch):
     stuck = _place(headers)
     db = SessionLocal()
     try:
-        db.get(Order, stuck["id"]).created_at = datetime.datetime.utcnow() - datetime.timedelta(hours=2)
+        db.get(Order, stuck["id"]).created_at = utcnow() - datetime.timedelta(hours=2)
         db.commit()
     finally:
         db.close()
@@ -643,3 +643,343 @@ def test_the_ledger_and_the_order_agree_after_a_late_fee_cancellation(percent):
         assert "held_on_cancelled" not in _issues_for(order["id"])
     finally:
         client.put("/api/admin/settings", json={"late_cancel_fee_percent": before}, headers=admin)
+
+
+def test_a_refund_id_belongs_to_one_payment_only(monkeypatch):
+    """A provider's refund id names one refund on one payment. If an answer
+    ever carries an id the book already holds against another payment, it
+    is not booked a second time and the first record is left as it stands."""
+    first, _ = _paid_order("refund-id-first")
+    second, second_headers = _paid_order("refund-id-second")
+    monkeypatch.setattr(
+        stripe_gateway, "refund",
+        lambda intent, cents, sequence=0: {"id": "re_same_id_twice", "status": "succeeded"},
+    )
+
+    assert _refund(first["id"], amount=2.0).status_code == 200
+    clash = _refund(second["id"], amount=3.0)
+
+    assert clash.status_code == 502
+    book = _payments(second["id"])
+    assert book["payment_status"] == "paid" and book["refunded_amount"] == 0
+    (attempt,) = book["transactions"][0]["refunds"]
+    assert attempt["status"] == "failed" and "another payment" in attempt["failure_reason"]
+    assert "failed_refund" in _issues_for(second["id"])
+    assert _detail(second["id"], second_headers)["payment_status"] == "paid"
+    # the refund that id really names is exactly as it was
+    (kept,) = _payments(first["id"])["transactions"][0]["refunds"]
+    assert (kept["status"], kept["amount"], kept["provider_refund_id"]) == (
+        "succeeded", 2.0, "re_same_id_twice",
+    )
+
+
+# --------------------------------------------------------------------------
+# Payments that settle later (bank debits and friends)
+# --------------------------------------------------------------------------
+
+def _checked_out_with_a_delayed_method(order_id: int) -> str:
+    """The customer finished Stripe's page with a method whose money
+    arrives later: the session is complete, and not yet paid."""
+    session_id = last_session_id(order_id)
+    fake_sessions[session_id].update(status="complete", payment_status="unpaid")
+    _stripe_event(
+        "checkout.session.completed",
+        dict(fake_sessions[session_id], metadata={"order_id": str(order_id)}),
+    )
+    return session_id
+
+
+def test_a_payment_still_settling_is_processing_not_paid_and_not_payable_twice():
+    import datetime
+
+    from app.routers.payments import reconcile_stale_card_orders
+
+    headers = _customer("bank-debit")
+    order = _place(headers)
+    session_id = _checked_out_with_a_delayed_method(order["id"])
+
+    waiting = _detail(order["id"], headers)
+    assert waiting["payment_status"] == "pending"  # not paid on a promise
+    assert waiting["payment_state"] == "processing"
+    assert _payments(order["id"])["transactions"][0]["status"] == "processing"
+
+    # "complete payment" must not open a second pay page beside the debit
+    sessions_before = len([s for s in fake_sessions if s.startswith(f"cs_fake_{order['id']}_")])
+    again = client.post(f"/api/payments/{order['id']}/session", headers=headers)
+    assert again.status_code == 200 and again.json()["payment_url"] is None
+    assert again.json()["payment_state"] == "processing"
+    assert len([s for s in fake_sessions if s.startswith(f"cs_fake_{order['id']}_")]) == sessions_before
+    assert fake_sessions[session_id]["status"] == "complete"  # and the page was not expired
+
+    # long past the pay window it is still neither cancelled nor "stuck"
+    db = SessionLocal()
+    try:
+        db.get(Order, order["id"]).created_at = utcnow() - datetime.timedelta(hours=3)
+        db.commit()
+    finally:
+        db.close()
+    reconcile_stale_card_orders()
+    assert _detail(order["id"], headers)["status"] == "pending"
+    issues = _issues_for(order["id"])
+    assert "stuck_pending" not in issues
+    assert issues["processing_payment"]["severity"] == "watch"
+    synced = client.post(f"/api/admin/orders/{order['id']}/payments/sync", headers=admin_headers())
+    assert "still settling" in synced.json()["sync_outcome"]
+
+    # the bank confirms: paid, exactly as a card would have been
+    fake_sessions[session_id].update(payment_status="paid", payment_intent=f"pi_debit_{order['id']}")
+    _stripe_event(
+        "checkout.session.async_payment_succeeded",
+        dict(fake_sessions[session_id], metadata={"order_id": str(order["id"])}),
+    )
+    paid = _detail(order["id"], headers)
+    assert (paid["payment_status"], paid["payment_state"]) == ("paid", "succeeded")
+    assert _issues_for(order["id"]) == {}
+
+
+def test_a_delayed_payment_found_by_asking_is_processing_too():
+    """No webhook at all: the customer returns, the shop asks Stripe, and
+    Stripe says "complete, not yet paid"."""
+    headers = _customer("bank-debit-asked")
+    order = _place(headers)
+    fake_sessions[last_session_id(order["id"])].update(status="complete", payment_status="unpaid")
+
+    back = client.post(f"/api/payments/confirm/{order['id']}", headers=headers).json()
+
+    assert (back["payment_status"], back["payment_state"]) == ("pending", "processing")
+    again = client.post(f"/api/payments/{order['id']}/session", headers=headers)
+    assert again.status_code == 200 and again.json()["payment_url"] is None
+
+
+def test_the_customers_view_names_where_the_payment_stands():
+    headers = _customer("state-words")
+    cash = _place(headers, payment_method="cash_on_delivery")
+    assert _detail(cash["id"], headers)["payment_state"] is None  # no provider, no state
+
+    card = _place(headers)
+    assert _detail(card["id"], headers)["payment_state"] == "pending"
+    api.expire_order_via_webhook(card["id"])
+    assert _detail(card["id"], headers)["payment_state"] == "expired"
+
+    paid = _place(headers)
+    pay_order_via_webhook(paid["id"])
+    assert _detail(paid["id"], headers)["payment_state"] == "succeeded"
+    assert _refund(paid["id"], amount=1.0).status_code == 200
+    assert _detail(paid["id"], headers)["payment_state"] == "partially_refunded"
+
+
+def test_a_refund_that_failed_stops_being_flagged_once_a_later_one_goes_through(monkeypatch):
+    order, _headers = _paid_order("refund-retried")
+
+    def broken_refund(payment_intent, amount_cents, sequence=0):
+        raise stripe_gateway.GatewayUnavailable("Stripe is down")
+
+    monkeypatch.setattr(stripe_gateway, "refund", broken_refund)
+    assert _refund(order["id"], amount=2.0).status_code == 502
+    assert "failed_refund" in _issues_for(order["id"])
+
+    monkeypatch.undo()
+    assert _refund(order["id"], amount=2.0).status_code == 200  # the same part, sent again
+
+    # most of the payment is still held — and that is no longer a problem
+    assert _payments(order["id"])["refundable_amount"] == round(order["total"] - 2.0, 2)
+    assert "failed_refund" not in _issues_for(order["id"])
+
+
+# --------------------------------------------------------------------------
+# What the customer actually paid with
+# --------------------------------------------------------------------------
+
+def test_the_receipt_and_the_book_name_the_method_the_provider_reported(caplog):
+    """Stripe's page offers whatever the account has switched on, so "card"
+    is no longer a safe assumption — the method is read back from Stripe."""
+    headers = _customer("paid-with-klarna")
+    order = _place(headers)
+    api.fake_payment_methods[f"pi_fake_{order['id']}"] = "klarna"
+
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        pay_order_via_webhook(order["id"])
+
+    mine = _detail(order["id"], headers)
+    assert mine["timeline"][-1]["comment"] == "Payment received — paid with Klarna"
+    assert mine["payment_label"] == "Klarna"
+    assert _payments(order["id"])["transactions"][0]["method_label"] == "Klarna"
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "Paid by Klarna — this email is your proof of purchase" in logged
+
+    # a card in a wallet is still a card, and says which wallet
+    wallet = _place(headers)
+    api.fake_payment_methods[f"pi_fake_{wallet['id']}"] = "card:apple_pay"
+    pay_order_via_webhook(wallet["id"])
+    paid = _detail(wallet["id"], headers)
+    assert paid["timeline"][-1]["comment"] == "Payment received — paid by card"
+    assert paid["payment_label"] == "Card (Apple Pay)"
+
+    # a method this shop has no name for is "online", never a guess
+    newer = _place(headers)
+    api.fake_payment_methods[f"pi_fake_{newer['id']}"] = "some_new_method"
+    pay_order_via_webhook(newer["id"])
+    named = _detail(newer["id"], headers)
+    assert named["timeline"][-1]["comment"] == "Payment received — paid online"
+    assert named["payment_label"] == "Online payment"
+
+
+def test_a_method_stripe_cannot_name_never_holds_the_payment_up():
+    headers = _customer("method-unknown")
+    order = _place(headers)
+    api.fake_payment_methods[f"pi_fake_{order['id']}"] = None  # Stripe could not be asked
+
+    pay_order_via_webhook(order["id"])
+
+    paid = _detail(order["id"], headers)
+    assert paid["payment_status"] == "paid"
+    assert paid["payment_label"] is None  # the page falls back to the order's own way of paying
+    assert _payments(order["id"])["transactions"][0]["method_label"] is None
+
+
+def test_the_method_is_asked_once_per_landed_payment_and_never_for_an_unpaid_one():
+    headers = _customer("method-lookups")
+    unpaid = _place(headers)
+    before = len(api.method_lookups)
+    client.post(f"/api/payments/confirm/{unpaid['id']}", headers=headers)  # still unpaid
+    assert len(api.method_lookups) == before
+
+    pay_order_via_webhook(unpaid["id"])
+    assert api.method_lookups[before:] == [f"pi_fake_{unpaid['id']}"]
+
+
+def test_a_webhook_body_is_bounded_before_anything_reads_it():
+    huge = b"x" * (1024 * 1024 + 1)
+    for path in ("/api/payments/webhook", "/api/payments/paypal/webhook"):
+        refused = client.post(path, content=huge, headers={**SIGNED, "content-type": "application/json"})
+        assert refused.status_code == 413, path
+    # an ordinary event still goes through the same door
+    assert client.post(
+        "/api/payments/webhook", json={"type": "ping", "data": {"object": {}}}, headers=SIGNED
+    ).status_code == 200
+
+
+def test_every_event_the_shop_asks_stripe_for_is_one_it_acts_on(caplog):
+    """The list in the go-live runbook and the readiness check is this one.
+    If the handler ever stops acting on an entry, the list is lying."""
+    with caplog.at_level(logging.INFO, logger="bakery.payments"):
+        for event_type in stripe_gateway.WEBHOOK_EVENTS + stripe_gateway.WEBHOOK_EVENTS_OPTIONAL:
+            _stripe_event(event_type, {})
+    ignored = [r.getMessage() for r in caplog.records if r.getMessage().startswith("ignoring Stripe event")]
+    assert ignored == []
+    # and an event that is not on the list is simply acknowledged
+    with caplog.at_level(logging.INFO, logger="bakery.payments"):
+        _stripe_event("customer.created", {})
+    assert any("ignoring Stripe event customer.created" in r.getMessage() for r in caplog.records)
+
+
+# --------------------------------------------------------------------------
+# Refunds a bank takes its time over
+# --------------------------------------------------------------------------
+
+def test_the_customer_hears_of_a_bank_refund_when_it_is_confirmed_not_before(monkeypatch, caplog):
+    order, headers = _paid_order("bank-refund-email")
+    intent = f"pi_fake_{order['id']}"
+    issued = iter(("re_bank_1", "re_bank_2"))
+    monkeypatch.setattr(
+        stripe_gateway, "refund",
+        lambda pi, cents, sequence=0: {"id": next(issued), "status": "pending"},
+    )
+    number = order["order_number"]
+
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        assert _refund(order["id"], amount=4.0).status_code == 200
+    assert f"Refund sent — order {number}" not in caplog.text  # asked for is not sent
+
+    # Stripe's own word on that refund arrives
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        _stripe_event("refund.updated", {"id": "re_bank_1", "status": "succeeded"})
+        _stripe_event("refund.updated", {"id": "re_bank_1", "status": "succeeded"})  # and again
+    assert caplog.text.count(f"Refund sent — order {number}") == 1
+    assert "€4.00" in caplog.text
+
+    # a second one, confirmed only by the charge's running total
+    assert _refund(order["id"], amount=2.0).status_code == 200
+    charge = {"payment_intent": intent, "amount": _cents(order["total"]), "amount_refunded": 600}
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="bakery.email"):
+        _stripe_event("charge.refunded", charge)
+        _stripe_event("charge.refunded", charge)
+    assert caplog.text.count(f"Refund sent — order {number}") == 1
+    assert "€2.00" in caplog.text
+    mine = _detail(order["id"], headers)
+    assert mine["refunded_amount"] == 6.0
+    # said for what it was — the shop's own refund confirmed, not one made at Stripe
+    assert mine["timeline"][-1]["comment"] == "Stripe confirmed the refund — payment marked partially refunded"
+    refunds = _payments(order["id"])["transactions"][0]["refunds"]
+    assert [(r["status"], r["initiated_by"]) for r in refunds] == [
+        ("succeeded", "Djini Rahman"), ("succeeded", "Djini Rahman"),
+    ]
+
+
+# --------------------------------------------------------------------------
+# Disputes, once more
+# --------------------------------------------------------------------------
+
+def test_a_dispute_notice_repeated_without_an_id_is_still_one_dispute():
+    order, headers = _paid_order("dispute-no-id")
+    notice = {"payment_intent": f"pi_fake_{order['id']}", "reason": "general"}
+    _stripe_event("charge.dispute.created", notice)
+    _stripe_event("charge.dispute.created", notice)
+    lines = [e for e in _detail(order["id"], headers)["timeline"] if "dispute" in e["comment"].lower()]
+    assert len(lines) == 1
+
+
+def test_a_dispute_on_a_duplicate_payment_never_relabels_the_order_itself():
+    """The extra payment was sent straight back and keeps its own ledger
+    row. Whatever a bank later does to THAT payment, the order's own money
+    — a different payment — is still held, and the order must say so."""
+    headers = _customer("dispute-on-extra")
+    order = _place(headers)
+    first = last_session_id(order["id"])
+    client.post(f"/api/payments/{order['id']}/session", headers=headers)
+    second = last_session_id(order["id"])
+    for session_id, intent in ((second, "pi_dx_kept"), (first, "pi_dx_extra")):
+        fake_sessions[session_id].update(status="complete", payment_status="paid", payment_intent=intent)
+        _stripe_event(
+            "checkout.session.completed",
+            dict(fake_sessions[session_id], metadata={"order_id": str(order["id"])},
+                 amount_total=_cents(order["total"])),
+        )
+
+    _stripe_event("charge.dispute.created", {"payment_intent": "pi_dx_extra"})
+    _stripe_event(
+        "charge.dispute.closed",
+        {"id": "dp_extra", "payment_intent": "pi_dx_extra", "status": "lost", "amount": _cents(order["total"])},
+    )
+
+    book = _payments(order["id"])
+    rows = {tx["provider_payment_id"]: tx for tx in book["transactions"]}
+    assert book["payment_status"] == "paid"  # the order's own payment stands
+    assert rows["pi_dx_kept"]["status"] == "succeeded"
+    assert (rows["pi_dx_extra"]["status"], rows["pi_dx_extra"]["dispute_status"]) == ("refunded", "lost")
+    assert _detail(order["id"], headers)["payment_status"] == "paid"
+
+
+def test_the_bookkeeping_export_can_be_checked_against_the_providers_own_reports():
+    import csv
+    import io
+
+    order, headers = _paid_order("export-row")
+    assert _refund(order["id"], amount=2.5).status_code == 200
+    cash = _place(headers, payment_method="cash_on_delivery")
+
+    response = client.get("/api/admin/orders/export", headers=admin_headers())
+    header, *rows = list(csv.reader(io.StringIO(response.text)))
+    by_number = {row[0]: dict(zip(header, row)) for row in rows}
+
+    paid = by_number[order["order_number"]]
+    assert float(paid["refunded"]) == 2.5 and float(paid["total"]) == order["total"]
+    # the provider's own id for the money — what its payout report lists
+    assert (paid["payment_provider"], paid["payment_reference"]) == ("stripe", f"pi_fake_{order['id']}")
+    assert paid["payment_status"] == "partially_refunded"
+
+    door = by_number[cash["order_number"]]
+    assert (float(door["refunded"]), door["payment_provider"], door["payment_reference"]) == (0.0, "", "")
+    assert header[-1] == "currency"  # still the last word on every money column

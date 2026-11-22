@@ -358,11 +358,19 @@ def _payment_overview(order: Order) -> dict:
     provider = ledger.provider_for(order)
     db = object_session(order)
     if provider is None or db is None:
-        return {"payment_provider": provider, "refunded_amount": 0.0}
+        return {
+            "payment_provider": provider,
+            "refunded_amount": 0.0,
+            "payment_state": None,
+            "payment_label": None,
+        }
     tx = ledger.money_transaction(db, order)
+    story = tx or ledger.story_transaction(db, order)
     return {
         "payment_provider": provider,
         "refunded_amount": float(tx.refunded_amount or 0) if tx is not None else 0.0,
+        "payment_state": story.status if story is not None else None,
+        "payment_label": payment_ops.method_label(tx.method_type) if tx is not None else None,
     }
 
 
@@ -386,6 +394,9 @@ def _receipt_dict(order: Order) -> dict:
         "shipping": float(order.shipping_fee),
         "total": float(order.total),
         "payment_method": order.payment_method,
+        # What was actually used on the provider's page, when it said —
+        # "Klarna", "Card (Apple Pay)" — so the receipt never guesses.
+        "payment_label": _payment_overview(order)["payment_label"],
         "payment_status": order.payment_status,
         "currency": order.currency,
         # The per-rate ledger on the order marks VAT-inclusive figures —
@@ -431,10 +442,12 @@ def mark_order_paid(
     provider: str = "stripe",
     reference: str | None = None,
     payment_id: str | None = None,
+    method_type: str | None = None,
 ) -> bool:
     """A completed payment landed on this order — through Stripe (the
     session `reference`, the `payment_intent`) or PayPal (the PayPal order
-    `reference`, the capture `payment_id`).
+    `reference`, the capture `payment_id`). `method_type` is what the
+    customer actually used there, when the provider said.
 
     Idempotent — it only acts while the order is still pending, so the
     webhook and the customer-facing confirm check can race safely and the
@@ -450,12 +463,17 @@ def mark_order_paid(
             order.stripe_payment_intent_id = payment_intent
         reference = reference or order.stripe_session_id
         payment_id = payment_intent or payment_id
-    ledger.settle(db, order, provider=provider, reference=reference, payment_id=payment_id)
+    elif provider == "paypal":
+        method_type = method_type or "paypal"
+    ledger.settle(
+        db, order, provider=provider, reference=reference, payment_id=payment_id,
+        method_type=method_type,
+    )
     db.add(
         OrderEvent(
             order_id=order.id,
             status=order.status,
-            comment=f"Payment received — {payment_ops.PAID_PHRASE.get(provider, 'paid online')}",
+            comment=f"Payment received — {payment_ops.paid_phrase(provider, method_type)}",
         )
     )
     db.commit()
@@ -475,6 +493,7 @@ def refund_payment_on_cancelled_order(
     provider: str = "stripe",
     reference: str | None = None,
     payment_id: str | None = None,
+    method_type: str | None = None,
 ) -> bool:
     """A payment landed on an order that was already cancelled.
 
@@ -499,7 +518,13 @@ def refund_payment_on_cancelled_order(
             order.stripe_payment_intent_id = payment_intent
         reference = reference or order.stripe_session_id
         payment_id = payment_intent or payment_id
-    tx = ledger.settle(db, order, provider=provider, reference=reference, payment_id=payment_id)
+    elif provider == "paypal":
+        method_type = method_type or "paypal"
+    tx = ledger.settle(
+        db, order, provider=provider, reference=reference, payment_id=payment_id,
+        method_type=method_type,
+    )
+    label = payment_ops.PROVIDER_LABELS.get(provider, provider)
     fee = float(order.cancel_fee or 0)
     if tx.provider_payment_id:
         refund_note = _refund_paid_order(
@@ -508,24 +533,32 @@ def refund_payment_on_cancelled_order(
     else:
         # Nothing to refund against — never claim a refund that cannot have
         # been sent. The order honestly stays "paid" until the desk settles it.
-        label = payment_ops.PROVIDER_LABELS.get(provider, provider)
         refund_note = f"refund could not be sent — refund it from the {label} dashboard"
 
-    if refund_note:
+    if refund_note and refund_note.startswith(REFUND_ON_ITS_WAY):
+        # Accepted by the provider, not yet confirmed (a bank method): the
+        # desk has nothing to do, and nobody is told the money has arrived.
+        text = f"Payment arrived after the order was cancelled — {refund_note}"
+        title = f"Late payment on cancelled order {order.order_number} — refund on its way"
+        body = f"{label} accepted the refund and has yet to confirm it."
+    elif refund_note:
         text = f"Payment arrived after the order was cancelled — {refund_note}"
         title = f"Refund needed — payment landed on cancelled order {order.order_number}"
-        body = "The automatic refund could not be sent — refund it from the Stripe dashboard."
+        body = (
+            "The automatic refund could not be sent — send it from the order's payment "
+            f"panel, or from the {label} dashboard."
+        )
     elif fee:
         text = (
             "Payment arrived after the order was cancelled — refunded automatically, "
             f"less the late-cancellation fee of {money(fee, order.currency)}"
         )
         title = f"Late payment on cancelled order {order.order_number} — refunded automatically"
-        body = f"{money(fee, order.currency)} late-cancellation fee kept; the rest went back to the card."
+        body = f"{money(fee, order.currency)} late-cancellation fee kept; the rest went back through {label}."
     else:
         text = "Payment arrived after the order was cancelled — refunded in full automatically"
         title = f"Late payment on cancelled order {order.order_number} — refunded automatically"
-        body = "The full amount went back to the card."
+        body = f"The full amount went back through {label}."
     db.add(OrderEvent(order_id=order.id, status=order.status, comment=text))
     notify_admin(
         db,
@@ -546,7 +579,11 @@ def refund_payment_on_cancelled_order(
             background,
             comment=(
                 "Your payment arrived after this order was cancelled, so it has "
-                "been sent back to your card"
+                + (
+                    "been sent back to your PayPal account"
+                    if provider == "paypal"
+                    else "been sent back to your card or account"
+                )
                 + (", less the late-cancellation fee." if fee else ".")
             ),
         )
@@ -1004,6 +1041,11 @@ def order_detail(order_id: int, user: CurrentUser, db: DbSession):
     return _serialize(order, detailed=True, cancel_fee_preview=_late_cancel_fee(order, db))
 
 
+# How a timeline note opens when the provider accepted a refund it has not
+# confirmed yet — one constant, because a caller tells it from a failure by it.
+REFUND_ON_ITS_WAY = "refund is on its way"
+
+
 def _refund_paid_order(
     order: Order, fee: float, db, *, initiated_by: str = "order cancellation"
 ) -> str | None:
@@ -1056,9 +1098,12 @@ def _refund_paid_order(
     if refund.status == "failed":
         # The cancellation stands; the money doesn't. Say so on the
         # timeline rather than promising a refund that hasn't happened.
-        return f"refund could not be sent — retry it from the {label} dashboard"
+        return (
+            "refund could not be sent — retry it from this order's payment panel, "
+            f"or the {label} dashboard"
+        )
     if refund.status == "pending":
-        return f"refund is on its way — {label} has yet to confirm it"
+        return f"{REFUND_ON_ITS_WAY} — {label} has yet to confirm it"
     return None
 
 

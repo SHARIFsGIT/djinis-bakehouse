@@ -112,6 +112,17 @@ def fake_expire_session(session_id):
     return True
 
 
+# What the fake's customers "paid with": payment intent -> Stripe's word
+# for the method. An intent not listed here paid by plain card.
+fake_payment_methods: dict[str, str | None] = {}
+method_lookups: list[str] = []
+
+
+def fake_payment_method(payment_intent):
+    method_lookups.append(payment_intent)
+    return fake_payment_methods.get(payment_intent, "card")
+
+
 def fake_verify_webhook(payload, signature):
     import json
 
@@ -124,6 +135,7 @@ stripe_gateway.create_checkout_session = fake_create_checkout_session
 stripe_gateway.retrieve_session = fake_retrieve_session
 stripe_gateway.refund = fake_refund
 stripe_gateway.expire_session = fake_expire_session
+stripe_gateway.payment_method = fake_payment_method
 stripe_gateway.verify_webhook = fake_verify_webhook
 
 
@@ -2902,6 +2914,18 @@ def test_locked_refetch_refreshes_an_already_loaded_order():
         # and a row that vanished between lookup and lock is None, not a ghost
         other = SessionLocal()
         try:
+            # (its payment ledger goes first: a foreign key now forbids
+            # deleting an order out from under its transactions)
+            from sqlalchemy import select
+
+            from app.models import PaymentEvent, PaymentTransaction
+
+            for ledger_model in (PaymentEvent, PaymentTransaction):
+                for row in other.scalars(
+                    select(ledger_model).where(ledger_model.order_id == order["id"])
+                ):
+                    other.delete(row)
+            other.flush()
             other.delete(other.get(OrderRow, order["id"]))
             other.commit()
         finally:

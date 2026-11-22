@@ -86,6 +86,23 @@ KNOWN_PAYMENT_METHODS = frozenset(
     }
 )
 
+# The events the shop's webhook endpoint must be subscribed to at Stripe.
+# Every one of them is acted on by app/routers/payments.py; an endpoint
+# missing one leaves that part of the story to the reconciliation sweep —
+# or, for refunds and disputes made at Stripe, unseen.
+WEBHOOK_EVENTS = (
+    "checkout.session.completed",
+    "checkout.session.async_payment_succeeded",
+    "checkout.session.async_payment_failed",
+    "checkout.session.expired",
+    "charge.refunded",
+    "refund.updated",
+    "charge.dispute.created",
+    "charge.dispute.closed",
+)
+# Also understood when they arrive; not every account offers them.
+WEBHOOK_EVENTS_OPTIONAL = ("refund.failed", "charge.refund.updated")
+
 # One wait for every call to Stripe. The SDK's own default is 80 seconds —
 # far longer than a shopper watching a spinner (or a worker thread holding
 # an order's row lock) should ever wait.
@@ -370,6 +387,39 @@ def retrieve_session(session_id: str) -> dict:
     }
 
 
+def payment_method(payment_intent: str) -> str | None:
+    """What the customer actually paid with on Stripe's page, in Stripe's own
+    word — "card", "klarna", "sepa_debit", "link"… A card paid through a
+    wallet names the wallet too ("card:apple_pay").
+
+    Wording only: it lets a receipt say "Klarna" instead of guessing "card"
+    now that the page offers whatever the account has switched on. So it
+    never raises and never stands in a payment's way — None when Stripe
+    cannot be asked or does not say.
+    """
+    _ready()
+    try:
+        intent = stripe.PaymentIntent.retrieve(payment_intent, expand=["latest_charge"])
+        data = intent.to_dict()
+    except Exception as exc:
+        logger.info("could not read the payment method of %s: %s", payment_intent, type(exc).__name__)
+        return None
+    charge = data.get("latest_charge")
+    details = charge.get("payment_method_details") if isinstance(charge, dict) else None
+    if not isinstance(details, dict):
+        return None
+    kind = details.get("type")
+    if not isinstance(kind, str) or not kind:
+        return None
+    if kind == "card":
+        card = details.get("card")
+        wallet = card.get("wallet") if isinstance(card, dict) else None
+        wallet_type = wallet.get("type") if isinstance(wallet, dict) else None
+        if isinstance(wallet_type, str) and wallet_type:
+            return f"card:{wallet_type}"[:40]
+    return kind[:40]
+
+
 def expire_session(session_id: str) -> bool:
     """Close a checkout session so its pay page can no longer take money.
 
@@ -433,6 +483,71 @@ def refund(payment_intent: str, amount_cents: int, sequence: int = 0) -> dict:
         "id": getattr(created, "id", None),
         "status": getattr(created, "status", None) or "succeeded",
     }
+
+
+# --------------------------------------------------------------------------
+# Read-only diagnostics (scripts/check_payments.py) — nothing here can move
+# money or change the account.
+# --------------------------------------------------------------------------
+
+def account_status() -> dict:
+    """Whether the account behind the key may take payments at all:
+    {"charges_enabled", "payouts_enabled", "details_submitted", "country",
+    "default_currency"}. Raises GatewayUnavailable when Stripe refuses the
+    key or cannot be reached."""
+    _ready()
+    try:
+        data = stripe.Account.retrieve().to_dict()
+    except Exception as exc:
+        logger.info("reading the Stripe account failed: %s", type(exc).__name__)
+        raise GatewayUnavailable(f"Stripe refused or did not answer ({type(exc).__name__})") from None
+    return {
+        key: data.get(key)
+        for key in ("charges_enabled", "payouts_enabled", "details_submitted", "country", "default_currency")
+    }
+
+
+def webhook_endpoints() -> list[dict]:
+    """The webhook endpoints registered on the account, as plain values:
+    [{"id", "url", "status", "enabled_events"}]. (Their signing secrets are
+    never readable after creation — Stripe shows each exactly once.)"""
+    _ready()
+    try:
+        listing = stripe.WebhookEndpoint.list(limit=100).to_dict()
+    except Exception as exc:
+        logger.info("listing Stripe webhook endpoints failed: %s", type(exc).__name__)
+        raise GatewayUnavailable(f"Stripe refused or did not answer ({type(exc).__name__})") from None
+    return [
+        {
+            "id": item.get("id"),
+            "url": item.get("url"),
+            "status": item.get("status"),
+            "enabled_events": list(item.get("enabled_events") or []),
+        }
+        for item in listing.get("data") or []
+        if isinstance(item, dict)
+    ]
+
+
+def dashboard_payment_methods() -> list[str]:
+    """The methods switched on in the account's default payment-method
+    configuration — what "automatic" can offer at checkout, before Stripe
+    narrows it by customer, amount and device."""
+    _ready()
+    try:
+        listing = stripe.PaymentMethodConfiguration.list(limit=20).to_dict()
+    except Exception as exc:
+        logger.info("listing Stripe payment method configurations failed: %s", type(exc).__name__)
+        raise GatewayUnavailable(f"Stripe refused or did not answer ({type(exc).__name__})") from None
+    configs = [c for c in listing.get("data") or [] if isinstance(c, dict)]
+    chosen = next((c for c in configs if c.get("is_default")), configs[0] if configs else {})
+    return sorted(
+        name
+        for name, value in chosen.items()
+        if isinstance(value, dict)
+        and value.get("available")
+        and (value.get("display_preference") or {}).get("value") == "on"
+    )
 
 
 def verify_webhook(payload: bytes, signature: str) -> dict:

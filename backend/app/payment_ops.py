@@ -11,6 +11,7 @@ because it asked for it to. A refund is "succeeded" on the provider's word,
 record, with the reason — when it could not be sent.
 """
 
+import calendar
 import logging
 from decimal import Decimal
 
@@ -24,6 +25,55 @@ PROVIDER_LABELS = {"stripe": "Stripe", "paypal": "PayPal"}
 
 # How an order's payment reads in a sentence ("paid by card", "paid with PayPal").
 PAID_PHRASE = {"stripe": "paid by card", "paypal": "paid with PayPal"}
+
+# The methods a provider can report, as (name on a receipt, phrase in a
+# sentence). Stripe's page offers whatever the account has switched on, so
+# the method is read back from the provider rather than assumed to be a card.
+METHOD_WORDS = {
+    "card": ("Card", "paid by card"),
+    "link": ("Link", "paid with Link"),
+    "klarna": ("Klarna", "paid with Klarna"),
+    "paypal": ("PayPal", "paid with PayPal"),
+    "sepa_debit": ("SEPA Direct Debit", "paid by SEPA Direct Debit"),
+    "ideal": ("iDEAL", "paid with iDEAL"),
+    "bancontact": ("Bancontact", "paid with Bancontact"),
+    "eps": ("EPS", "paid with EPS"),
+    "p24": ("Przelewy24", "paid with Przelewy24"),
+    "revolut_pay": ("Revolut Pay", "paid with Revolut Pay"),
+    "amazon_pay": ("Amazon Pay", "paid with Amazon Pay"),
+}
+WALLET_NAMES = {
+    "apple_pay": "Apple Pay",
+    "google_pay": "Google Pay",
+    "samsung_pay": "Samsung Pay",
+    "link": "Link",
+}
+
+
+def method_label(method_type: str | None) -> str | None:
+    """A recorded method as a receipt names it — "Card (Apple Pay)",
+    "Klarna" — or None when none is on record (the caller then falls back
+    to the order's own way of paying)."""
+    if not method_type:
+        return None
+    kind, _, wallet = method_type.partition(":")
+    if kind not in METHOD_WORDS:
+        return "Online payment"
+    label = METHOD_WORDS[kind][0]
+    if wallet in WALLET_NAMES:
+        label += f" ({WALLET_NAMES[wallet]})"
+    return label
+
+
+def paid_phrase(provider: str, method_type: str | None) -> str:
+    """ "paid by card", "paid with Klarna"… for the order's timeline. With
+    no method on record the provider's long-standing phrase stands."""
+    kind = (method_type or "").partition(":")[0]
+    if kind in METHOD_WORDS:
+        return METHOD_WORDS[kind][1]
+    if method_type:
+        return "paid online"
+    return PAID_PHRASE.get(provider, "paid online")
 
 # The least each provider will take online, in the shop's currency. Stripe
 # refuses a charge under fifty cents; PayPal takes any positive amount. An
@@ -51,14 +101,21 @@ def available(method: str) -> bool:
     return method == PaymentMethod.CASH_ON_DELIVERY.value
 
 
+def test_modes() -> dict[str, bool]:
+    """Which online rails are a rehearsal right now (Stripe test keys, the
+    PayPal sandbox), by way of paying. The storefront says so on exactly
+    the option it is true of — a real card is declined on a test key, and a
+    customer deserves to know why — and never on one that is live: the two
+    providers go live separately."""
+    return {
+        PaymentMethod.CARD.value: stripe_gateway.mode() == "test",
+        PaymentMethod.PAYPAL.value: paypal_gateway.configured() and paypal_gateway.environment() != "live",
+    }
+
+
 def test_mode() -> bool:
-    """True while any configured online rail is a rehearsal (Stripe test
-    keys, PayPal sandbox) — the storefront says so, because a real card
-    is declined there and a customer deserves to know why."""
-    stripe_mode = stripe_gateway.mode()
-    if stripe_mode == "test":
-        return True
-    return paypal_gateway.configured() and paypal_gateway.environment() != "live"
+    """True while any configured online rail is a rehearsal."""
+    return any(test_modes().values())
 
 
 def public_base(request) -> str:
@@ -94,10 +151,16 @@ def open_pay_page(db, order: Order, base_url: str) -> str:
         # Each pay link of an order is its own PayPal order; the attempt
         # number keeps PayPal's idempotency key distinct per link while a
         # retry of the *same* attempt still collapses onto its first answer.
+        # The key also carries the second the order was placed: PayPal
+        # remembers keys per merchant account, not per database, and an
+        # order id alone repeats wherever the same credentials meet another
+        # database (a rehearsal copy, a rebuilt one) — where it would hand
+        # this customer some other order's pay page.
         attempt = 1 + sum(1 for tx in ledger.for_order(db, order.id) if tx.provider == "paypal")
+        placed = calendar.timegm(order.created_at.timetuple())
         try:
             created = paypal_gateway.create_order(
-                order, base_url, request_id=f"bakehouse-order-{order.id}-{attempt}"
+                order, base_url, request_id=f"bh-{order.id}-{placed}-{attempt}"
             )
         except paypal_gateway.InvalidOrderCurrency:
             raise UnchargeableCurrency from None
@@ -190,11 +253,13 @@ def issue_refund(
             else:
                 result = stripe_gateway.refund(tx.provider_payment_id, amount_cents) or {}
         else:
+            # Keyed on PayPal's own capture id — unique everywhere, unlike
+            # a row id — so a key can only ever mean a refund of THIS money.
             result = paypal_gateway.refund_capture(
                 tx.provider_payment_id,
                 amount_cents,
                 tx.currency,
-                request_id=f"bakehouse-refund-{tx.id}-{sequence}-{amount_cents}",
+                request_id=f"refund-{tx.provider_payment_id}-{sequence}-{amount_cents}",
             ) or {}
     except (stripe_gateway.GatewayUnavailable, paypal_gateway.GatewayUnavailable) as exc:
         logger.warning(
@@ -210,6 +275,23 @@ def issue_refund(
         failure_reason=f"{label} reported the refund as failed" if state == "failed" else None,
         **common,
     )
+    if row.transaction_id != tx.id:
+        # The provider answered with a refund the book already holds against
+        # a different payment, so it cannot be booked as this one's. Nothing
+        # is claimed: the attempt goes down as failed, for a person to look
+        # up at the provider before anyone tries again.
+        logger.error(
+            "refund on order %s: %s answered with refund %s, already booked on transaction %s",
+            order.order_number, label, result.get("id"), row.transaction_id,
+        )
+        return ledger.record_refund(
+            db, tx, status="failed",
+            failure_reason=(
+                f"{label} answered with a refund already recorded on another payment "
+                f"— check the {label} dashboard"
+            ),
+            **common,
+        )
     if sync_order:
         sync_order_payment_status(order, tx)
     return row

@@ -70,6 +70,11 @@ _ADDITIVE_COLUMNS = {
         "marketing_consent_evidence": "ALTER TABLE users ADD COLUMN marketing_consent_evidence TEXT",
         "marketing_token": "ALTER TABLE users ADD COLUMN marketing_token VARCHAR(64)",
     },
+    # A database that booted an earlier build of the payment ledger has the
+    # table without this column; a fresh one gets it from create_all.
+    "payment_transactions": {
+        "method_type": "ALTER TABLE payment_transactions ADD COLUMN method_type VARCHAR(40)",
+    },
     "orders": {
         "cancel_fee": "ALTER TABLE orders ADD COLUMN cancel_fee NUMERIC(10,2) NOT NULL DEFAULT 0",
         "stripe_session_id": "ALTER TABLE orders ADD COLUMN stripe_session_id VARCHAR(255)",
@@ -417,6 +422,8 @@ async def lifespan(app: FastAPI):
         if paypal_gateway.configured()
         else "off",
     )
+    if paypal_gateway.misconfigured():
+        logger.error(paypal_gateway.misconfigured())
     if stripe_gateway.configured() and not settings.stripe_webhook_secret:
         logger.warning(
             "STRIPE_WEBHOOK_SECRET is not set — Stripe's webhooks are refused; payments "
@@ -436,7 +443,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=f"{settings.bakery_name} API",
         version="3.13.3",
-        description="Bakery e-commerce API — customers, catalog, orders, coupons, online payments (Stripe), email / phone-code / Facebook sign-in, bulk enquiries with emailed replies, saved bakes, newsletter and admin.",
+        description="Bakery e-commerce API — customers, catalog, orders, coupons, online payments (Stripe and PayPal), email / phone-code / Facebook sign-in, bulk enquiries with emailed replies, saved bakes, newsletter and admin.",
         lifespan=lifespan,
         docs_url="/api/docs" if settings.enable_docs else None,
         redoc_url="/api/redoc" if settings.enable_docs else None,

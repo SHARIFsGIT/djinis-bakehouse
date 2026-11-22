@@ -173,7 +173,13 @@ def money_transaction(db, order: Order) -> PaymentTransaction | None:
     order's own payment intent; otherwise the newest settled row that is
     not already fully refunded (an extra payment that was sent straight
     back is settled too, but it holds nothing)."""
-    settled = [tx for tx in for_order(db, order.id) if tx.status in SETTLED_TRANSACTION_STATUSES]
+    return pick_money_transaction(order, for_order(db, order.id))
+
+
+def pick_money_transaction(order: Order, rows) -> PaymentTransaction | None:
+    """money_transaction's rule, over ledger rows the caller already holds
+    (oldest first) — for a report that reads every order at once."""
+    settled = [tx for tx in rows if tx.status in SETTLED_TRANSACTION_STATUSES]
     if order.payment_method == PaymentMethod.CARD.value and order.stripe_payment_intent_id:
         for tx in settled:
             if tx.provider_payment_id == order.stripe_payment_intent_id:
@@ -183,6 +189,20 @@ def money_transaction(db, order: Order) -> PaymentTransaction | None:
         if tx.status != TransactionStatus.REFUNDED.value:
             return tx
     return settled[-1] if settled else None
+
+
+def story_transaction(db, order: Order) -> PaymentTransaction | None:
+    """The transaction that says where this order's payment stands: the one
+    holding its money; failing that, the pay page still open; failing that,
+    the last one that closed."""
+    held = money_transaction(db, order)
+    if held is not None:
+        return held
+    rows = for_order(db, order.id)
+    for tx in reversed(rows):
+        if tx.status in OPEN_TRANSACTION_STATUSES:
+            return tx
+    return rows[-1] if rows else None
 
 
 def open_transaction(
@@ -240,7 +260,13 @@ def set_status(
 
 
 def settle(
-    db, order: Order, *, provider: str, reference: str | None, payment_id: str | None
+    db,
+    order: Order,
+    *,
+    provider: str,
+    reference: str | None,
+    payment_id: str | None,
+    method_type: str | None = None,
 ) -> PaymentTransaction:
     """The provider says this pay page was paid. Finds (or, for an order
     placed before the ledger existed, creates) its row and marks it
@@ -257,6 +283,8 @@ def settle(
         tx = open_transaction(
             db, order, provider=provider, reference=reference or f"order-{order.id}-{payment_id}"
         )
+    if method_type and not tx.method_type:
+        tx.method_type = method_type[:40]
     if tx.status in SETTLED_TRANSACTION_STATUSES:
         return tx
     if payment_id and not tx.provider_payment_id:
@@ -440,6 +468,20 @@ def record_refund(
                 PaymentRefund.provider_refund_id == provider_refund_id,
             )
         )
+    if row is not None and row.transaction_id != tx.id:
+        # A provider's refund id belongs to exactly one payment. If the book
+        # already holds this id against another, something upstream is
+        # wrong — the existing record is left exactly as it stands and the
+        # oddity is written down, rather than one payment's refund being
+        # quietly rewritten as another's.
+        audit(
+            db,
+            provider=tx.provider,
+            event_type="refund id already booked on another payment",
+            transaction=tx,
+            detail=f"{provider_refund_id} is recorded on transaction #{row.transaction_id}",
+        )
+        return row
     if row is None:
         row = PaymentRefund(
             transaction_id=tx.id,

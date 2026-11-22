@@ -9,10 +9,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  apiTime,
   applyShopConfig,
   couponSaving,
   hasNonActiveCurrency,
   money,
+  parseAmountToCents,
+  paysOnline,
+  providerLabel,
   shopConfig,
   taxLabel,
 } from "./format.js";
@@ -119,4 +123,40 @@ test("a coupon's saving reads in its own kind — percent or euro amount", () =>
     "€5.00 off",
   );
   assert.equal(couponSaving({ percent_off: 15, fixed_amount_off: null }), "15% off");
+});
+
+test("an API timestamp with no zone on it is the UTC moment it was written as", () => {
+  const moment = Date.UTC(2026, 10, 22, 10, 14, 3);
+  // The server's own shape: UTC, unlabelled — with and without fractions.
+  assert.equal(apiTime("2026-11-22T10:14:03").getTime(), moment);
+  assert.equal(apiTime("2026-11-22T10:14:03.250000").getTime(), moment + 250);
+  // A timestamp that names its zone is taken at its word, never shifted twice.
+  assert.equal(apiTime("2026-11-22T10:14:03Z").getTime(), moment);
+  assert.equal(apiTime("2026-11-22T11:14:03+01:00").getTime(), moment);
+  assert.equal(apiTime("2026-11-22T05:14:03-0500").getTime(), moment);
+});
+
+test("typed refund amounts become exact cents, or nothing at all", () => {
+  assert.equal(parseAmountToCents("12.50"), 1250);
+  assert.equal(parseAmountToCents("12,5"), 1250); // the comma a German keyboard types
+  assert.equal(parseAmountToCents(" 7 "), 700);
+  assert.equal(parseAmountToCents("0.07"), 7);
+  assert.equal(parseAmountToCents("0"), 0); // an amount — the caller refuses zero itself
+  // The classic float trap: 19.99 * 100 is 1998.9999999999998.
+  assert.equal(parseAmountToCents("19.99"), 1999);
+  assert.equal(parseAmountToCents("4.35"), 435);
+  // Not amounts: never rounded, never guessed.
+  for (const bad of ["", "abc", "1.005", "-3", "1e3", "1,234.50", "€5", "5.", ".5", null, undefined]) {
+    assert.equal(parseAmountToCents(bad), null, String(bad));
+  }
+});
+
+test("only the provider rails pay online, and each provider has its name", () => {
+  assert.equal(paysOnline("card"), true);
+  assert.equal(paysOnline("paypal"), true);
+  assert.equal(paysOnline("cash_on_delivery"), false);
+  assert.equal(paysOnline(undefined), false);
+  assert.equal(providerLabel("stripe"), "Stripe");
+  assert.equal(providerLabel("paypal"), "PayPal");
+  assert.equal(providerLabel(null), "the payment provider");
 });
