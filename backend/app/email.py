@@ -21,13 +21,28 @@ logger = logging.getLogger("bakery.email")
 _BRAND = "#7f2230"
 
 
+def _one_line(value: str) -> str:
+    """A header value on one line, always. Subjects carry customer-typed
+    words (a name in "New customer — …"); the email library refuses a
+    header with a line break in it outright, which would lose the whole
+    message — so any run of whitespace collapses to a single space."""
+    return " ".join(str(value).split())
+
+
 def send_email(to: str, subject: str, html: str, text: str) -> None:
     settings = get_settings()
+    subject = _one_line(subject)
     if not settings.smtp_host:
         logger.warning(
             "SMTP_HOST is not set — email to %s logged, not sent", to,
         )
-        logger.info("email to %s | %s\n%s", to, subject, text)
+        if settings.is_production:
+            # Never the body here: it can carry a password-reset link or a
+            # sign-in code, and a production log is read by more eyes than
+            # the one mailbox the message was meant for.
+            logger.info("email to %s | %s (body withheld in production)", to, subject)
+        else:
+            logger.info("email to %s | %s\n%s", to, subject, text)
         return
 
     message = EmailMessage()
@@ -67,11 +82,11 @@ def reset_password_email(first_name: str, link: str, minutes: int) -> tuple[str,
     <p style="margin:0 0 4px;font-size:15px;color:{_BRAND};font-weight:bold;">{shop}</p>
     <h1 style="margin:0 0 12px;font-size:22px;color:#33322e;">Reset your password</h1>
     <p style="margin:0 0 16px;font-size:15px;line-height:1.6;">
-      Hi {first_name}, someone asked to reset the password for your account.
+      Hi {escape(first_name)}, someone asked to reset the password for your account.
       The button below works for the next {minutes} minutes.
     </p>
     <p style="margin:0 0 16px;">
-      <a href="{link}"
+      <a href="{escape(link)}"
          style="display:inline-block;background:{_BRAND};color:#fffdf9;text-decoration:none;
                 padding:12px 28px;border-radius:999px;font-size:15px;font-weight:bold;">
         Choose a new password
@@ -79,7 +94,7 @@ def reset_password_email(first_name: str, link: str, minutes: int) -> tuple[str,
     </p>
     <p style="margin:0 0 4px;font-size:13px;line-height:1.6;color:#8a837a;">
       If the button doesn't work, paste this into your browser:<br>
-      <a href="{link}" style="color:{_BRAND};word-break:break-all;">{link}</a>
+      <a href="{escape(link)}" style="color:{_BRAND};word-break:break-all;">{escape(link)}</a>
     </p>
     <p style="margin:16px 0 0;font-size:13px;line-height:1.6;color:#8a837a;">
       Didn't ask? Ignore this email — your password stays as it is.
@@ -184,9 +199,11 @@ def order_receipt_email(receipt: dict) -> tuple[str, str, str]:
             if bold
             else ""
         )
+        # Labels carry catalog and customer text (a bake's name, a coupon
+        # code) — escaped here, once, so no row can smuggle markup in.
         return (
             f'<tr><td style="padding:4px 0;{style}font-size:14px;color:#33322e;">'
-            f"{label}</td>"
+            f"{escape(label)}</td>"
             f'<td style="padding:4px 0;text-align:right;{style}font-size:14px;'
             f'color:#33322e;">{value}</td></tr>'
         )
@@ -265,7 +282,7 @@ def order_receipt_email(receipt: dict) -> tuple[str, str, str]:
       {payment_line}
     </p>
     <p style="margin:16px 0 0;font-size:13px;color:#8a837a;">
-      Thank you for baking with us, {receipt['first_name']}.
+      Thank you for baking with us, {escape(receipt['first_name'])}.
     </p>
   </div>
 </div>

@@ -9,7 +9,7 @@ from datetime import date, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 
 from ..config import get_settings
 from ..database import utcnow
@@ -32,6 +32,7 @@ from ..models import (
     OrderEvent,
     OrderItem,
     OrderStatus,
+    PaymentMethod,
     PaymentStatus,
     Product,
     ProductVatEvent,
@@ -92,7 +93,7 @@ from ..schemas import (
 )
 from ..loyalty import loyalty_tier as _loyalty
 from ..security import CurrentAdmin, DbSession
-from ..serialize import product_to_card, review_summary, verified_buyers
+from ..serialize import csv_safe, product_to_card, review_summary, verified_buyers
 from .. import costing
 from ..vat import REVIEW_STATUS_APPROVED, preview_rate, validate_classification
 from ..uploads import MAX_PRODUCT_PHOTO_BYTES, save_photo
@@ -174,9 +175,13 @@ def stats(admin: CurrentAdmin, db: DbSession):
     ]
     active_bucket = buckets.get(active, {"total": 0.0, "count": 0})
 
+    # Counted by the database — the old pass loaded every order in the book
+    # a second time just to tally one column.
     by_status = {s.value: 0 for s in OrderStatus}
-    for o in db.scalars(select(Order)):
-        by_status[o.status] = by_status.get(o.status, 0) + 1
+    for status_value, tally in db.execute(
+        select(Order.status, func.count(Order.id)).group_by(Order.status)
+    ):
+        by_status[status_value] = by_status.get(status_value, 0) + int(tally)
 
     top_rows = (
         db.query(OrderItem.product_name, func.sum(OrderItem.quantity).label("qty"))
@@ -403,15 +408,17 @@ def update_order_status(
     order = db.get(Order, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
+    # Every dial judges under the lock: the customer's cancel click or the
+    # expiry sweep may have landed a moment earlier, and an unlocked dial
+    # would write "baking" straight over that cancellation — a refunded,
+    # restocked order back on the bake list.
+    order = _lock_for_cancellation(order, db)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
 
     # The status dial is the console's cancel path — run the full
     # cancellation (stock back, refund settled), free of the late fee.
     if payload.status == OrderStatus.CANCELLED:
-        # Judge under the lock: the customer's cancel click or the expiry
-        # sweep may have landed a moment earlier.
-        order = _lock_for_cancellation(order, db)
-        if order is None:
-            raise HTTPException(status_code=404, detail="Order not found")
         if order.status == OrderStatus.CANCELLED.value:
             raise HTTPException(status_code=400, detail="Order is already cancelled")
         _cancel_order(order, db, by_customer=False, comment=payload.comment)
@@ -460,14 +467,20 @@ def update_payment_status(
     order = db.get(Order, order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
+    # Locked like every other write to an order's money: the payment webhook
+    # may be landing on this very row.
+    order = _lock_for_cancellation(order, db)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
     order.payment_status = payload.payment_status
-    db.add(
-        OrderEvent(
-            order_id=order.id,
-            status=order.status,
-            comment=f"Payment marked {_plain_word(payload.payment_status)}",
-        )
-    )
+    comment = f"Payment marked {_plain_word(payload.payment_status)}"
+    if order.payment_method == PaymentMethod.CARD.value:
+        # This control only relabels the book — it never reaches Stripe. On
+        # a card order that difference is the customer's money, so the
+        # timeline says so in as many words (a refund marked here that was
+        # never sent at Stripe would otherwise look settled forever).
+        comment += " by hand at the desk — no money was moved by this change"
+    db.add(OrderEvent(order_id=order.id, status=order.status, comment=comment))
     db.commit()
     db.refresh(order)
     return _serialize(order, detailed=True)
@@ -488,12 +501,13 @@ def export_orders(admin: CurrentAdmin, db: DbSession):
             [
                 order.order_number,
                 order.created_at.strftime("%Y-%m-%d %H:%M"),
-                order.user.full_name if order.user else "",
-                order.user.email if order.user else "",
+                # Customer-typed text: shown by the spreadsheet, never run.
+                csv_safe(order.user.full_name if order.user else ""),
+                csv_safe(order.user.email if order.user else ""),
                 order.status,
                 order.payment_method,
                 order.payment_status,
-                order.coupon_code or "",
+                csv_safe(order.coupon_code or ""),
                 float(order.subtotal),
                 float(order.discount_amount or 0),
                 float(order.tax),
@@ -714,10 +728,28 @@ def update_product(
     was_sold_out = product.stock <= 0 or not product.is_available
 
     data = payload.model_dump()
+    stock_was = data.pop("stock_was")
     data["name"] = data["name"].strip()
+    if stock_was is not None:
+        # The form's stock is a change against the count it was opened
+        # with, applied to the shelf as it stands in the database right now
+        # — one atomic UPDATE, the same discipline checkout's decrement
+        # uses — so an edit can never undo sales made while it sat open.
+        # (Never below zero: a shelf that sold out meanwhile stays empty.)
+        delta = data.pop("stock") - stock_was
+        if delta:
+            adjusted = Product.stock + delta
+            db.execute(
+                update(Product)
+                .where(Product.id == product.id)
+                .values(stock=case((adjusted < 0, 0), else_=adjusted))
+            )
     for field, value in data.items():
         setattr(product, field, value)
     db.commit()
+    # The shelf count may have moved under this session (the adjustment
+    # above, or an order) — everything below judges the database's word.
+    db.refresh(product)
     _answer_restock_alerts(product, was_sold_out, db, background, request)
     db.refresh(product)
     return _admin_card(product, db)
@@ -980,6 +1012,16 @@ def update_coupon(coupon_id: int, payload: CouponUpdateRequest, admin: CurrentAd
     if coupon is None:
         raise HTTPException(status_code=404, detail="Coupon not found")
     updates = payload.model_dump(exclude_unset=True)
+    # A personal voucher's terms were set under the marketing desk's margin
+    # cap (routers/marketing.create_voucher) — this general-purpose edit must
+    # not be a way around that brake. Pausing and resuming stay possible;
+    # anything else is refused in plain words.
+    if coupon.restricted_to_user_id is not None and set(updates) - {"is_active"}:
+        raise HTTPException(
+            status_code=400,
+            detail="This is a personal voucher — its terms are fixed when it is minted "
+            "on the Marketing desk. Here it can only be paused or resumed.",
+        )
     # Re-saving a minimum from the desk (re)approves it as a euro threshold —
     # the reviewed escape hatch for coupons carrying pre-cutover USD numerals.
     # Clearing it to None takes the question away entirely.
@@ -1095,8 +1137,16 @@ def link_loyalty_voucher(
     desk; this only decides which tier gets which."""
     if tier not in VOUCHER_TIERS:
         raise HTTPException(status_code=404, detail="Unknown loyalty tier")
-    if payload.coupon_id is not None and db.get(Coupon, payload.coupon_id) is None:
+    chosen = db.get(Coupon, payload.coupon_id) if payload.coupon_id is not None else None
+    if payload.coupon_id is not None and chosen is None:
         raise HTTPException(status_code=404, detail="Coupon not found")
+    # A tier's code goes to every regular in the tier — a voucher minted for
+    # one customer would be refused at checkout for all the others.
+    if chosen is not None and chosen.restricted_to_user_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="A personal voucher can't be a tier's code — choose a shop-wide coupon",
+        )
 
     voucher = db.get(LoyaltyVoucher, tier)
     if payload.coupon_id is None:
@@ -1206,22 +1256,24 @@ def export_bulk_enquiries(admin: CurrentAdmin, db: DbSession):
         writer.writerow(
             [
                 e.created_at.strftime("%Y-%m-%d %H:%M"),
-                e.name,
-                e.email,
-                e.phone or "",
+                # Everything a guest typed into the public form is text to
+                # the spreadsheet, never a formula (csv_safe).
+                csv_safe(e.name),
+                csv_safe(e.email),
+                csv_safe(e.phone or ""),
                 e.event_date.isoformat(),
                 e.event_type,
                 e.guests,
                 e.status,
-                (e.items_note or "").replace("\n", " "),
-                (e.message or "").replace("\n", " "),
-                (e.admin_note or "").replace("\n", " "),
+                csv_safe((e.items_note or "").replace("\n", " ")),
+                csv_safe((e.message or "").replace("\n", " ")),
+                csv_safe((e.admin_note or "").replace("\n", " ")),
             ]
         )
     return StreamingResponse(
         iter([buffer.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename=bakehouse-bulk-enquiries.csv"'},
+        headers={"Content-Disposition": 'attachment; filename="bakehouse-bulk-enquiries.csv"'},
     )
 
 

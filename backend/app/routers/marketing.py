@@ -35,6 +35,7 @@ from ..database import utcnow
 from ..email import bulk_enquiry_ack_email, send_email
 from ..notifications import notify_admin
 from ..security import CurrentAdmin, DbSession, OptionalUser, client_key
+from ..serialize import csv_safe
 from .. import facebook_gateway, sms_gateway, stripe_gateway
 
 router = APIRouter(prefix="/api", tags=["storefront"])
@@ -254,8 +255,9 @@ def export_subscribers(admin: CurrentAdmin, db: DbSession):
     writer = csv.writer(buffer)
     writer.writerow(["email", "signed_up", "source"])
     for s in db.scalars(select(Subscriber).order_by(Subscriber.created_at.desc())):
+        # Both text columns come from the public signup form (csv_safe).
         writer.writerow(
-            [s.email, s.created_at.strftime("%Y-%m-%d %H:%M"), s.source or ""]
+            [csv_safe(s.email), s.created_at.strftime("%Y-%m-%d %H:%M"), csv_safe(s.source or "")]
         )
     return StreamingResponse(
         iter([buffer.getvalue()]),

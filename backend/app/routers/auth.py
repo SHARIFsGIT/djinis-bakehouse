@@ -72,6 +72,12 @@ RESET_TOKEN_MINUTES = 30
 PHONE_OTP_MINUTES = 10
 PHONE_OTP_MAX_ATTEMPTS = 5
 PHONE_RESEND_SECONDS = 60
+# ...and how many codes one number may be sent in an hour. Each code allows
+# five guesses, so without this ceiling a patient script gets five guesses
+# a minute at an account for as long as it likes (and, with Twilio on, bills
+# the shop a text a minute while it does). Enforced by the "otp_number"
+# limiter in the app factory.
+PHONE_CODES_PER_HOUR = 5
 # The one-time code a social callback hands the browser — a short window,
 # because the SPA redeems it the instant the page loads.
 LOGIN_CODE_SECONDS = 60
@@ -198,6 +204,18 @@ def reset_password(payload: ResetPasswordRequest, db: DbSession, request: Reques
     return {"message": "Password updated — log in with the new one."}
 
 
+def _require_phone_rail() -> None:
+    """Phone sign-in answers only where its texts can actually be sent.
+
+    On a production deployment without Twilio a code would reach nothing
+    but the server log — the customer could never receive it, yet anyone
+    could keep guessing at it. The storefront already hides the rail there
+    (/api/store → phone_login); the API must not leave the same door ajar.
+    Dev keeps working without Twilio: the code rides back in the response."""
+    if settings.is_production and not sms_gateway.configured():
+        raise HTTPException(status_code=404, detail="Phone sign-in is not configured")
+
+
 @router.post("/phone/request")
 def phone_request(
     payload: PhoneLoginRequest, db: DbSession, request: Request, background: BackgroundTasks
@@ -208,6 +226,7 @@ def phone_request(
     whether the number belongs to an account, and a code that went out
     seconds ago is never sent twice in a row.
     """
+    _require_phone_rail()
     _check_rate_limit(request, "otp")
     message = {
         "message": f"If that number is with us, a sign-in code is on its way — "
@@ -226,6 +245,13 @@ def phone_request(
         and (now - user.phone_otp_created_at).total_seconds() < PHONE_RESEND_SECONDS
     ):
         return message  # a fresh code is still out — don't text twice in a minute
+    # The hourly ceiling per number (PHONE_CODES_PER_HOUR). Keyed on the
+    # number itself, not the caller's address, so it holds whoever asks and
+    # from wherever — and answered with the same words as everything else,
+    # so it tells a prober nothing.
+    if not request.app.state.limiters["otp_number"].allow(payload.phone):
+        logger.warning("sign-in code ceiling reached for a number — no code sent this hour")
+        return message
 
     code = f"{secrets.randbelow(1_000_000):06d}"
     # Only the digest is stored; the secret lives in the text message alone.
@@ -252,6 +278,7 @@ def phone_request(
 def phone_verify(payload: PhoneLoginVerify, db: DbSession, request: Request):
     """Turn a texted code into a session. Wrong tries are counted — five
     and the code burns, so guessing six digits is never worth it."""
+    _require_phone_rail()
     _check_rate_limit(request, "login")
 
     def refused() -> HTTPException:

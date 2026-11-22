@@ -1128,14 +1128,27 @@ function RecipesTab({ products, selectedId, onSelect }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Only the newest pick may paint. Switching from A to B while A is still
+  // on the wire used to let A's answer land last: the picker said B, the
+  // lines were A's, and "Save recipe" wrote A's recipe over B's.
+  const loadTicket = useRef(0);
+
   const loadProduct = async (productId) => {
+    const ticket = ++loadTicket.current;
     setRecipe(null);
     setDetail(null);
     try {
       const [{ data: recipeData }, { data: detailData }] = await Promise.all([
-        client.get(`/admin/costing/products/${productId}/recipe`).catch(() => ({ data: null })),
+        client.get(`/admin/costing/products/${productId}/recipe`).catch((err) => {
+          // "No recipe yet" is the one refusal that means an empty form.
+          // Any other failure must not: an empty form saved over a recipe
+          // that merely failed to load would delete its lines.
+          if (err?.response?.status === 404) return { data: null };
+          throw err;
+        }),
         client.get(`/admin/products/${productId}`),
       ]);
+      if (ticket !== loadTicket.current) return; // a newer pick superseded this one
       setDetail(detailData);
       if (recipeData) {
         setRecipe({
@@ -1157,7 +1170,8 @@ function RecipesTab({ products, selectedId, onSelect }) {
         setRecipe({ ...EMPTY_RECIPE, items: [] });
       }
     } catch (err) {
-      toast.error(apiError(err));
+      if (ticket !== loadTicket.current) return;
+      toast.error(apiError(err, "That recipe didn't load — pick the product again to retry"));
     }
   };
 

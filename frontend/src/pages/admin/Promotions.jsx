@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import client, { apiError } from "../../api/client";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import Drawer from "../../components/Drawer";
+import { LoadError } from "../../components/Loading";
 import { useToast } from "../../context/ToastContext";
 import { formatDate, money } from "../../lib/format";
 import { REDEMPTION_RULES, oncePerCustomerFromRule, redemptionRule } from "../../lib/redemptionRules";
@@ -224,6 +225,7 @@ export default function Promotions() {
   const toast = useToast();
   const [coupons, setCoupons] = useState(null);
   const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(null);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
   const [drawer, setDrawer] = useState(null); // null | {} (create) | coupon (edit)
@@ -231,12 +233,18 @@ export default function Promotions() {
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [togglingId, setTogglingId] = useState(null);
 
-  const load = () =>
-    client
+  // This desk is for the shop-wide codes. A voucher minted for one customer
+  // (restricted_to_user_id set) lives on the Marketing desk, which enforces
+  // its margin cap — listed here it read "0% off" when it was a euro-amount
+  // voucher, counted toward these totals, and could be edited past that cap.
+  const load = () => {
+    setFailed(null);
+    return client
       .get("/admin/coupons")
-      .then(({ data }) => setCoupons(data))
-      .catch((e) => toast.error(apiError(e)))
+      .then(({ data }) => setCoupons(data.filter((c) => c.restricted_to_user_id == null)))
+      .catch((e) => setFailed(apiError(e, "The coupon tin didn't load.")))
       .finally(() => setLoaded(true));
+  };
 
   useEffect(() => {
     load();
@@ -359,11 +367,15 @@ export default function Promotions() {
             <span className="loading loading-spinner loading-md text-secondary" />
             <span className="ml-3 text-sm opacity-60">Fetching the coupon tin…</span>
           </div>
+        ) : failed ? (
+          // The list never arrived — say so (and offer another go) rather
+          // than render an empty tin, or crash reading a list that isn't there.
+          <LoadError message={failed} onRetry={load} />
         ) : visible.length === 0 ? (
           <div className="flex h-64 flex-col items-center justify-center gap-3 text-center">
             <Percent size={28} className="opacity-30" />
             <p className="text-sm opacity-60">
-              {coupons.length === 0
+              {(coupons ?? []).length === 0
                 ? "No promotions yet — create the first one."
                 : "Nothing matches this filter."}
             </p>

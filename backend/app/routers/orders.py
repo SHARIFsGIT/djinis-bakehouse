@@ -93,8 +93,16 @@ def _coupon_used_by(db, code: str, user_id: int) -> bool:
     )
 
 
-def _load_coupon(db, code: str, user: User | None = None) -> Coupon:
-    coupon = db.scalar(select(Coupon).where(Coupon.code == code.strip().upper()))
+def _load_coupon(db, code: str, user: User | None = None, *, lock: bool = False) -> Coupon:
+    """`lock` is placement's alone: the coupon row is held FOR UPDATE until
+    the order commits, so two checkouts racing on one code queue up here
+    and the second one counts the first one's order — a one-per-customer
+    or capped voucher cannot be spent twice at once (SQLite ignores FOR
+    UPDATE; Postgres doesn't). Previews and quotes never lock."""
+    query = select(Coupon).where(Coupon.code == code.strip().upper())
+    if lock:
+        query = query.with_for_update()
+    coupon = db.scalar(query)
     if coupon is None or not coupon.is_active:
         raise HTTPException(status_code=404, detail="This coupon code is not valid")
     if coupon.once_per_customer and user is not None and _coupon_used_by(db, coupon.code, user.id):
@@ -173,12 +181,14 @@ def _resolve_basket(db, items) -> tuple[dict[int, int], dict[int, Product]]:
     return merged, by_id
 
 
-def _basket_coupon(db, code: str | None, user: User | None, subtotal: float) -> Coupon | None:
+def _basket_coupon(
+    db, code: str | None, user: User | None, subtotal: float, *, lock: bool = False
+) -> Coupon | None:
     """Load a coupon the way a basket spends one: valid (and, for a signed-in
     shopper, not one-per-customer-spent) and unlocked by this subtotal."""
     if not code:
         return None
-    coupon = _load_coupon(db, code, user)
+    coupon = _load_coupon(db, code, user, lock=lock)
     if coupon.min_subtotal and subtotal < float(coupon.min_subtotal):
         raise HTTPException(
             status_code=400,
@@ -406,6 +416,79 @@ def mark_order_paid(
     return True
 
 
+def refund_payment_on_cancelled_order(
+    order: Order, db, background: BackgroundTasks, *, payment_intent: str | None = None
+) -> bool:
+    """A Stripe payment landed on an order that was already cancelled.
+
+    The pay page outlived the order — a tab left open while the customer
+    (or the desk) cancelled, and Stripe could not close it in time. The
+    money must never just sit there as "paid" on a box nobody will bake:
+    the payment is recorded (it happened), sent straight back less any
+    late-cancellation fee the cancellation itself already recorded, written
+    on the timeline in plain words, and the desk hears about it either way.
+    No receipt goes out — there is nothing to receipt.
+
+    Idempotent like mark_order_paid: it acts only while the payment is
+    still pending, so a replayed webhook and the customer's confirm check
+    cannot refund twice (the refund's own idempotency key is the second
+    lock on that door).
+    """
+    if order.payment_status != PaymentStatus.PENDING.value:
+        return False
+    order.payment_status = PaymentStatus.PAID.value
+    if payment_intent:
+        order.stripe_payment_intent_id = payment_intent
+    fee = float(order.cancel_fee or 0)
+    if order.stripe_payment_intent_id:
+        refund_note = _refund_paid_order(order, fee)
+    else:
+        # Nothing to refund against — never claim a refund that cannot have
+        # been sent. The order honestly stays "paid" until the desk settles it.
+        refund_note = "refund could not be sent — refund it from the Stripe dashboard"
+
+    if refund_note:
+        text = f"Payment arrived after the order was cancelled — {refund_note}"
+        title = f"Refund needed — payment landed on cancelled order {order.order_number}"
+        body = "The automatic refund could not be sent — refund it from the Stripe dashboard."
+    elif fee:
+        text = (
+            "Payment arrived after the order was cancelled — refunded automatically, "
+            f"less the late-cancellation fee of {money(fee, order.currency)}"
+        )
+        title = f"Late payment on cancelled order {order.order_number} — refunded automatically"
+        body = f"{money(fee, order.currency)} late-cancellation fee kept; the rest went back to the card."
+    else:
+        text = "Payment arrived after the order was cancelled — refunded in full automatically"
+        title = f"Late payment on cancelled order {order.order_number} — refunded automatically"
+        body = "The full amount went back to the card."
+    db.add(OrderEvent(order_id=order.id, status=order.status, comment=text))
+    notify_admin(
+        db,
+        kind="order",
+        title=title,
+        body=body,
+        link=f"/admin/orders?search={order.order_number}",
+        background=background,
+    )
+    db.commit()
+    db.refresh(order)
+    if not refund_note:
+        # The customer paid and deserves to hear where the money went — the
+        # cancellation card, with the one line that matters. A refund that
+        # could not be sent promises nothing here; the desk settles it.
+        queue_status_email(
+            order,
+            background,
+            comment=(
+                "Your payment arrived after this order was cancelled, so it has "
+                "been sent back to your card"
+                + (", less the late-cancellation fee." if fee else ".")
+            ),
+        )
+    return True
+
+
 @router.post("", response_model=OrderDetailOut, status_code=status.HTTP_201_CREATED)
 def checkout(
     payload: CheckoutRequest,
@@ -470,7 +553,9 @@ def checkout(
         raise HTTPException(status_code=400, detail="Delivery date is too far ahead")
 
     subtotal = round(sum(by_id[pid].current_price * qty for pid, qty in merged.items()), 2)
-    coupon = _basket_coupon(db, payload.coupon_code, user, subtotal)
+    # Locked: the code's redemption checks and this order's own write must
+    # be one uninterrupted judgement (see _load_coupon).
+    coupon = _basket_coupon(db, payload.coupon_code, user, subtotal, lock=True)
     priced = _price_basket(db, merged, by_id, coupon, user)
     inclusive = isinstance(priced, pricing.InclusiveBasket)
 
@@ -753,9 +838,12 @@ def _lock_for_cancellation(order: Order, db) -> Order | None:
     this before judging, so no two of them (a customer's click, the admin
     desk's dial, the expiry webhook, the sweep) can pass their guards on
     the same order at the same time (SQLite ignores FOR UPDATE; Postgres
-    doesn't). populate_existing is the point of the re-read: the identity
-    map would otherwise hand back the first, unlocked load's stale
-    attributes. None means the row vanished between the two reads."""
+    doesn't). The desk's ordinary status dial takes it too: an unlocked
+    dial could otherwise overwrite a cancellation that landed a heartbeat
+    earlier and put a refunded, restocked order back on the bake list.
+    populate_existing is the point of the re-read: the identity map would
+    otherwise hand back the first, unlocked load's stale attributes. None
+    means the row vanished between the two reads."""
     return db.scalar(
         select(Order)
         .where(Order.id == order.id)
@@ -788,15 +876,18 @@ def _refund_paid_order(order: Order, fee: float) -> str | None:
     """
     if order.payment_status != PaymentStatus.PAID.value:
         return None  # nothing collected, nothing owed
+    refund_cents = stripe_gateway.cents(float(order.total)) - stripe_gateway.cents(fee)
+    if refund_cents <= 0:
+        # The kept fee is the whole total (a 100 % late-cancellation
+        # setting): nothing goes back, so the payment simply stands — no
+        # zero-amount refund for Stripe to refuse, no refund claimed.
+        return None
     refunded_status = (
         PaymentStatus.PARTIALLY_REFUNDED.value if fee else PaymentStatus.REFUNDED.value
     )
     if order.payment_method == PaymentMethod.CARD.value and order.stripe_payment_intent_id:
         try:
-            stripe_gateway.refund(
-                order.stripe_payment_intent_id,
-                stripe_gateway.cents(float(order.total)) - stripe_gateway.cents(fee),
-            )
+            stripe_gateway.refund(order.stripe_payment_intent_id, refund_cents)
         except stripe_gateway.GatewayUnavailable:
             # The cancellation stands; the money doesn't. Say so on the
             # timeline rather than promising a refund that hasn't happened.
@@ -805,19 +896,46 @@ def _refund_paid_order(order: Order, fee: float) -> str | None:
     return None
 
 
-def _cancel_order(order: Order, db, *, by_customer: bool, comment: str | None = None) -> None:
+def _close_pay_page(order: Order) -> None:
+    """A card order cancelled before its money landed still has a live pay
+    page at Stripe — close it, so nobody can pay for a box that will never
+    be baked. Best effort by design: when Stripe can't close it (paid a
+    heartbeat ago, already lapsed, unreachable), the payment webhook's own
+    guard sends back whatever still lands (refund_payment_on_cancelled_order)."""
+    if (
+        order.payment_method == PaymentMethod.CARD.value
+        and order.payment_status == PaymentStatus.PENDING.value
+        and order.stripe_session_id
+    ):
+        stripe_gateway.expire_session(order.stripe_session_id)
+
+
+def _cancel_order(
+    order: Order,
+    db,
+    *,
+    by_customer: bool,
+    comment: str | None = None,
+    close_pay_page: bool = True,
+) -> None:
     """One cancellation path for every caller: flip the status, settle the
     money, put the stock back and log the event.
 
     Once the ovens have started the shop keeps a slice of the total — the
     percent is the admin's to tune (Settings, back of house). Bakery-side
     cancellations are always free.
+
+    `close_pay_page` is False only where the Stripe session is already
+    known to be over (its own expiry or failed-payment event brought us
+    here) — there is no page left to close.
     """
     fee = _late_cancel_fee(order, db) if by_customer else 0.0
 
     order.status = OrderStatus.CANCELLED.value
     order.cancel_fee = fee
     refund_note = _refund_paid_order(order, fee)
+    if close_pay_page:
+        _close_pay_page(order)
 
     # Return reserved stock — an additive UPDATE against the current
     # database value, never a number computed from a loaded ORM object,

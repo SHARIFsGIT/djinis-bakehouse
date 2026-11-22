@@ -19,6 +19,27 @@ _ADDRESS_MATCH_FIELDS = (
 )
 
 
+# What a spreadsheet reads as the start of a formula. A cell that opens with
+# one of these is *run*, not shown, when an export is opened in Excel,
+# LibreOffice or Sheets — and several export columns carry text typed by the
+# public (a catering lead's name and message, a newsletter address, a
+# customer's name).
+_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def csv_safe(value) -> str:
+    """Text for a CSV cell that a spreadsheet must display, never execute.
+
+    A leading formula character gets a single-quote prefix — the
+    spreadsheet's own "this is text" mark, and the standard defence against
+    CSV/formula injection. Only text columns pass through here: amounts are
+    written as numbers, so a negative figure stays a number."""
+    text = "" if value is None else str(value)
+    if text.startswith(_FORMULA_TRIGGERS):
+        return "'" + text
+    return text
+
+
 def _normalized(value) -> str:
     """Case- and whitespace-blind comparison form: '12  Crumb Lane' and
     '12 crumb lane' are the same door."""

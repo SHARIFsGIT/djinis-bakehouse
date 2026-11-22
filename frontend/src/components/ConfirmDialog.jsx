@@ -1,6 +1,12 @@
+import { useEffect, useId, useRef } from "react";
+
 /** The house "are you sure?" — one box, so every destructive action in the
  *  back of house keeps the same shape, sizing and escape hatches (backdrop
- *  click and "keep it" both back out; nothing fires by accident). */
+ *  click, Escape and "keep it" all back out; nothing fires by accident).
+ *
+ *  It is a real dialog to a keyboard and a screen reader too: focus moves to
+ *  the safe button when it opens (so Enter never confirms by reflex), comes
+ *  back to whatever opened it when it closes, and the title is announced. */
 export default function ConfirmDialog({
   title,
   children = null,
@@ -10,13 +16,43 @@ export default function ConfirmDialog({
   onConfirm,
   onCancel,
 }) {
+  const titleId = useId();
+  const cancelRef = useRef(null);
+  // Captured while rendering — before anything inside the dialog can take
+  // focus — so closing hands focus back to the control that opened it.
+  const opener = useRef(typeof document === "undefined" ? null : document.activeElement);
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+    const returnTo = opener.current;
+    return () => returnTo?.focus?.();
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== "Escape" || busy) return;
+      // This dialog is the top layer — a drawer beneath must not close too.
+      e.stopPropagation();
+      onCancel();
+    };
+    // Capture phase: heard before any drawer's own Escape listener.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [busy, onCancel]);
+
   return (
-    <div className="modal modal-open">
+    <div className="modal modal-open" role="alertdialog" aria-modal="true" aria-labelledby={titleId}>
       <div className="modal-box max-w-sm">
-        <h3 className="font-display text-lg font-bold">{title}</h3>
-        {children && <p className="mt-1 text-sm opacity-70">{children}</p>}
+        <h3 id={titleId} className="font-display text-lg font-bold">{title}</h3>
+        {children && <div className="mt-1 text-sm opacity-70">{children}</div>}
         <div className="modal-action">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>
+          <button
+            ref={cancelRef}
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={onCancel}
+            disabled={busy}
+          >
             {cancelLabel}
           </button>
           <button
@@ -29,7 +65,7 @@ export default function ConfirmDialog({
           </button>
         </div>
       </div>
-      <div className="modal-backdrop" onClick={onCancel} />
+      <div className="modal-backdrop" onClick={() => !busy && onCancel()} aria-hidden="true" />
     </div>
   );
 }

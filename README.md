@@ -322,6 +322,8 @@ images/              original photography (source of truth for the pipeline)
 | `SERVE_FRONTEND_DIST`    | `true`                           | serve `frontend/dist` from FastAPI |
 | `ENABLE_DOCS`            | `true`                           | Swagger UI at `/api/docs`   |
 | `LOGIN_RATE_LIMIT` / `REGISTER_RATE_LIMIT` | 10 / 5 per minute per IP | brute-force brakes |
+| `CLIENT_IP_HEADER`       | empty (first `X-Forwarded-For` hop) | the header your edge sets with the visitor's real address (e.g. `CF-Connecting-IP`) — only ever one the edge overwrites itself; see `.env.example` |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | empty / 587 | the one mail account behind receipts, order updates, password resets, restock notes, desk alerts and campaigns. **Empty host = nothing is sent** (dev logs each message; production logs recipient + subject only and says "Email is OFF" at boot) |
 | `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` | empty | "Continue with Facebook" — the button appears once both are set |
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | empty | phone sign-in codes over SMS; all three together switch it on |
 | `STRIPE_PAYMENT_METHODS` | `card` | comma list of hosted-page methods (`klarna`, `paypal`, `sepa_debit`, `ideal`, `bancontact` alongside `card`; unknown entries drop with a warning) |
@@ -397,7 +399,19 @@ path traversal is blocked.
   full traceback but never leak it to the client.
 - Rate limiting is in-process — fine for one worker; use a shared store
   (e.g. Redis) if you scale horizontally. Password changes revoke every
-  outstanding token for that account, on every device.
+  outstanding token for that account, on every device. The per-address
+  brakes are only as honest as the address: set `CLIENT_IP_HEADER` once you
+  have confirmed which header your edge sets itself. Phone sign-in codes
+  carry their own ceiling per number (five an hour), whoever asks.
+- The app shell is served with a Content-Security-Policy: scripts only
+  from the shop's own origin, plus the exact inline snippet the build
+  carries (admitted by hash, read from `frontend/dist/index.html` at
+  boot). An inline `<script>` added to `index.html` is picked up
+  automatically; a third-party script host would have to be added to the
+  policy in `app/__init__.py` on purpose.
+- Email is off until `SMTP_HOST` is set — the boot log says so in
+  production. Nothing else in the shop depends on it, but receipts, order
+  updates and password resets go nowhere without it.
 - Backups: Render/Railway snapshot the managed Postgres for you; on your own
   box, `pg_dump` on a cron is enough at this scale.
 - Resetting the shop is deleting the database and rebooting — first boot
@@ -499,6 +513,7 @@ before, so no customer ever sees a button that can't work.
 
 **Still to wire up for the real market**
 
+- An SMTP account (`SMTP_*`) — until it is set the shop sends no email.
 - Stripe live keys — rehearse with the test-mode walkthrough above first.
 - Facebook app + Twilio number, if you want those sign-in rails live.
 - To refresh photography: drop new shots into `images/` and re-run

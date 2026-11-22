@@ -207,9 +207,13 @@ export default function Cart() {
         {/* Items */}
         <div className="space-y-4">
           {items.map((item) => (
+            // One row from the tablet up; on a phone the controls drop to a
+            // row of their own under the name. Kept on one line there, the
+            // stepper, total and Remove left the name a sliver to wrap in
+            // (it ran underneath the stepper) and pushed Remove off the card.
             <div
               key={item.product_id}
-              className="flex items-center gap-4 rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60"
+              className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-box glass p-4 shadow-sm ring-1 ring-base-300/60"
             >
               <Link
                 to={`/products/${item.slug}`}
@@ -238,21 +242,24 @@ export default function Cart() {
                   </p>
                 )}
               </div>
-              <QuantityInput
-                value={item.quantity}
-                onChange={(q) => setQuantity(item.product_id, q)}
-                max={item.stock || 99}
-              />
-              <p className="w-20 text-right font-bold">
-                {money(quoteLines.get(item.product_id)?.line_total ?? item.unit_price * item.quantity)}
-              </p>
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs text-error"
-                onClick={() => remove(item.product_id)}
-              >
-                Remove
-              </button>
+              <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-end sm:gap-4">
+                <QuantityInput
+                  value={item.quantity}
+                  onChange={(q) => setQuantity(item.product_id, q)}
+                  max={item.stock || 99}
+                />
+                <p className="text-right font-bold sm:w-20">
+                  {money(quoteLines.get(item.product_id)?.line_total ?? item.unit_price * item.quantity)}
+                </p>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs text-error"
+                  onClick={() => remove(item.product_id)}
+                  aria-label={`Remove ${item.name} from your basket`}
+                >
+                  Remove
+                </button>
+              </div>
             </div>
           ))}
 

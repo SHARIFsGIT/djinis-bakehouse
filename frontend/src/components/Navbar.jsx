@@ -123,15 +123,18 @@ export default function Navbar() {
         </div>
       )}
 
-      <nav className="navbar mx-auto max-w-7xl px-4 gap-2">
-        {/* Brand */}
-        <Link to="/" className="flex items-center gap-2.5">
+      {/* Tighter on a phone: the baker's bar carries five controls there
+          (theme, bell, basket, corner, menu), and at the desktop spacing the
+          wordmark ran underneath the first of them. */}
+      <nav className="navbar mx-auto max-w-7xl gap-0.5 px-3 sm:gap-2 sm:px-4">
+        {/* Brand — may give way (min-w-0) but never slide under the icons */}
+        <Link to="/" className="flex min-w-0 items-center gap-2 sm:gap-2.5">
           <img
             src="/static/site/logo.png"
-            alt="Djini's Bakehouse"
-            className="h-10 w-10 object-contain"
+            alt=""
+            className="h-10 w-10 shrink-0 object-contain"
           />
-          <span className="font-display text-xl leading-tight font-bold">
+          <span className="font-display min-w-0 text-lg leading-tight font-bold sm:text-xl">
             Djini&rsquo;s{" "}
             <span className="italic text-secondary">Bakehouse</span>
           </span>

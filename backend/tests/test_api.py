@@ -98,6 +98,18 @@ def fake_refund(payment_intent, amount_cents):
     gateway_calls.append(("refund", payment_intent, amount_cents))
 
 
+def fake_expire_session(session_id):
+    """Shaped like Stripe's answer: only an open session can be closed —
+    a paid or already-lapsed one refuses (False), exactly the case the
+    payment webhook's own guards exist for."""
+    gateway_calls.append(("expire_session", session_id))
+    session = fake_sessions.get(session_id)
+    if session is None or session["status"] != "open":
+        return False
+    session["status"] = "expired"
+    return True
+
+
 def fake_verify_webhook(payload, signature):
     import json
 
@@ -109,6 +121,7 @@ def fake_verify_webhook(payload, signature):
 stripe_gateway.create_checkout_session = fake_create_checkout_session
 stripe_gateway.retrieve_session = fake_retrieve_session
 stripe_gateway.refund = fake_refund
+stripe_gateway.expire_session = fake_expire_session
 stripe_gateway.verify_webhook = fake_verify_webhook
 
 

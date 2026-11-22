@@ -351,7 +351,10 @@ export default function AdminUsers() {
     ])
       .then(([v, c]) => {
         setVouchers(v.data);
-        setCoupons(c.data);
+        // A tier's code is handed to every regular in that tier, so only
+        // shop-wide codes qualify — a voucher minted for one customer
+        // would be refused at checkout for everyone else.
+        setCoupons(c.data.filter((coupon) => coupon.restricted_to_user_id == null));
       })
       .catch((err) => toast.error(apiError(err)));
     // eslint-disable-next-line react-hooks/exhaustive-deps

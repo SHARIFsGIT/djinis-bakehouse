@@ -63,6 +63,24 @@ services:
         sync: false
       - key: TWILIO_FROM_NUMBER
         sync: false # the Twilio number the texts come from, e.g. +15005550100
+      # Outgoing email. Without SMTP_HOST the shop sends NOTHING — no
+      # receipts, order updates, password resets or desk alerts (boot logs
+      # "Email is OFF"). Set these in the dashboard from your mail provider's
+      # SMTP page. The port defaults to 587 (STARTTLS); add SMTP_PORT by hand
+      # only if your provider uses another — it is left out here on purpose,
+      # because a blank numeric variable would stop the app from booting.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false # e.g. Djini's Bakehouse <no-reply@djinisbakehouse.com>
+      # The rate limits key on the visitor's address. To key them on the
+      # address the edge itself reports (not a caller-writable first
+      # X-Forwarded-For hop), add CLIENT_IP_HEADER in the dashboard — see
+      # backend/.env.example. Verify what your edge sends before setting it.
       - key: ADMIN_EMAIL
         sync: false # you set this when the blueprint is applied
       - key: ADMIN_PASSWORD

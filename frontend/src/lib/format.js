@@ -231,6 +231,15 @@ export const PAYMENT_STATUSES = {
   partially_refunded: { label: "Partially refunded", badge: "badge-warning" },
 };
 
+/** What a code takes off, in the words a shopper reads: "10% off" for a
+    percent code, "€5.00 off" for a fixed-value voucher. Those vouchers carry
+    percent_off 0 on the wire — printing "0% off" would deny the very saving
+    the customer was handed. */
+export const couponSaving = (coupon) =>
+  coupon?.fixed_amount_off != null
+    ? `${money(coupon.fixed_amount_off)} off`
+    : `${coupon?.percent_off ?? 0}% off`;
+
 /** "Tax (5%)" — the label comes from the same rule the server taxes by
     (applied to the discounted subtotal). With no approved rate (null while
     VAT treatment is pending review) it names the row plainly, exactly like

@@ -1,5 +1,7 @@
+import { Suspense } from "react";
 import { Outlet } from "react-router";
 import CornerNav from "../../components/CornerNav";
+import { Loading } from "../../components/Loading";
 
 export default function AdminLayout() {
   return (
@@ -19,7 +21,11 @@ export default function AdminLayout() {
           <CornerNav ariaLabel="Admin" />
         </div>
         <div className="min-w-0">
-          <Outlet />
+          {/* Desk pages load on first visit (see App.jsx) — the boundary sits
+              here so the header and sidebar hold still while one arrives. */}
+          <Suspense fallback={<Loading label="Opening the desk…" />}>
+            <Outlet />
+          </Suspense>
         </div>
       </div>
     </div>

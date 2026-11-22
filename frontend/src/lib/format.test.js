@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 
 import {
   applyShopConfig,
+  couponSaving,
   hasNonActiveCurrency,
   money,
   shopConfig,
@@ -107,4 +108,15 @@ test("pending rules stay pending — null is not zero", () => {
   applyShopConfig({ currency: "eur", tax_rate: null });
   assert.equal(shopConfig.taxRate, null);
   resetShopConfig();
+});
+
+test("a coupon's saving reads in its own kind — percent or euro amount", () => {
+  assert.equal(couponSaving({ code: "WELCOME10", percent_off: 10 }), "10% off");
+  // A personalised fixed-value voucher: percent_off is 0 on the wire, and
+  // "0% off" is exactly what the checkout used to print for it.
+  assert.equal(
+    couponSaving({ code: "THANKS5", percent_off: 0, fixed_amount_off: 5 }),
+    "€5.00 off",
+  );
+  assert.equal(couponSaving({ percent_off: 15, fixed_amount_off: null }), "15% off");
 });

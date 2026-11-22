@@ -40,27 +40,49 @@ def _uploads_root() -> Path:
     return root
 
 
+def _sniff_image_type(head: bytes) -> str | None:
+    """The image type a file's own opening bytes declare, or None.
+
+    The request's Content-Type is only the sender's word for what the file
+    is — anyone signed in can post anything under "image/png". The magic
+    numbers are the file's own word, and the only one the shop stores by."""
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 async def save_photo(upload: UploadFile, folder: str, max_bytes: int) -> str:
     """Stream an upload to disk and return its /static URL.
 
     Reads in chunks so an oversized file is cut off mid-stream instead of
-    being buffered whole first.
+    being buffered whole first. The file must *be* an image, not merely be
+    called one: the first bytes are checked against the three formats the
+    shop accepts, and the saved extension follows what the bytes say.
     """
-    extension = IMAGE_TYPES.get(upload.content_type or "")
-    if extension is None:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Please upload a JPEG, PNG or WebP image.",
-        )
+    not_an_image = HTTPException(
+        status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        detail="Please upload a JPEG, PNG or WebP image.",
+    )
+    if IMAGE_TYPES.get(upload.content_type or "") is None:
+        raise not_an_image
+
+    chunk = await upload.read(64 * 1024)
+    actual_type = _sniff_image_type(chunk)
+    if actual_type is None:  # empty, or something else wearing an image's name
+        raise not_an_image
 
     target_dir = _uploads_root() / folder
     target_dir.mkdir(parents=True, exist_ok=True)
-    name = f"{secrets.token_hex(8)}{extension}"
+    name = f"{secrets.token_hex(8)}{IMAGE_TYPES[actual_type]}"
     path = target_dir / name
 
     size = 0
     with path.open("wb") as out:
-        while chunk := await upload.read(64 * 1024):
+        while chunk:
             size += len(chunk)
             if size > max_bytes:
                 out.close()
@@ -71,6 +93,7 @@ async def save_photo(upload: UploadFile, folder: str, max_bytes: int) -> str:
                     f"{max_bytes // (1024 * 1024)} MB.",
                 )
             out.write(chunk)
+            chunk = await upload.read(64 * 1024)
     await upload.close()
     return f"/static/{UPLOADS_DIR}/{folder}/{name}"
 

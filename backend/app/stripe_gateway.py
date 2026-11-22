@@ -305,6 +305,29 @@ def retrieve_session(session_id: str) -> dict:
     }
 
 
+def expire_session(session_id: str) -> bool:
+    """Close a checkout session so its pay page can no longer take money.
+
+    An order that is cancelled — or handed a fresh pay link — must not leave
+    a live page behind it: a tab still open on the old one would happily
+    charge for a box nobody is going to bake, or charge the same order
+    twice. True means Stripe closed it. False means it could not be closed:
+    already paid, already lapsed, or Stripe unreachable. None of those is an
+    error here — the caller treats False as "money may still land" and the
+    payment webhook's own guards send back whatever does.
+    """
+    settings = get_settings()
+    stripe.api_key = settings.stripe_secret_key
+    try:
+        stripe.checkout.Session.expire(session_id)
+    except Exception as exc:
+        # Routine, not exceptional: a session that completed or lapsed a
+        # moment ago refuses to expire. One line, no traceback.
+        logger.info("checkout session %s could not be closed: %s", session_id, exc)
+        return False
+    return True
+
+
 def refund(payment_intent: str, amount_cents: int) -> None:
     """Send money back to the card, less any amount the shop keeps.
 

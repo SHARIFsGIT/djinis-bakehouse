@@ -18,35 +18,82 @@ import {
 } from "../../lib/format";
 import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
-import { Loading } from "../../components/Loading";
-import { useScrollLock } from "../../components/Drawer";
+import { LoadError, Loading } from "../../components/Loading";
+import { useEscape, useFocusHandoff, useScrollLock } from "../../components/Drawer";
+
+/** The frame both rails open their drawer in — a dialog to assistive tech,
+    closed by Escape or a click on the scrim, with the keyboard handed over
+    on open and handed back on close. */
+function DrawerFrame({ label, onClose, children }) {
+  useEscape(onClose);
+  const panel = useFocusHandoff();
+  return (
+    <div className="fixed inset-0 z-[70] flex justify-end" role="dialog" aria-modal="true" aria-label={label}>
+      <div
+        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <div
+        ref={panel}
+        tabIndex={-1}
+        className="animate-pop relative h-full w-full max-w-md overflow-hidden bg-base-100 shadow-2xl outline-none"
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
 
 /** Drawer with the full order + status/payment controls. */
 function OrderDrawer({ orderId, onClose, onChanged }) {
   const toast = useToast();
   useScrollLock();
   const [order, setOrder] = useState(null);
+  const [failed, setFailed] = useState(null);
   const [status, setStatus] = useState("");
   const [comment, setComment] = useState("");
   // Whether this dial is mailbox news — the baker's call, per change.
   const [notify, setNotify] = useState(true);
   const [busy, setBusy] = useState(false);
+  // Cancelling is the one dial that can't be turned back (and on a paid
+  // card order it sends money) — it asks first.
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  // A payment relabel waiting for a yes: "paid" | "refunded" | null.
+  const [confirmingPayment, setConfirmingPayment] = useState(null);
+  const [paymentBusy, setPaymentBusy] = useState(false);
 
-  useEffect(() => {
+  const open = () => {
+    setFailed(null);
     client
       .get(`/orders/${orderId}`)
       .then(({ data }) => {
         setOrder(data);
         setStatus(data.status);
       })
-      .catch((e) => toast.error(apiError(e)));
+      .catch((e) => setFailed(apiError(e, "That order didn't open.")));
+  };
+
+  useEffect(() => {
+    open();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderId]);
 
   if (!order) {
     return (
       <div className="p-6">
-        <Loading label="Opening the order…" />
+        {failed ? (
+          <>
+            <LoadError message={failed} onRetry={open} />
+            <div className="text-center">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
+                Close
+              </button>
+            </div>
+          </>
+        ) : (
+          <Loading label="Opening the order…" />
+        )}
       </div>
     );
   }
@@ -56,9 +103,9 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
       label: statusLabel(order.payment_status),
       badge: "badge-ghost",
     };
+  const isCard = order.payment_method === "card";
 
-  const applyStatus = async (e) => {
-    e.preventDefault();
+  const sendStatus = async () => {
     setBusy(true);
     try {
       const { data } = await client.put(`/admin/orders/${order.id}/status`, {
@@ -67,6 +114,7 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
         notify,
       });
       setOrder(data);
+      setStatus(data.status);
       setComment("");
       onChanged();
       toast.success(
@@ -76,10 +124,20 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
       toast.error(apiError(err));
     } finally {
       setBusy(false);
+      setConfirmingCancel(false);
     }
   };
 
-  const setPayment = async (payment_status) => {
+  const applyStatus = (e) => {
+    e.preventDefault();
+    if (busy) return;
+    if (status === "cancelled") setConfirmingCancel(true);
+    else sendStatus();
+  };
+
+  const sendPayment = async (payment_status) => {
+    if (paymentBusy) return;
+    setPaymentBusy(true);
     try {
       const { data } = await client.put(`/admin/orders/${order.id}/payment`, { payment_status });
       setOrder(data);
@@ -89,7 +147,36 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
       );
     } catch (err) {
       toast.error(apiError(err));
+    } finally {
+      setPaymentBusy(false);
+      setConfirmingPayment(null);
     }
+  };
+
+  // These buttons only relabel the book — they never reach Stripe. On a
+  // cash order that is the whole job; on a card order the label and the
+  // money can part company, so it asks first and says so.
+  const setPayment = (payment_status) => {
+    if (isCard) setConfirmingPayment(payment_status);
+    else sendPayment(payment_status);
+  };
+
+  const PAYMENT_RELABEL = {
+    paid: {
+      title: "Mark this card order paid by hand?",
+      confirm: "Mark paid",
+      body: "Card orders mark themselves paid the moment Stripe confirms the payment. Doing it by hand only changes the label here — use it only if the money really arrived another way.",
+    },
+    refunded: {
+      title: "Mark this card payment refunded?",
+      confirm: "Mark refunded",
+      body: "This only changes the label in the book — no money goes back to the card. To send the money back, cancel the order (the refund goes out automatically) or refund it in the Stripe dashboard.",
+    },
+    pending: {
+      title: "Reset this card payment to pending?",
+      confirm: "Reset to pending",
+      body: "This only changes the label — any card payment already taken stays taken.",
+    },
   };
 
   return (
@@ -135,7 +222,11 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
                 <span>−{money(order.discount_amount, order.currency)}</span>
               </div>
             )}
-            <div className="flex justify-between"><span className="opacity-60">Tax</span><span>{money(order.tax, order.currency)}</span></div>
+            {/* No row while no tax was charged — and in VAT-inclusive mode the
+                figure is already inside the lines, so it says so. */}
+            {order.tax > 0 && (
+              <div className="flex justify-between"><span className="opacity-60">{order.tax_included ? "VAT (included)" : "Tax"}</span><span>{money(order.tax, order.currency)}</span></div>
+            )}
             <div className="flex justify-between"><span className="opacity-60">Delivery</span><span>{order.shipping_fee === 0 ? "FREE" : money(order.shipping_fee, order.currency)}</span></div>
             <div className="flex justify-between border-t border-dashed border-base-300 pt-1 font-bold">
               <span>Total</span><span>{money(order.total, order.currency)}</span>
@@ -145,7 +236,19 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
 
         {/* Address + note */}
         <section className="rounded-box bg-base-200/60 p-4 text-sm">
-          <p className="font-display font-semibold">Deliver to</p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-display font-semibold">Deliver to</p>
+            {/* The day the customer asked for at checkout — the desk plans
+                the bake by it, so it leads the block. */}
+            {order.delivery_date ? (
+              <span className="badge badge-accent text-accent-content whitespace-nowrap">
+                <CalendarHeart size={13} className="mr-1" aria-hidden="true" />
+                Wanted {formatDate(order.delivery_date)}
+              </span>
+            ) : (
+              <span className="text-xs opacity-60">Next delivery run</span>
+            )}
+          </div>
           <p className="mt-1 opacity-80">
             {order.recipient}{order.phone ? ` · ${order.phone}` : ""}<br />
             {order.line1}{order.line2 ? `, ${order.line2}` : ""}<br />
@@ -185,6 +288,7 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
             <input
               className="input input-bordered input-sm min-w-36 flex-1"
               placeholder="Note for the log (optional)"
+              aria-label="Note for the log (optional)"
               maxLength={200}
               value={comment}
               onChange={(e) => setComment(e.target.value)}
@@ -208,25 +312,60 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
             </span>
           </label>
         </form>
-        <div className="flex items-center gap-2 text-sm">
-          <span className="opacity-60">Payment:</span>
+        {/* Labels only — these never move money (see setPayment). */}
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="opacity-60">Payment label:</span>
           {order.payment_status !== "paid" && (
-            <button type="button" className="btn btn-success btn-xs" onClick={() => setPayment("paid")}>
+            <button type="button" className="btn btn-success btn-xs" onClick={() => setPayment("paid")} disabled={paymentBusy}>
               Mark paid
             </button>
           )}
           {order.payment_status === "paid" && (
-            <button type="button" className="btn btn-warning btn-xs" onClick={() => setPayment("refunded")}>
-              Refund
+            <button type="button" className="btn btn-warning btn-xs" onClick={() => setPayment("refunded")} disabled={paymentBusy}>
+              Mark refunded
             </button>
           )}
           {order.payment_status !== "pending" && (
-            <button type="button" className="btn btn-ghost btn-xs" onClick={() => setPayment("pending")}>
+            <button type="button" className="btn btn-ghost btn-xs" onClick={() => setPayment("pending")} disabled={paymentBusy}>
               Reset to pending
             </button>
           )}
         </div>
       </div>
+
+      {confirmingCancel && (
+        <ConfirmDialog
+          title={`Cancel order ${order.order_number}?`}
+          confirmLabel="Yes, cancel the order"
+          cancelLabel="Keep the order"
+          busy={busy}
+          onConfirm={sendStatus}
+          onCancel={() => setConfirmingCancel(false)}
+        >
+          <p>
+            The reserved bakes go back on the shelf
+            {order.payment_status === "paid" &&
+              (isCard
+                ? ` and ${money(order.total, order.currency)} is refunded to the card`
+                : " and the payment is marked refunded — hand the cash back yourself")}
+            {notify ? ", and the customer is emailed" : ""}.
+          </p>
+          <p className="mt-2 font-semibold">A cancelled order can&rsquo;t be reopened.</p>
+        </ConfirmDialog>
+      )}
+
+      {confirmingPayment && (
+        <ConfirmDialog
+          title={PAYMENT_RELABEL[confirmingPayment].title}
+          confirmLabel={PAYMENT_RELABEL[confirmingPayment].confirm}
+          cancelLabel="Leave it"
+          busy={paymentBusy}
+          onConfirm={() => sendPayment(confirmingPayment)}
+          onCancel={() => setConfirmingPayment(null)}
+        >
+          {PAYMENT_RELABEL[confirmingPayment].body}
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
@@ -282,13 +421,17 @@ function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
     }
   };
 
+  const [removing, setRemoving] = useState(false);
   const remove = async () => {
+    if (removing) return; // a double-click must not send a second DELETE
+    setRemoving(true);
     try {
       await client.delete(`/admin/bulk-orders/${enquiry.id}`);
       onDeleted();
       toast.info("Enquiry deleted");
     } catch (err) {
       toast.error(apiError(err));
+      setRemoving(false);
     }
   };
 
@@ -439,6 +582,7 @@ function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
         <ConfirmDialog
           title={`Delete the enquiry from ${enquiry.name}?`}
           confirmLabel="Yes, delete"
+          busy={removing}
           onConfirm={remove}
           onCancel={() => setConfirming(false)}
         >
@@ -457,25 +601,36 @@ function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
 function OrdersTab() {
   const [params, setParams] = useSearchParams();
   const [data, setData] = useState(null);
+  const [failed, setFailed] = useState(null);
   const [search, setSearch] = useState(params.get("search") ?? "");
   const [selectedId, setSelectedId] = useState(null);
   const toast = useToast();
 
   const status = params.get("status") ?? "";
   const page = Number(params.get("page") ?? 1);
+  const searchParam = params.get("search") ?? "";
 
   const load = () => {
     const query = { page, per_page: 15 };
     if (status) query.status = status;
-    if (params.get("search")) query.search = params.get("search");
-    client.get("/admin/orders", { params: query }).then(({ data }) => setData(data));
+    if (searchParam) query.search = searchParam;
+    setFailed(null);
+    client
+      .get("/admin/orders", { params: query })
+      .then(({ data }) => setData(data))
+      .catch((e) => setFailed(apiError(e, "The order rail didn't load.")));
   };
 
   useEffect(() => {
     setData(null);
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, page, params.get("search")]);
+  }, [status, page, searchParam]);
+
+  // The box follows the address bar: the bell and the dashboard deep-link
+  // here with ?search=…, and "Reset" clears it — the list changed either
+  // way, so the box must say the same thing the list is showing.
+  useEffect(() => setSearch(searchParam), [searchParam]);
 
   const submitSearch = (e) => {
     e.preventDefault();
@@ -545,7 +700,9 @@ function OrdersTab() {
         </button>
       </div>
 
-      {data === null ? (
+      {failed ? (
+        <LoadError message={failed} onRetry={load} />
+      ) : data === null ? (
         <Loading label="Fetching the order rail…" />
       ) : (
         <>
@@ -558,30 +715,41 @@ function OrdersTab() {
                   <th>Status</th>
                   <th>Payment</th>
                   <th className="text-right">Total</th>
+                  <th>Wanted for</th>
                   <th className="text-right">Placed</th>
-                  <th />
+                  <th><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody>
                 {data.orders.map((o) => (
                   <tr key={o.id} className="hover:bg-base-200/50">
-                    <td className="font-bold">{o.order_number}</td>
+                    <td className="font-bold whitespace-nowrap">{o.order_number}</td>
                     <td className="max-w-36 truncate">{o.recipient}</td>
                     <td>
-                      <span className={`badge badge-sm ${statusBadge(o.status)} border`}>{statusLabel(o.status)}</span>
+                      <span className={`badge badge-sm ${statusBadge(o.status)} border whitespace-nowrap`}>{statusLabel(o.status)}</span>
                     </td>
                     <td className="text-xs">
-                      <span className={`badge badge-sm ${PAYMENT_STATUSES[o.payment_status]?.badge ?? "badge-ghost"}`}>
+                      <span className={`badge badge-sm ${PAYMENT_STATUSES[o.payment_status]?.badge ?? "badge-ghost"} whitespace-nowrap`}>
                         {PAYMENT_STATUSES[o.payment_status]?.label ?? statusLabel(o.payment_status)}
                       </span>
                     </td>
-                    <td className="text-right font-bold">{money(o.total, o.currency)}</td>
+                    <td className="text-right font-bold whitespace-nowrap">{money(o.total, o.currency)}</td>
+                    {/* The delivery day the customer picked at checkout —
+                        blank means "the next run", which the dash says. */}
+                    <td className="text-xs whitespace-nowrap">
+                      {o.delivery_date ? (
+                        <span className="font-semibold">{formatDate(o.delivery_date)}</span>
+                      ) : (
+                        <span className="opacity-40" title="No day picked — next delivery run">—</span>
+                      )}
+                    </td>
                     <td className="text-right text-xs whitespace-nowrap opacity-60">{formatDateTime(o.created_at)}</td>
                     <td className="text-right">
                       <button
                         type="button"
                         className="btn btn-ghost btn-xs"
                         onClick={() => setSelectedId(o.id)}
+                        aria-label={`Manage order ${o.order_number}`}
                       >
                         Manage
                       </button>
@@ -590,7 +758,7 @@ function OrdersTab() {
                 ))}
                 {data.orders.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="py-10 text-center text-sm opacity-60">
+                    <td colSpan={8} className="py-10 text-center text-sm opacity-60">
                       No orders match — try clearing the filters.
                     </td>
                   </tr>
@@ -602,14 +770,16 @@ function OrdersTab() {
           {data.pagination.total_pages > 1 && (
             <div className="mt-4 flex justify-center">
               <div className="join">
-                <button className="btn join-item btn-sm" disabled={page <= 1} onClick={() => goPage(page - 1)}>«</button>
-                <button className="btn join-item btn-sm pointer-events-none">
+                <button type="button" className="btn join-item btn-sm" disabled={page <= 1} onClick={() => goPage(page - 1)} aria-label="Previous page">«</button>
+                <span className="btn join-item btn-sm pointer-events-none" aria-current="page">
                   Page {data.pagination.page} / {data.pagination.total_pages}
-                </button>
+                </span>
                 <button
+                  type="button"
                   className="btn join-item btn-sm"
                   disabled={page >= data.pagination.total_pages}
                   onClick={() => goPage(page + 1)}
+                  aria-label="Next page"
                 >
                   »
                 </button>
@@ -621,20 +791,13 @@ function OrdersTab() {
 
       {/* Drawer */}
       {selectedId !== null && (
-        <div className="fixed inset-0 z-[70] flex justify-end">
-          <div
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-            onClick={() => setSelectedId(null)}
-            aria-hidden="true"
+        <DrawerFrame label="Order details" onClose={() => setSelectedId(null)}>
+          <OrderDrawer
+            orderId={selectedId}
+            onClose={() => setSelectedId(null)}
+            onChanged={load}
           />
-          <div className="animate-pop relative h-full w-full max-w-md overflow-hidden bg-base-100 shadow-2xl">
-            <OrderDrawer
-              orderId={selectedId}
-              onClose={() => setSelectedId(null)}
-              onChanged={load}
-            />
-          </div>
-        </div>
+        </DrawerFrame>
       )}
     </div>
   );
@@ -647,6 +810,7 @@ function OrdersTab() {
 function BulkTab() {
   const [params, setParams] = useSearchParams();
   const [items, setItems] = useState(null);
+  const [failed, setFailed] = useState(null);
   const [selected, setSelected] = useState(null);
   const toast = useToast();
 
@@ -655,7 +819,11 @@ function BulkTab() {
   const load = (filter = status) => {
     const query = {};
     if (filter) query.status = filter;
-    client.get("/admin/bulk-orders", { params: query }).then(({ data }) => setItems(data));
+    setFailed(null);
+    client
+      .get("/admin/bulk-orders", { params: query })
+      .then(({ data }) => setItems(data))
+      .catch((e) => setFailed(apiError(e, "The enquiry rail didn't load.")));
   };
 
   useEffect(() => {
@@ -712,7 +880,9 @@ function BulkTab() {
         </button>
       </div>
 
-      {items === null ? (
+      {failed ? (
+        <LoadError message={failed} onRetry={() => load()} />
+      ) : items === null ? (
         <Loading label="Fetching the enquiry rail…" />
       ) : (
         <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
@@ -742,7 +912,7 @@ function BulkTab() {
                   </td>
                   <td className="text-right font-bold">{e.guests}</td>
                   <td>
-                    <span className={`badge badge-sm ${bulkBadge(e.status)} border`}>
+                    <span className={`badge badge-sm ${bulkBadge(e.status)} border whitespace-nowrap`}>
                       {bulkLabel(e.status)}
                     </span>
                   </td>
@@ -774,29 +944,22 @@ function BulkTab() {
 
       {/* Drawer */}
       {selected && (
-        <div className="fixed inset-0 z-[70] flex justify-end">
-          <div
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-            onClick={() => setSelected(null)}
-            aria-hidden="true"
+        <DrawerFrame label="Catering enquiry" onClose={() => setSelected(null)}>
+          <BulkDrawer
+            key={selected.id}
+            enquiry={selected}
+            onClose={() => setSelected(null)}
+            onChanged={(updated) => {
+              replaceRow(updated);
+              setSelected(updated);
+              load();
+            }}
+            onDeleted={() => {
+              setSelected(null);
+              load();
+            }}
           />
-          <div className="animate-pop relative h-full w-full max-w-md overflow-hidden bg-base-100 shadow-2xl">
-            <BulkDrawer
-              key={selected.id}
-              enquiry={selected}
-              onClose={() => setSelected(null)}
-              onChanged={(updated) => {
-                replaceRow(updated);
-                setSelected(updated);
-                load();
-              }}
-              onDeleted={() => {
-                setSelected(null);
-                load();
-              }}
-            />
-          </div>
-        </div>
+        </DrawerFrame>
       )}
     </div>
   );

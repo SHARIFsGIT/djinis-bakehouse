@@ -181,7 +181,9 @@ class AddressUpdate(BaseModel):
     city: str | None = Field(default=None, min_length=1, max_length=100)
     state: str | None = Field(default=None, min_length=1, max_length=100)
     postal_code: str | None = Field(default=None, min_length=1, max_length=20)
-    country: str | None = Field(default=None, max_length=100)
+    # Required on every address (AddressBase) — an edit may change the
+    # country but never blank it.
+    country: str | None = Field(default=None, min_length=1, max_length=100)
     is_default: bool | None = None
 
 
@@ -302,8 +304,14 @@ class OrderItemRequest(BaseModel):
     quantity: int = Field(ge=1, le=99)
 
 
+# A basket's line count has a ceiling far above any real box (duplicate
+# lines merge server-side, and the catalog itself is a few dozen bakes) — it
+# exists so a hostile request can't hand the pricing path a mountain of rows.
+MAX_BASKET_LINES = 100
+
+
 class CheckoutRequest(BaseModel):
-    items: list[OrderItemRequest] = Field(min_length=1)
+    items: list[OrderItemRequest] = Field(min_length=1, max_length=MAX_BASKET_LINES)
     address_id: int | None = None
     new_address: AddressCreate | None = None
     payment_method: PaymentMethod
@@ -324,7 +332,7 @@ class QuoteRequest(BaseModel):
     in the response comes from the catalog, the coupon table and the shop's
     money rules, exactly as checkout will charge them."""
 
-    items: list[OrderItemRequest] = Field(min_length=1)
+    items: list[OrderItemRequest] = Field(min_length=1, max_length=MAX_BASKET_LINES)
     coupon_code: str | None = Field(default=None, max_length=50)
 
 
@@ -534,7 +542,12 @@ class ProductCreateRequest(BaseModel):
 
 
 class ProductUpdateRequest(ProductCreateRequest):
-    pass
+    # The shelf count the editing form was opened with. When it travels
+    # with the save, `stock` is read as a change against it — "the form
+    # said 10, the baker made it 15" adds five to whatever the shelf holds
+    # *now* — so boxes sold while the form sat open are not quietly put
+    # back. Left out, `stock` is the absolute count it has always been.
+    stock_was: int | None = Field(default=None, ge=0)
 
 
 # The admin desk's VAT workflow (the euro migration's classification phase).

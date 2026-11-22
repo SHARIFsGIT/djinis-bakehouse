@@ -17,7 +17,7 @@ expiry path's own guards the moment Stripe reports the failure.
 import logging
 from datetime import timedelta
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 
@@ -30,9 +30,11 @@ from ..routers.orders import (
     _cancel_order,
     _get_order_for,
     _late_cancel_fee,
+    _lock_for_cancellation,
     _serialize,
     mark_order_paid,
     queue_status_email,
+    refund_payment_on_cancelled_order,
 )
 from ..schemas import OrderDetailOut
 from ..security import CurrentUser, DbSession
@@ -168,8 +170,120 @@ def _record_completed_payment(session: dict, background: BackgroundTasks, db) ->
     )
     if order is None:
         return  # the row vanished between the lookup and the lock
-    if mark_order_paid(order, db, background, payment_intent=session.get("payment_intent")):
+    _land_payment(order, session, background, db)
+
+
+def _land_payment(order: Order, session: dict, background: BackgroundTasks, db) -> None:
+    """Decide what a completed payment means for a locked, freshly read
+    order. Every paid session ends in exactly one of these — never in
+    silence, because silence here is money the book doesn't know about:
+
+    * the order was cancelled before the money landed → sent straight back;
+    * the order is waiting for its payment → marked paid, receipt sent;
+    * the order already holds this very payment → a replay, nothing to do;
+    * the order already holds a *different* payment → a second charge for
+      the same box (an old pay link paid as well as a fresh one) → the
+      extra one is refunded in full and the desk is told.
+    """
+    intent = session.get("payment_intent")
+    if order.status == OrderStatus.CANCELLED.value:
+        if refund_payment_on_cancelled_order(order, db, background, payment_intent=intent):
+            logger.warning(
+                "order %s: payment landed after cancellation (session %s) — sent back",
+                order.order_number,
+                session.get("id"),
+            )
+            return
+    elif mark_order_paid(order, db, background, payment_intent=intent):
         logger.info("order %s paid via Stripe session %s", order.order_number, session.get("id"))
+        return
+    _settle_extra_payment(order, session, background, db)
+
+
+def _settle_extra_payment(order: Order, session: dict, background: BackgroundTasks, db) -> None:
+    """A paid session arrived for an order whose payment is already on the
+    book. The same payment arriving again (Stripe retries, the confirm
+    check racing the webhook) is the ordinary case and changes nothing;
+    a different payment intent is real extra money and never stays."""
+    intent = str(session.get("payment_intent") or "")
+    known = order.stripe_payment_intent_id
+    if not intent or intent == known:
+        return
+    # The timeline is the ledger of extra payments already handled — a
+    # replayed event must not refund (or announce) the same one twice.
+    marker = f"({intent})"
+    if db.scalar(
+        select(OrderEvent.id)
+        .where(OrderEvent.order_id == order.id, OrderEvent.comment.contains(marker, autoescape=True))
+        .limit(1)
+    ):
+        return
+    link = f"/admin/orders?search={order.order_number}"
+
+    if (
+        known is None
+        and order.payment_status == PaymentStatus.PAID.value
+        and order.status != OrderStatus.CANCELLED.value
+    ):
+        # Marked paid by hand at the desk before any card payment landed.
+        # This is the first money Stripe actually holds for the order: keep
+        # its trail so a later cancellation can refund it, and let a person
+        # decide whether the customer has now paid twice (cash and card).
+        order.stripe_payment_intent_id = intent
+        db.add(
+            OrderEvent(
+                order_id=order.id,
+                status=order.status,
+                comment=f"Card payment received {marker} — the order was already marked paid at the desk",
+            )
+        )
+        notify_admin(
+            db,
+            kind="order",
+            title=f"Card payment on order {order.order_number}, already marked paid",
+            body="Check whether this order was paid twice — once at the desk and once by card.",
+            link=link,
+            background=background,
+        )
+        db.commit()
+        logger.warning(
+            "order %s: card payment %s landed on an order already marked paid by hand",
+            order.order_number,
+            intent,
+        )
+        return
+
+    amount = session.get("amount_total")
+    if type(amount) is not int or amount <= 0:
+        # Every session for an order is minted from the same stored total.
+        amount = stripe_gateway.cents(float(order.total))
+    try:
+        stripe_gateway.refund(intent, amount)
+    except stripe_gateway.GatewayUnavailable:
+        outcome = "refund could not be sent — refund it from the Stripe dashboard"
+        title = f"Refund needed — order {order.order_number} was charged twice"
+    else:
+        outcome = "refunded in full automatically"
+        title = f"Order {order.order_number} was charged twice — extra payment refunded"
+    db.add(
+        OrderEvent(
+            order_id=order.id,
+            status=order.status,
+            comment=f"A second payment arrived for this order {marker} — {outcome}",
+        )
+    )
+    notify_admin(
+        db,
+        kind="order",
+        title=title,
+        body="An older pay link was paid as well as the current one.",
+        link=link,
+        background=background,
+    )
+    db.commit()
+    logger.warning(
+        "order %s: second payment %s — %s", order.order_number, intent, outcome
+    )
 
 
 def _cancel_expired_session(
@@ -205,7 +319,8 @@ def _cancel_expired_session(
         return  # a newer pay link superseded this session
     if order.payment_status != PaymentStatus.PENDING.value:
         return  # paid after all (raced with the completed event) — leave it
-    _cancel_order(order, db, by_customer=False, comment=comment)
+    # The session is already over — there is no pay page left to close.
+    _cancel_order(order, db, by_customer=False, comment=comment, close_pay_page=False)
     db.commit()
     if background is not None:
         # They asked for the bake and walked away from the pay page — the
@@ -373,11 +488,10 @@ def confirm_payment(order_id: int, user: CurrentUser, db: DbSession, background:
     gateway right now, so what they read next is true even when the
     webhook is still in flight."""
     order = _get_order_for(order_id, user, db)
-    if (
-        order.stripe_session_id
-        and order.payment_status == PaymentStatus.PENDING.value
-        and order.status != OrderStatus.CANCELLED.value
-    ):
+    # A cancelled order is checked too: its pay page may have outlived it,
+    # and money that landed there must be sent back, not left unseen until
+    # (or unless) the webhook arrives.
+    if order.stripe_session_id and order.payment_status == PaymentStatus.PENDING.value:
         try:
             session = stripe_gateway.retrieve_session(order.stripe_session_id)
         except stripe_gateway.GatewayUnavailable:
@@ -390,23 +504,37 @@ def confirm_payment(order_id: int, user: CurrentUser, db: DbSession, background:
             # wire — judge on a locked, freshly refreshed row, the same
             # re-read the webhook itself takes, so exactly one of the two
             # records the payment and sends the receipt.
-            order = db.scalar(
-                select(Order)
-                .where(Order.id == order.id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            )
+            order = _lock_for_cancellation(order, db)
             if order is None:
                 raise HTTPException(status_code=404, detail="Order not found")
-            mark_order_paid(order, db, background, payment_intent=session.get("payment_intent"))
+            if order.status == OrderStatus.CANCELLED.value:
+                refund_payment_on_cancelled_order(
+                    order, db, background, payment_intent=session.get("payment_intent")
+                )
+            else:
+                mark_order_paid(order, db, background, payment_intent=session.get("payment_intent"))
     return _serialize(order, detailed=True, cancel_fee_preview=_late_cancel_fee(order, db))
 
 
 @router.post("/{order_id}/session", response_model=OrderDetailOut, status_code=status.HTTP_201_CREATED)
-def new_payment_session(order_id: int, user: CurrentUser, db: DbSession, request: Request):
+def new_payment_session(
+    order_id: int,
+    user: CurrentUser,
+    db: DbSession,
+    request: Request,
+    response: Response,
+    background: BackgroundTasks,
+):
     """A fresh pay link for an order that was placed but never paid — the
     card failed or they walked away mid-checkout; they shouldn't have to
-    rebuild the basket from scratch."""
+    rebuild the basket from scratch.
+
+    One order, one live pay page: the link being replaced is asked about
+    first (it may have been paid a moment ago, the webhook still on the
+    wire — then the order is simply marked paid and no second link is
+    minted), and once the fresh one is on the order the old page is closed
+    so it can never take a second payment for the same box.
+    """
     order = _get_order_for(order_id, user, db)
     if order.payment_method != PaymentMethod.CARD.value:
         raise HTTPException(status_code=400, detail="This order isn't a card order")
@@ -417,6 +545,40 @@ def new_payment_session(order_id: int, user: CurrentUser, db: DbSession, request
     # even one placed when the rules were live. The stored totals are never
     # recalculated — this only decides whether charging may resume.
     _approved_money_rules()
+
+    superseded = order.stripe_session_id
+    # Whether the old page should be closed afterwards: yes unless Stripe
+    # itself says it is already over.
+    superseded_open = bool(superseded)
+    if superseded:
+        try:
+            previous = stripe_gateway.retrieve_session(superseded)
+        except stripe_gateway.GatewayUnavailable:
+            # Unreadable — a session minted under other keys, or Stripe
+            # blinking. Not a reason to strand the order unpayable: the
+            # fresh link below fails on its own if Stripe is really down,
+            # and the webhook's guard covers a late payment on the old page.
+            previous = {}
+        if previous.get("payment_status") == "paid":
+            # Already paid on the link they are asking to replace. Land the
+            # payment now (locked, exactly as the webhook would) and hand
+            # back the paid order — with no payment_url, because there is
+            # nothing left to pay.
+            locked = _lock_for_cancellation(order, db)
+            if locked is None:
+                raise HTTPException(status_code=404, detail="Order not found")
+            if locked.status == OrderStatus.CANCELLED.value:
+                refund_payment_on_cancelled_order(
+                    locked, db, background, payment_intent=previous.get("payment_intent")
+                )
+            else:
+                mark_order_paid(locked, db, background, payment_intent=previous.get("payment_intent"))
+            response.status_code = status.HTTP_200_OK
+            return _serialize(
+                locked, detailed=True, cancel_fee_preview=_late_cancel_fee(locked, db)
+            )
+        superseded_open = previous.get("status") in (None, "open")
+
     try:
         session = stripe_gateway.create_checkout_session(
             order, str(request.base_url).rstrip("/")
@@ -437,6 +599,15 @@ def new_payment_session(order_id: int, user: CurrentUser, db: DbSession, request
     order.stripe_session_id = session["id"]
     db.commit()
     db.refresh(order)
+    # Only now — with the fresh link committed — is the old page closed.
+    # The order matters: closing it first would let Stripe's expiry event
+    # arrive while the order still pointed at that session, and the expiry
+    # path would cancel the very order being paid. Committed first, the
+    # event finds a superseded session and is ignored. Best effort: if the
+    # old page cannot be closed and is paid anyway, the webhook refunds the
+    # second payment (_settle_extra_payment).
+    if superseded_open:
+        stripe_gateway.expire_session(superseded)
     return _serialize(
         order, detailed=True, payment_url=session["url"], cancel_fee_preview=_late_cancel_fee(order, db)
     )

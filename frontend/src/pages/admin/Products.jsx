@@ -121,6 +121,10 @@ export default function AdminProducts() {
           vat_review_status: data.vat_review_status ?? "pending",
           milk_content_percent: data.milk_content_percent ?? "",
         },
+        // The shelf count as this form found it. Sent back with the save so
+        // the server applies only the *change* the baker made — boxes sold
+        // while the form sat open are not quietly put back on the shelf.
+        stockWas: data.stock,
         photo: null,
         newCategory: "",
         vat_rate_preview: data.vat_rate_preview ?? null,
@@ -217,11 +221,25 @@ export default function AdminProducts() {
           f.milk_content_percent === "" ? null : Number(f.milk_content_percent),
       };
       if (editing.id) {
-        await client.put(`/admin/products/${editing.id}`, payload);
+        const { data: saved } = await client.put(`/admin/products/${editing.id}`, {
+          ...payload,
+          ...(editing.stockWas != null ? { stock_was: editing.stockWas } : {}),
+        });
+        // The product is saved from here on. If the classification below is
+        // refused, a second press must apply the change again from the
+        // shelf's new count, not from the one this form first opened with.
+        setEditing((s) =>
+          s ? { ...s, stockWas: saved.stock, form: { ...s.form, stock: saved.stock } } : s,
+        );
         await client.put(`/admin/products/${editing.id}/vat`, vatPayload);
         toast.success("Product updated");
       } else {
         const { data: created } = await client.post("/admin/products", payload);
+        // The bake exists now. Remember it before the classification is
+        // sent: if that step is refused (a milk drink without its milk
+        // percentage, say) the dialog stays open, and pressing the button
+        // again must finish THIS product — not add a second one.
+        setEditing((s) => (s ? { ...s, id: created.id, stockWas: created.stock } : s));
         await client.put(`/admin/products/${created.id}/vat`, vatPayload);
         toast.success("Product added to the case");
       }

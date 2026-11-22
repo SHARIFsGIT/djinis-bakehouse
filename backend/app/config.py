@@ -123,6 +123,15 @@ class Settings(BaseSettings):
     forgot_rate_limit: int = 5  # reset asks + redemptions per minute
     otp_rate_limit: int = 5  # sign-in-code asks per minute
     quote_rate_limit: int = 30  # public basket price checks per minute
+    # Which request header carries the visitor's real address, for the
+    # brakes above. Empty (the default) keeps the long-standing behaviour:
+    # the first X-Forwarded-For hop — which is only honest when the proxy in
+    # front REPLACES that header; a proxy that appends to it lets any caller
+    # write their own first hop and walk past every per-address brake. When
+    # the edge provides an address header it sets itself (Cloudflare's
+    # CF-Connecting-IP, for one), name it here. Only ever a header your own
+    # edge overwrites — a pass-through header is as forgeable as the default.
+    client_ip_header: str = ""
 
     # Outgoing email (password resets today; newsletters and marketing later).
     # Empty SMTP_HOST = the log-only fallback: messages are logged with their

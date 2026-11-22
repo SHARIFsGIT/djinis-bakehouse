@@ -135,10 +135,24 @@ export default function OrderDetail() {
     setPaying(true);
     try {
       const { data } = await client.post(`/payments/${order.id}/session`);
-      window.location.assign(data.payment_url);
+      if (data.payment_url) {
+        window.location.assign(data.payment_url);
+        return;
+      }
+      // No link came back: the payment had already landed on the earlier
+      // one. Nothing left to pay — show the order as it now stands.
+      setOrder(data);
+      toast.success("This order is already paid — nothing more to do");
+      setPaying(false);
     } catch (err) {
       toast.error(apiError(err, "Couldn't open the payment page — try again"));
       setPaying(false);
+      // A refusal usually means the order moved on while this page sat
+      // open (paid, cancelled, its window closed) — show its true state.
+      client
+        .get(`/orders/${order.id}`)
+        .then(({ data }) => setOrder(data))
+        .catch(() => {});
     }
   };
 
@@ -340,7 +354,12 @@ export default function OrderDetail() {
                   <span>−{money(order.discount_amount, order.currency)}</span>
                 </div>
               )}
-              <div className="flex justify-between"><span className="opacity-70">{order.tax_included ? "VAT (included)" : "Tax"}</span><span>{money(order.tax, order.currency)}</span></div>
+              {/* No tax row while none was charged — the basket and checkout
+                  hide it for the same reason: "Tax €0.00" would read as a
+                  0%-VAT decision the shop hasn't made. */}
+              {order.tax > 0 && (
+                <div className="flex justify-between"><span className="opacity-70">{order.tax_included ? "VAT (included)" : "Tax"}</span><span>{money(order.tax, order.currency)}</span></div>
+              )}
               <div className="flex justify-between">
                 <span className="opacity-70">Delivery</span>
                 <span>{order.shipping_fee === 0 ? <span className="font-semibold text-success">FREE</span> : money(order.shipping_fee, order.currency)}</span>
@@ -355,7 +374,12 @@ export default function OrderDetail() {
                 </div>
               )}
             </div>
-            <p className="mt-3 text-xs opacity-60">Paid via {PAYMENT_METHODS[order.payment_method] ?? order.payment_method}</p>
+            {/* "Paid via" only once it is — an unpaid order names its method
+                without claiming the money arrived. */}
+            <p className="mt-3 text-xs opacity-60">
+              {order.payment_status === "pending" ? "Payment by" : "Paid via"}{" "}
+              {PAYMENT_METHODS[order.payment_method] ?? order.payment_method}
+            </p>
           </section>
 
           <section className="rounded-box bg-base-200/70 p-5 text-sm">

@@ -27,7 +27,13 @@ def send_sms(to: str, body: str) -> bool:
     code still works from the server log, and the customer can ask again."""
     settings = get_settings()
     if not configured():
-        logger.info("sms to %s | %s", to, body)
+        if settings.is_production:
+            # The body is a live sign-in code — never into a production log.
+            # (The phone rail refuses to mint codes at all on a production
+            # deployment without Twilio; this is the second lock.)
+            logger.warning("sms to %s not sent — Twilio is not configured (body withheld)", to)
+        else:
+            logger.info("sms to %s | %s", to, body)
         return True
     data = urllib.parse.urlencode(
         {"From": settings.twilio_from_number, "To": to, "Body": body}

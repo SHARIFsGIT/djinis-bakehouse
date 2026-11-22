@@ -7,6 +7,21 @@ export function Loading({ label = "Warming up the oven…" }) {
   );
 }
 
+/** A request that failed, said plainly, with a way to try again — so a
+ *  page whose first fetch broke never sits on its loader forever. */
+export function LoadError({ message = "That didn't load.", onRetry }) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 py-16 text-center" role="alert">
+      <p className="text-sm font-semibold opacity-70">{message}</p>
+      {onRetry && (
+        <button type="button" className="btn btn-outline btn-sm" onClick={onRetry}>
+          Try again
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** Placeholder grid shown while products load. */
 export function ProductGridSkeleton({ count = 8 }) {
   return (

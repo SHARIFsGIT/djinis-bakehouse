@@ -9,6 +9,7 @@ import { useToast } from "../context/ToastContext";
 import useBasketQuote from "../hooks/useBasketQuote";
 import { getStoredCoupon, storeCoupon } from "../lib/coupon";
 import {
+  couponSaving,
   formatDate,
   isoDate,
   money,
@@ -42,16 +43,20 @@ const EMPTY_ADDRESS = {
   is_default: true,
 };
 
+/* key, label, required, placeholder, autocomplete token, input type, and
+   the longest value the server takes (schemas.AddressBase). The autocomplete
+   tokens let the browser fill a known address in one tap; the labels are
+   written for any country's address, not one. */
 const ADDRESS_FIELDS = [
-  ["recipient", "Recipient name", true, ""],
-  ["phone", "Phone", false, ""],
-  ["line1", "Street address", true, ""],
-  ["line2", "Apartment, suite (optional)", false, ""],
-  ["city", "City", true, ""],
-  ["state", "State", true, ""],
-  ["postal_code", "ZIP / postal code", true, ""],
+  ["recipient", "Recipient name", true, "", "name", "text", 150],
+  ["phone", "Phone", false, "", "tel", "tel", 30],
+  ["line1", "Street address", true, "", "address-line1", "text", 255],
+  ["line2", "Apartment, suite (optional)", false, "", "address-line2", "text", 255],
+  ["city", "City", true, "", "address-level2", "text", 100],
+  ["state", "State / region", true, "", "address-level1", "text", 100],
+  ["postal_code", "Postal code", true, "", "postal-code", "text", 20],
   // No default country — nothing is filled in on the customer's behalf.
-  ["country", "Country", true, "Germany"],
+  ["country", "Country", true, "Germany", "country-name", "text", 100],
 ];
 
 export default function Checkout() {
@@ -114,7 +119,7 @@ export default function Checkout() {
       );
       setCoupon(data);
       setCouponInput("");
-      if (!silent) toast.success(`${data.code} applied — ${data.percent_off}% off`);
+      if (!silent) toast.success(`${data.code} applied — ${couponSaving(data)}`);
       return data;
     } catch (err) {
       setCoupon(null);
@@ -297,8 +302,9 @@ export default function Checkout() {
             {(mode === "new" || addresses.length === 0) && (
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <div className="sm:col-span-2">
-                  <label className="label text-xs">Label</label>
+                  <label className="label text-xs" htmlFor="address-label">Label</label>
                   <input
+                    id="address-label"
                     className="input input-bordered w-full"
                     value={newAddress.label}
                     onChange={(e) => setField("label", e.target.value)}
@@ -306,13 +312,19 @@ export default function Checkout() {
                     maxLength={50}
                   />
                 </div>
-                {ADDRESS_FIELDS.map(([key, label, required, placeholder]) => (
+                {ADDRESS_FIELDS.map(([key, label, required, placeholder, autoComplete, type, maxLength]) => (
                   <div key={key} className={key === "line1" ? "sm:col-span-2" : ""}>
-                    <label className="label text-xs">{label}</label>
+                    {/* Tied to its input by id — a screen reader announces
+                        the field, and a tap on the label focuses it. */}
+                    <label className="label text-xs" htmlFor={`address-${key}`}>{label}</label>
                     <input
+                      id={`address-${key}`}
+                      type={type}
                       className="input input-bordered w-full"
                       required={required}
                       placeholder={placeholder}
+                      autoComplete={autoComplete}
+                      maxLength={maxLength}
                       value={newAddress[key] ?? ""}
                       onChange={(e) => setField(key, e.target.value)}
                     />
@@ -443,7 +455,7 @@ export default function Checkout() {
               <div className="flex items-center justify-between gap-2 text-sm">
                 <span>
                   <span className="badge badge-secondary badge-sm font-bold">{coupon.code}</span>{" "}
-                  <span className="opacity-70">{coupon.percent_off}% off</span>
+                  <span className="opacity-70">{couponSaving(coupon)}</span>
                 </span>
                 <button
                   type="button"
@@ -485,7 +497,7 @@ export default function Checkout() {
                       onClick={() => applyCoupon(v.code)}
                       className="btn btn-ghost btn-xs w-full justify-between border border-dashed border-base-300 px-3 text-xs hover:bg-base-200"
                     >
-                      <span className="font-bold">{v.code} · {v.percent_off}% off</span>
+                      <span className="font-bold">{v.code} · {couponSaving(v)}</span>
                       <span className="opacity-70">
                         {v.min_subtotal
                           ? `boxes of ${money(v.min_subtotal)}+`

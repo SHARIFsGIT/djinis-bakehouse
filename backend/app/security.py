@@ -150,7 +150,17 @@ DbSession = Annotated[Session, Depends(get_db)]
 
 
 def client_key(request) -> str:
-    """Best-effort client identity for rate limiting; proxies are trusted only
-    for the first forwarded hop."""
+    """Best-effort client identity for rate limiting.
+
+    When CLIENT_IP_HEADER names a header the edge sets itself, that is the
+    visitor's address. Otherwise — and whenever that header is absent — the
+    first X-Forwarded-For hop is used, as it always was; that hop is only
+    trustworthy behind a proxy that replaces the header rather than
+    appending to it (see config.client_ip_header)."""
+    header = settings.client_ip_header.strip()
+    if header:
+        edge_address = request.headers.get(header, "").strip()
+        if edge_address:
+            return edge_address
     forwarded = request.headers.get("x-forwarded-for", "")
     return forwarded.split(",")[0].strip() or (request.client.host if request.client else "unknown")

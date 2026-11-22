@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Outlet, Route, Routes, useLocation } from "react-router";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
+import { Loading } from "./components/Loading";
 import { AdminRoute, ProtectedRoute } from "./components/RouteGuards";
 import client from "./api/client";
 import { applyShopConfig } from "./lib/format";
@@ -29,15 +30,50 @@ import OrderDetail from "./pages/account/OrderDetail";
 import OrderReceipt from "./pages/account/OrderReceipt";
 import Saved from "./pages/account/Saved";
 import AdminLayout from "./pages/admin/AdminLayout";
-import Dashboard from "./pages/admin/Dashboard";
-import AdminOrders from "./pages/admin/Orders";
-import AdminProducts from "./pages/admin/Products";
-import Costing from "./pages/admin/Costing";
-import AdminReviews from "./pages/admin/Reviews";
-import Promotions from "./pages/admin/Promotions";
-import AdminUsers from "./pages/admin/Users";
-import Marketing from "./pages/admin/Marketing";
-import Settings from "./pages/admin/Settings";
+
+/* The baker's desk is more than half of the shop's JavaScript, and no
+   customer ever opens it. Each desk page is its own chunk, fetched the first
+   time it is visited — so a shopper's first load carries the storefront and
+   nothing else. (AdminLayout stays in the main bundle: it is a few lines,
+   and it holds the Suspense boundary that keeps the sidebar still while a
+   page arrives.)
+
+   A desk left open across a deploy will ask for a chunk whose name no longer
+   exists. One reload picks up the new index and its chunk names; the
+   session flag keeps a chunk that is genuinely broken from reloading
+   forever — that case falls through to the ErrorBoundary. */
+const CHUNK_RELOAD_KEY = "bakehouse_chunk_reload";
+const deskPage = (load) =>
+  lazy(() =>
+    load().then(
+      (module) => {
+        try {
+          sessionStorage.removeItem(CHUNK_RELOAD_KEY);
+        } catch {}
+        return module;
+      },
+      (error) => {
+        let alreadyTried = true;
+        try {
+          alreadyTried = sessionStorage.getItem(CHUNK_RELOAD_KEY) === "1";
+          sessionStorage.setItem(CHUNK_RELOAD_KEY, "1");
+        } catch {}
+        if (alreadyTried) throw error;
+        window.location.reload();
+        return new Promise(() => {}); // the page is on its way out
+      },
+    ),
+  );
+
+const Dashboard = deskPage(() => import("./pages/admin/Dashboard"));
+const AdminOrders = deskPage(() => import("./pages/admin/Orders"));
+const AdminProducts = deskPage(() => import("./pages/admin/Products"));
+const Costing = deskPage(() => import("./pages/admin/Costing"));
+const AdminReviews = deskPage(() => import("./pages/admin/Reviews"));
+const Promotions = deskPage(() => import("./pages/admin/Promotions"));
+const AdminUsers = deskPage(() => import("./pages/admin/Users"));
+const Marketing = deskPage(() => import("./pages/admin/Marketing"));
+const Settings = deskPage(() => import("./pages/admin/Settings"));
 
 function ScrollToTop() {
   const { pathname } = useLocation();
@@ -52,7 +88,10 @@ function ShopLayout() {
     <div className="flex min-h-screen flex-col">
       <Navbar />
       <main className="flex-1">
-        <Outlet />
+        {/* The net under any lazily-loaded page that has no closer boundary */}
+        <Suspense fallback={<Loading />}>
+          <Outlet />
+        </Suspense>
       </main>
       <Footer />
     </div>

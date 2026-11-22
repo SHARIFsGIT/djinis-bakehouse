@@ -1,7 +1,11 @@
 """FastAPI application factory for Djini's Bakehouse."""
 
 import asyncio
+import base64
+import hashlib
 import logging
+import re
+import threading
 import uuid
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -29,6 +33,9 @@ from .security import DbSession
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 logger = logging.getLogger("bakery")
+
+# What a client-supplied X-Request-ID must look like to be kept.
+_REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 # Columns added after the first release. create_all() cannot add them to an
 # existing database, so additive changes are listed here and applied on start.
@@ -166,20 +173,45 @@ class SlidingWindowLimiter:
     ever runs behind several workers.
     """
 
+    # How many calls pass between sweeps of keys that have gone quiet.
+    PRUNE_EVERY = 1024
+
     def __init__(self, limit: int, window: float = 60.0) -> None:
         self.limit = limit
         self.window = window
         self.hits: dict[str, deque[float]] = defaultdict(deque)
+        # Handlers run on a thread pool: the check-then-append below must be
+        # one step, or two requests arriving together both slip under the
+        # limit.
+        self._lock = threading.Lock()
+        self._calls = 0
 
     def allow(self, key: str) -> bool:
         now = monotonic()
-        events = self.hits[key]
-        while events and now - events[0] > self.window:
-            events.popleft()
-        if len(events) >= self.limit:
-            return False
-        events.append(now)
-        return True
+        with self._lock:
+            self._calls += 1
+            if self._calls % self.PRUNE_EVERY == 0:
+                self._prune(now)
+            events = self.hits[key]
+            while events and now - events[0] > self.window:
+                events.popleft()
+            if len(events) >= self.limit:
+                return False
+            events.append(now)
+            return True
+
+    def _prune(self, now: float) -> None:
+        """Forget keys with nothing left inside the window. Without this the
+        table only ever grows — one entry per address ever seen, and a
+        caller inventing addresses could grow it until the worker runs out
+        of memory. Called under the lock."""
+        stale = [
+            key
+            for key, events in self.hits.items()
+            if not events or now - events[-1] > self.window
+        ]
+        for key in stale:
+            del self.hits[key]
 
 
 def create_limiters(settings) -> dict[str, SlidingWindowLimiter]:
@@ -191,6 +223,10 @@ def create_limiters(settings) -> dict[str, SlidingWindowLimiter]:
         "reset": SlidingWindowLimiter(settings.forgot_rate_limit),
         # Phone sign-in codes — texts cost money, so the brake is tight.
         "otp": SlidingWindowLimiter(settings.otp_rate_limit),
+        # ...and a ceiling per phone number, per hour, whoever is asking:
+        # the per-address brake above is no brake at all against a caller
+        # that changes address, and every code is five more guesses.
+        "otp_number": SlidingWindowLimiter(auth.PHONE_CODES_PER_HOUR, window=3600.0),
         # Public write endpoints — tighter than auth because one blast of
         # signups or catering leads is plenty for anyone.
         "newsletter": SlidingWindowLimiter(5),
@@ -206,6 +242,54 @@ def create_limiters(settings) -> dict[str, SlidingWindowLimiter]:
         # the storefront re-quotes on every basket change.
         "quote": SlidingWindowLimiter(settings.quote_rate_limit),
     }
+
+
+_INLINE_SCRIPT = re.compile(rb"<script(?![^>]*\bsrc\s*=)[^>]*>(.*?)</script>", re.S | re.I)
+
+
+def _content_security_policy(index_html: Path) -> str:
+    """The Content-Security-Policy the app shell is served with.
+
+    The shop keeps its sign-in tokens where page scripts can read them, so
+    the one thing that must never happen is a script the shop didn't ship
+    running on its pages. This policy is that rule, enforced by the
+    browser: scripts only from this origin — plus the exact inline snippets
+    the built index.html itself carries (the pre-paint theme switch),
+    admitted by their SHA-256 so nothing else inline can ride along. The
+    hashes are read from the built file, so the policy follows the build
+    instead of having to be kept in step by hand.
+
+    Everything else is same-origin too: the API (connect-src), fonts and
+    styles (inline style attributes are allowed — the UI library sets
+    them), images from here or any https host (a product photo may live
+    elsewhere), no plugins, no framing (frame-ancestors, the modern form of
+    X-Frame-Options), and forms that post only home. Stripe's hosted page
+    and the Facebook dialog are full-page navigations — outside what a CSP
+    governs — so checkout and social sign-in are untouched.
+    """
+    html = index_html.read_bytes()
+    sources = ["'self'"]
+    for match in _INLINE_SCRIPT.finditer(html):
+        # The browser hashes the script text as it parsed it: CR/LF pairs
+        # already folded to LF, whatever the file on disk carries.
+        body = match.group(1).replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        if body.strip():
+            digest = base64.b64encode(hashlib.sha256(body).digest()).decode()
+            sources.append(f"'sha256-{digest}'")
+    return "; ".join(
+        [
+            "default-src 'self'",
+            f"script-src {' '.join(sources)}",
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' data: blob: https:",
+            "font-src 'self' data:",
+            "connect-src 'self'",
+            "object-src 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
+            "frame-ancestors 'none'",
+        ]
+    )
 
 
 def configure_logging() -> None:
@@ -268,6 +352,13 @@ async def lifespan(app: FastAPI):
     if settings.is_production and settings.enable_docs:
         logger.warning(
             "API docs are enabled in production — set ENABLE_DOCS=false in .env if that is not intended."
+        )
+    # A shop whose mail goes nowhere should say so at boot, not be found out
+    # by a customer who never got a receipt or a reset link.
+    if settings.is_production and not settings.smtp_host:
+        logger.warning(
+            "Email is OFF — SMTP_HOST is not set: receipts, order updates, password "
+            "resets and desk alerts are logged (subject only), never sent."
         )
     # Currency-bound money rules pending owner approval as EUR figures: each
     # unset value keeps checkout fail-closed (see routers/orders). Say it at
@@ -352,7 +443,11 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def request_context(request: Request, call_next):
         """Security headers plus a request id and one access-log line per request."""
-        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+        # A caller's own id is kept only when it is id-shaped — the value is
+        # echoed into the log and the response, so anything else (a
+        # kilobyte of noise, control characters) is replaced, not trusted.
+        supplied = request.headers.get("x-request-id", "")
+        request_id = supplied if _REQUEST_ID.fullmatch(supplied) else uuid.uuid4().hex[:12]
         request.state.request_id = request_id
         start = monotonic()
         try:
@@ -410,6 +505,13 @@ def create_app() -> FastAPI:
     dist_dir = BACKEND_DIR.parent / "frontend" / "dist"
     if settings.serve_frontend_dist and (dist_dir / "index.html").is_file():
 
+        # The app shell's Content-Security-Policy, worked out once from the
+        # built index.html (see _content_security_policy).
+        shell_headers = {
+            "Cache-Control": "no-cache",
+            "Content-Security-Policy": _content_security_policy(dist_dir / "index.html"),
+        }
+
         @app.get("/{full_path:path}", include_in_schema=False)
         async def spa(full_path: str):
             # Unknown API paths must stay JSON 404s — the catch-all exists
@@ -423,8 +525,14 @@ def create_app() -> FastAPI:
                     # Vite fingerprints these filenames — safe to cache forever.
                     response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
                 return response
+            # A fingerprinted asset that isn't there is a 404, never the app
+            # shell: a tab left open across a deploy asks for a chunk whose
+            # name no longer exists, and answering with index.html would hand
+            # the browser HTML where it asked for JavaScript.
+            if full_path.startswith("assets/"):
+                return JSONResponse(status_code=404, content={"detail": "Not found"})
             # index.html must always be re-fetched so SPA updates go live.
-            return FileResponse(dist_dir / "index.html", headers={"Cache-Control": "no-cache"})
+            return FileResponse(dist_dir / "index.html", headers=shell_headers)
 
     return app
 
