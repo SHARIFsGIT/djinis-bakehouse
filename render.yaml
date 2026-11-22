@@ -93,6 +93,15 @@ services:
       # address the edge itself reports (not a caller-writable first
       # X-Forwarded-For hop), add CLIENT_IP_HEADER in the dashboard — see
       # backend/.env.example. Verify what your edge sends before setting it.
+      # The shop's one public address (e.g. https://djinisbakehouse.com) —
+      # every emailed link and every return from a payment page is built on
+      # it. Set it by hand once the domain is attached; see backend/.env.example.
+      - key: PUBLIC_BASE_URL
+        sync: false
+      # The bakery's own clock: what "today" means for order numbers and
+      # delivery dates, and the time printed on receipts and exports.
+      - key: SHOP_TIMEZONE
+        value: Europe/Berlin
       - key: ADMIN_EMAIL
         sync: false # you set this when the blueprint is applied
       - key: ADMIN_PASSWORD

@@ -141,9 +141,30 @@ schema.org Product structured data (price, availability, aggregate
 rating), so search engines and share cards speak the catalog's own words.
 
 **Newsletter capture** — the footer collects sign-ups (`POST /api/newsletter`,
-rate-limited, idempotent — re-subscribing says so instead of erroring). Admins see
-the list under a Newsletter tab with subscriber counts and a one-click CSV export
-for the mailing tool of their choice.
+rate-limited, idempotent — re-subscribing says so instead of erroring). The
+baker works the list at the foot of the Marketing desk: the count, every
+address with when and where it signed up, a remove button for "please take me
+off", and a one-click CSV export for the mailing tool of their choice. It is
+its own list — campaigns never draw on it; they go only to customers whose
+consent is on record.
+
+**Where the van goes** — Settings → Delivery area takes the postal codes the
+shop delivers to (`10115`, or `101*` for a whole area). Checkout tells the
+customer as soon as the postal code is typed, and the server refuses an
+order to an address outside the list before any stock is reserved. Left
+empty there is no limit, exactly as before.
+
+**Legal notice** — Settings → Legal notice holds the shop's "Impressum" in
+the owner's own words. Once it has text it is served at `/imprint` (and
+`/impressum`), linked from the footer of every page and listed in the
+sitemap; until then there is no page and no link — the software never
+invents one.
+
+**A basket that mends itself** — when a line can no longer be honoured (the
+bake sold out, came off the menu, or fewer are left than asked for) the
+server names the line and what is left of it, and the basket offers the fix
+on the spot: take what is left, or remove it. A shopper who loses the race
+for the last ones is told what is on the shelf *now*.
 
 **Verified-purchase reviews** — reviews written by customers who actually bought
 the bake (any non-cancelled order containing it) carry a "Verified purchase"
@@ -235,11 +256,14 @@ changes past orders. Customers can cancel while an order is pending/confirmed/
 baking — stock is restored, orders paid online auto-refund through the provider that took the money, and cancelling after the
 ovens start keeps a late-cancellation fee the admin tunes under Settings
 (refunds pay back the total minus the fee; 0% turns it off). Customers can
-reorder a past box with one click. Under Profile they also hold the keys to
-their own data (GDPR arts. 15/17): one click downloads everything the shop
-keeps on them as JSON, and a password-confirmed deletion scrubs the person
-— name, contact details, hearts, reviews, restock asks — while past orders
-remain only as anonymized invoices, as bookkeeping law requires.
+reorder a past box with one click. Under Profile they also hold the key to
+their own data (GDPR art. 17): a password-confirmed deletion scrubs the
+person — name, contact details, hearts, reviews, restock asks — while past
+orders remain only as anonymized invoices, as bookkeeping law requires. (The
+shop's only admin cannot close their own account — the desk would be left
+without a key.) For an access request (art. 15) the API serves everything
+the shop keeps on the signed-in customer as JSON at
+`GET /api/auth/me/export`; the storefront carries no button for it.
 
 **Baker's desk (admin)** — the whole desk sits in one sidebar (Dashboard,
 Orders, Products, Reviews, Promotions, Users, Settings) alongside the baker's
@@ -267,13 +291,14 @@ editor for create/edit that floats over the page so nothing beneath it
 ever jumps);
 user management as the regulars' roll — measured loyalty tiers, tier chips,
 search, sorting and shelves of ten, with a gift button per VIP/loyal regular
-that copies the coupon code their tier earns; newsletter subscribers with CSV
-export; and Settings, ordered the way the day runs — the home page photo on
-top (swappable from the desk, resettable to the shipped one), the storefront
-copy (announcement bar and the home page's "today" note; clearing a line hides
-it), managers for the home page's coming-soon band and testimonials (add,
-edit, re-order, shelve, photos included), and the cancellation policy at the
-very bottom. Every desk ping — a new order, a new customer (Facebook sign-ups
+that copies the coupon code their tier earns; the Marketing desk (consent,
+campaigns, personal vouchers, the suppression list and the newsletter
+sign-ups with CSV export); and Settings, ordered the way the day runs — the
+home page photo on top (swappable from the desk, resettable to the shipped
+one), the storefront copy (announcement bar and the home page's "today" note;
+clearing a line hides it), managers for the home page's coming-soon band and
+testimonials (add, edit, re-order, shelve, photos included), the cancellation
+policy, contact details and hours, the delivery area and the legal notice. Every desk ping — a new order, a new customer (Facebook sign-ups
 included), a bulk enquiry, a review — lands in the notification bell *and*,
 once SMTP is configured, in every active admin's inbox the same moment: the
 email is queued as a background task, so a slow mail server never slows the
@@ -295,6 +320,10 @@ backend/
     schemas.py       Pydantic request/response models
     security.py      bcrypt hashing, JWT create/decode, auth dependencies,
                      client-key extraction + sliding-window rate limiters
+                     (per address and per account), the shop's public base URL
+    shoptime.py      the bakery's own clock (SHOP_TIMEZONE): "today", and the
+                     times printed on receipts, emails and exports
+    delivery.py      the delivery area — postal codes and `101*` areas
     stripe_gateway.py / paypal_gateway.py
                      the two provider seams — every call to Stripe or PayPal
                      goes through one of them, and tests swap them for fakes
@@ -330,10 +359,15 @@ docs/
                      and PAYMENTS_GO_LIVE.md (rehearsal and live switch)
 frontend/
   src/
-    api/client.js    axios + token attach + silent refresh on 401
-    context/         Auth, Cart, Favorites, Toast providers
+    api/client.js    axios + token attach + silent refresh on 401, request
+                     time limits, a session that survives blocked storage
+    context/         Auth, Cart, Favorites, Toast providers (sign-in and the
+                     basket follow across browser tabs)
     lib/             format helpers, imageResize (client-side photo shrinking),
-                     coupon handoff (basket → checkout)
+                     coupon handoff (basket → checkout), store (the one shared
+                     fetch of /api/store), apiError (failed requests in a
+                     customer's words), delivery (the area check), navigation
+                     (the safe way back after login)
     components/      Navbar, Footer, ProductCard, PhotoTile, guards, small UI bits
     pages/           Home, Products, ProductDetail, Cart, Checkout, BulkOrder,
                      auth, account/*, admin/*
@@ -357,6 +391,9 @@ images/              original photography (source of truth for the pipeline)
 | `SERVE_FRONTEND_DIST`    | `true`                           | serve `frontend/dist` from FastAPI |
 | `ENABLE_DOCS`            | `true`                           | Swagger UI at `/api/docs`   |
 | `LOGIN_RATE_LIMIT` / `REGISTER_RATE_LIMIT` | 10 / 5 per minute per IP | brute-force brakes |
+| `ORDER_RATE_LIMIT` / `REVIEW_RATE_LIMIT` | 12 / 10 per hour per account | a signed-in account's own brakes — every order reserves stock and rings the desk, every review emails the admins |
+| `PAYMENT_ACTION_RATE_LIMIT` | 30 per minute per account | opening a pay page / checking a payment — each is a call to Stripe or PayPal |
+| `SHOP_TIMEZONE` | `Europe/Berlin` | the bakery's clock: what "today" is for order numbers and delivery dates, and the time on receipts, emails and exports (an unknown name falls back to UTC with an error in the log) |
 | `CLIENT_IP_HEADER`       | empty (first `X-Forwarded-For` hop) | the header your edge sets with the visitor's real address (e.g. `CF-Connecting-IP`) — only ever one the edge overwrites itself; see `.env.example` |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | empty / 587 | the one mail account behind receipts, order updates, password resets, restock notes, desk alerts and campaigns. **Empty host = nothing is sent** (dev logs each message; production logs recipient + subject only and says "Email is OFF" at boot) |
 | `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` | empty | "Continue with Facebook" — the button appears once both are set |
@@ -366,7 +403,7 @@ images/              original photography (source of truth for the pipeline)
 | `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | empty | PayPal as its own checkout option — appears once both are set |
 | `PAYPAL_ENVIRONMENT` | `sandbox` | `sandbox` or `live` — which PayPal the credentials belong to (any other word keeps PayPal off) |
 | `PAYPAL_WEBHOOK_ID` | empty | id of the PayPal webhook delivering to `/api/payments/paypal/webhook`; without it PayPal's webhooks are refused |
-| `PUBLIC_BASE_URL` | empty | where a provider sends customers back; empty = the address they were shopping on (leave it so unless the app cannot see its own public address) |
+| `PUBLIC_BASE_URL` | empty | the shop's one public address — every link the shop hands out is built on it (password-reset and unsubscribe links, back-in-stock links, the sitemap, the return from a pay page). Empty = the address each request arrived on. **Set it in production** (`https://your-domain`, no trailing slash), provided the shop answers on that one address only |
 | `SEED_DEMO_DATA`         | unset (dev yes, production no)   | demo customers/orders/reviews; production refuses `true` |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | empty                     | first admin on a fresh no-demo database (required then) |
 | `UPLOADS_DIR`            | empty (`static/uploads`)         | absolute path to a persistent disk on ephemeral platforms |
@@ -548,11 +585,20 @@ before, so no customer ever sees a button that can't work.
   text per number per minute. In dev, with no Twilio keys, the code comes
   back with the API response so the whole flow stays testable.
 
-**Still to wire up for the real market**
+**Opening for real customers**
+
+`docs/operations/LAUNCH_CHECKLIST.md` is the whole list in order: which
+accounts and keys the shop needs (and which it can open without), the
+launch sequence with a check after every step, and the decisions that are
+the owner's alone. In short:
 
 - An SMTP account (`SMTP_*`) — until it is set the shop sends no email.
+- `PUBLIC_BASE_URL` — the shop's one public address.
 - Stripe and PayPal live credentials — follow
-  `docs/operations/PAYMENTS_GO_LIVE.md`; rehearse first.
-- Facebook app + Twilio number, if you want those sign-in rails live.
+  `docs/operations/PAYMENTS_GO_LIVE.md`; rehearse first. Cash on delivery
+  works without either.
+- A legal notice, contact details and (if you deliver locally) a delivery
+  area — all under Settings at the desk.
+- Facebook app + Twilio number, only if you want those sign-in rails.
 - To refresh photography: drop new shots into `images/` and re-run
   `python scripts/prepare_images.py` (requires Pillow).

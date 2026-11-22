@@ -25,10 +25,13 @@ checks and by watching the first genuine order.
 ## What changes when this release boots
 
 Four new tables are created (`payment_transactions`, `payment_refunds`,
-`payment_events`, `checkout_attempts`). **No existing table, column or row
-is altered** — the upgrade is additive, and the previous release ignores
-the new tables, so the code can be rolled back without touching the
-database (one exception: see "Rolling back").
+`payment_events`, `checkout_attempts`), and two empty, optional columns are
+added to `store_settings` (`legal_notice`, `delivery_postal_codes` — the
+shop's legal notice and its delivery area, both blank until the owner fills
+them in under Settings). **No existing column or row is altered** — the
+upgrade is additive, and the previous release ignores the new tables and
+columns, so the code can be rolled back without touching the database (one
+exception: see "Rolling back").
 
 Payments made before this release keep working: an order paid through
 Stripe under the old code gets its ledger row written from the order's own
@@ -61,8 +64,9 @@ record the first time it is refunded or opened at the desk.
 3. **Check it**: it finished without error, it is not empty, and you know
    how you would restore it. Write down the time it was taken.
 
-The deploy does not need the backup to succeed — it only adds tables — but
-no change reaches a database holding real orders without one.
+The deploy does not need the backup to succeed — it only adds tables and
+two empty columns — but no change reaches a database holding real orders
+without one.
 
 ## Step 1 — Deploy
 
@@ -86,11 +90,13 @@ no change reaches a database holding real orders without one.
    ```
 
    It only reads. It prints what is configured, asks Stripe and PayPal
-   about the account and the webhook, and ends with either "Nothing blocks
+   about the account and the webhook, looks at the shop around the
+   payments (is email on, is a legal notice published, what the shop's
+   clock says, the delivery area), and ends with either "Nothing blocks
    online payments" or the list of what does.
 
 **If the deploy misbehaves:** Render → the service → Deploys → roll back to
-the previous deploy. The new tables stay where they are, unused.
+the previous deploy. The new tables and columns stay where they are, unused.
 
 ## Step 2 — Rehearse on Stripe test keys
 
@@ -289,6 +295,11 @@ These are business and legal questions the software does not answer.
    reviewed for: naming each payment processor and what is shared with it
    (the order number, amount and items; for Stripe also the email
    address), the legal basis, and the processors' own privacy notices.
+   **The legal notice (Impressum) is yours to write**: Settings → Legal
+   notice. Until it has text there is no such page and no footer link —
+   the software never invents one. A shop selling online in Germany or
+   the EU is expected to name its operator; what yours must contain is a
+   question for your accountant or a lawyer.
 2. **The order button.** Card and PayPal buttons state the amount ("Pay
    €11.02", "Pay €11.02 with PayPal"). The cash button reads "Place
    order". Where the law requires the button to spell out the obligation
@@ -309,8 +320,20 @@ These are business and legal questions the software does not answer.
    that settle later (SEPA debit) leave the order "being confirmed" for
    days and can fail afterwards; the shop holds the bake until *Paid* only
    if the desk follows the Payment check.
-7. **Receipts' time zone.** Emails state times in UTC; pages now show them
-   in the reader's own time zone.
+7. **The shop's clock.** "Today" — for order numbers and the earliest
+   delivery date a customer may pick — and the times printed in emails,
+   receipts and CSV exports follow `SHOP_TIMEZONE` (default
+   `Europe/Berlin`); pages show times in the reader's own time zone.
+   Change the variable if the bakery keeps another clock.
+8. **Where you deliver.** Settings → Delivery area takes the postal codes
+   the van reaches (`101*` covers an area). Left empty, checkout accepts
+   an address anywhere — which is how it has always behaved.
+9. **Newsletter sign-ups.** The footer form stores an address the moment
+   it is typed (no confirmation email). The list is separate from campaign
+   consent and is only ever exported for your own newsletter tool —
+   whether that tool should ask each address to confirm (double opt-in)
+   before the first mailing is a question for whoever advises you on
+   e-marketing law.
 
 ## Environment variables
 
@@ -323,7 +346,8 @@ These are business and legal questions the software does not answer.
 | `PAYPAL_CLIENT_SECRET` | yes | |
 | `PAYPAL_ENVIRONMENT` | no | `sandbox` (default) or `live` — must match the credentials |
 | `PAYPAL_WEBHOOK_ID` | no | id of the webhook for the same environment |
-| `PUBLIC_BASE_URL` | no | leave empty unless the app cannot see its own public address |
+| `PUBLIC_BASE_URL` | no | the shop's one public address (`https://djinisbakehouse.com`) — every emailed link and every return from a pay page is built on it; set it in production |
+| `SHOP_TIMEZONE` | no | the bakery's clock (default `Europe/Berlin`) |
 
 Secrets are entered only in Render's environment settings. They are never
 committed, never placed in `.env.example`, and never printed by the app or
