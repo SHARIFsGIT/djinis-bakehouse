@@ -29,7 +29,11 @@
 
   --color-info: oklch(46% 0.06 71);
   --color-info-content: oklch(97% 0.012 80);
-  --color-success: oklch(57% 0.072 155);
+  /* The logo's sage, a shade deeper than it first shipped (57%): at 50%
+     it reads at 4.5:1 or better both ways round - as small green text on
+     the cream paper ("FREE", "saves ...") and as the fill under a badge's
+     cream label ("Paid", "Delivered"). */
+  --color-success: oklch(50% 0.075 155);
   --color-success-content: oklch(97% 0.012 80);
   --color-warning: oklch(78% 0.14 75);
   --color-warning-content: oklch(28% 0.05 60);
@@ -48,9 +52,10 @@
 
 /* ------------------------------------------------------------------ */
 /* "midnight" — espresso night. Brand surfaces keep the same           */
-/* burgundy→wine gradient (so cream button text always reads); the     */
-/* gold moves to the accent seat and the wine is lifted just enough    */
-/* to carry text and links on a dark ground.                           */
+/* burgundy→wine gradient; the gold moves to the accent seat. The wine */
+/* has two seats here: --color-secondary is lifted far enough to be    */
+/* read as text and links on the dark paper, and --brand-wine (set     */
+/* below the themes) is the deeper wine that sits under cream text.    */
 /* ------------------------------------------------------------------ */
 @plugin "daisyui/theme" {
   name: "midnight";
@@ -64,7 +69,7 @@
 
   --color-primary: oklch(45% 0.15 14);
   --color-primary-content: oklch(97% 0.012 80);
-  --color-secondary: oklch(60% 0.135 14);
+  --color-secondary: oklch(66% 0.135 14);
   --color-secondary-content: oklch(97% 0.012 80);
   --color-accent: oklch(83% 0.125 78);
   --color-accent-content: oklch(25% 0.05 60);
@@ -78,7 +83,9 @@
   --color-warning: oklch(82% 0.13 78);
   --color-warning-content: oklch(25% 0.05 60);
   --color-error: oklch(66% 0.17 25);
-  --color-error-content: oklch(97% 0.015 92);
+  /* Dark, like the night's other label colours: cream on this coral was
+     3.1:1 ("Cancelled", "out"); the dark label is 5.6:1. */
+  --color-error-content: oklch(18% 0.04 25);
 
   --radius-selector: 0.75rem;
   --radius-field: 0.75rem;
@@ -88,6 +95,27 @@
   --border: 1.5px;
   --depth: 1;
   --noise: 0;
+}
+
+/* The wine has two jobs: to be read as text and links, and to sit under
+   cream text at the far end of the brand gradient. By day one colour does
+   both (cream on it 5.1:1, it on the paper 5.1:1). At night no single
+   colour can: light enough to read on the dark paper is too light for
+   cream text on top of it. It used to be one compromise that passed
+   neither (3.9:1 and 4.3:1); now the fill has a seat of its own (4.6:1)
+   and the text seat is lifted (5.5:1). The selectors mirror the themes'
+   own; lib/theme.js re-seats both for a brand colour the baker picks. */
+:where(:root),
+[data-theme="bakery"] {
+  --brand-wine: var(--color-secondary);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --brand-wine: oklch(56% 0.135 14);
+  }
+}
+[data-theme="midnight"] {
+  --brand-wine: oklch(56% 0.135 14);
 }
 
 /* ------------------------------------------------------------------ */
@@ -108,13 +136,183 @@
 
 @layer base {
   html {
-    scroll-behavior: smooth;
+    /* The grey flash a phone paints over anything tapped — every control
+       here has its own pressed state, so the flash only says "web page". */
+    -webkit-tap-highlight-color: transparent;
+    /* No font inflation when a phone turns to landscape. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    /* A jump to an anchor (the review form, the delivery note) lands below
+       the sticky header instead of underneath it. */
+    scroll-padding-top: 9rem;
+    /* The parts of the page the browser draws itself wear the palette too. */
+    scrollbar-color: color-mix(in oklab, var(--color-base-content) 28%, transparent) transparent;
+    accent-color: var(--color-primary);
+    caret-color: var(--color-secondary);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
   }
   body {
     @apply bg-base-100 text-base-content font-sans antialiased;
+    /* Edge to edge on a notched phone (viewport-fit=cover), with the content
+       itself kept clear of the notch when the phone lies on its side. */
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
   }
   ::selection {
-    @apply bg-secondary text-secondary-content;
+    background-color: var(--brand-wine);
+    color: var(--color-secondary-content);
+  }
+
+  /* Keyboard focus is always visible, and always the shop's own wine —
+     never the browser's default blue ring on a cream page. */
+  :where(a, button, summary, [role="button"], [tabindex]):focus-visible {
+    outline: 2px solid var(--color-secondary);
+    outline-offset: 2px;
+    border-radius: 0.375rem;
+  }
+
+  /* Controls are tapped, not read: no double-tap zoom wait, and a long
+     press never selects a button's label. Text that is content (prices,
+     order numbers, addresses) stays selectable. */
+  :where(a, button, summary, label, [role="button"]) {
+    touch-action: manipulation;
+  }
+  :where(button, summary, [role="button"], [role="tab"]) {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Underlines sit a touch below the letters instead of through their feet. */
+  :where(a, .link) {
+    text-underline-offset: 0.18em;
+  }
+}
+
+/* A field's hint ("you@example.com", "Min") is still text someone has to
+   read: 65% of the ink, never the half-strength grey that fades into the
+   paper. Outside the layers on purpose, so it holds over the component
+   library's own, fainter placeholder. */
+:where(input, textarea)::placeholder {
+  color: color-mix(in oklab, var(--color-base-content) 65%, transparent);
+  opacity: 1;
+}
+
+/* iOS zooms the whole page into any field whose text is under 16px and
+   never zooms back out. On a touch screen every field is 16px; with a mouse
+   the compact sizes stay as designed.
+
+   The component library sizes a field's text as max(var(--font-size), the
+   size class's own minimum), so this one variable lifts every .input,
+   .select and .textarea at every size — the wrapper kind (a label around an
+   icon and its field) included. Every real field then gets the same floor
+   directly, outside the layers, so neither the library's rule nor a
+   text-size utility on the field can undercut it. (The first attempt, a
+   font-size rule in the base layer, did nothing: the library's rule sits in
+   a later layer and won.) */
+@media (pointer: coarse) {
+  :root {
+    --font-size: max(1rem, 16px);
+  }
+  :is(input, select, textarea):not([type="checkbox"], [type="radio"], [type="range"]) {
+    font-size: max(1em, 16px);
+  }
+  /* The smallest controls ("Manage", "Remove", a table row's icon actions)
+     grow from 24px to 32px: a mouse can hit 24, a thumb can't. */
+  .btn-xs,
+  .select-xs {
+    --size: 2rem;
+  }
+}
+
+/* The desk's tables on a phone: a little less air between the columns, so
+   three of them and a row's actions fit a 320px screen without scrolling
+   sideways. (Outside the layers for the same reason as the rules above.) */
+@media (max-width: 639px) {
+  .table-sm :where(th, td) {
+    padding-inline: 0.5rem;
+  }
+}
+
+/* A field's caption. The component library draws `.label` inline, at 60% of
+   the ink and on one unbreakable line — it is also what wraps a tick box
+   and its words, and the little affix inside a field. As a caption that
+   meant a short field ("Percent", "Max uses") sat on the same line as its
+   own caption, touching it; small grey text under the contrast a caption
+   needs; and a long caption that could not wrap on a phone.
+
+   A caption is a <label> with no control inside it: it takes its own line
+   above the field. Outside the layers, because the library's rules live in
+   the same layer as the utilities and would otherwise win. */
+.label {
+  color: color-mix(in oklab, currentColor 75%, transparent);
+}
+.label:not(.input > *, .select > *) {
+  white-space: normal;
+}
+label.label:not(:has(input, select, textarea), .input > *, .select > *) {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  padding-block: 0.25rem;
+}
+
+/* The way in for a keyboard: hidden until Tab finds it, then the first
+   thing on the page — straight past the navigation to the content. */
+.skip-link {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 1100;
+  transform: translateY(-200%);
+  border-radius: var(--radius-field);
+  background: var(--color-base-100);
+  padding: 0.6rem 1rem;
+  font-weight: 700;
+  /* The ink, not the burgundy: at night the burgundy is 2.3:1 on the paper. */
+  color: var(--color-base-content);
+  box-shadow: 0 6px 24px -6px rgb(0 0 0 / 0.35);
+}
+.skip-link:focus-visible {
+  transform: none;
+}
+
+/* In the components layer, so a utility on the same element still wins —
+   a row that swipes on a phone can become a grid from `sm` up. */
+@layer components {
+  /* Prices, totals and counts line up digit under digit. */
+  .figures {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* A caution, as text. The honey itself (`text-warning`) is a fill colour:
+     as words on the cream paper it is 1.9:1. Mixed half-and-half with the
+     ink it stays honey and reads — 5.2:1 by day, 12:1 at night. The stars
+     keep the honey; they are drawings, and the number is beside them. */
+  .text-caution {
+    color: color-mix(in oklab, var(--color-warning) 50%, var(--color-base-content));
+  }
+
+  /* A row that scrolls sideways under a thumb (shelf chips, shelf tiles):
+     the browser's own momentum and snapping, no scrollbar drawn over it. */
+  .swipe-row {
+    display: flex;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    scroll-padding-inline: 1rem;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .swipe-row::-webkit-scrollbar {
+    display: none;
+  }
+  .swipe-row > * {
+    scroll-snap-align: start;
+    flex-shrink: 0;
   }
 }
 
@@ -127,8 +325,12 @@
    scrolls behind it. */
 .glass {
   background: color-mix(in oklab, var(--color-base-100) 88%, transparent);
-  backdrop-filter: blur(8px) saturate(1.15);
+  /* Prefixed first, standard last — the order is load-bearing. Written the
+     other way round, the build's minifier folded the pair into the prefixed
+     line alone, and every browser but Safari fell through to the component
+     library's own .glass: a 40px blur with no saturation, on every card. */
   -webkit-backdrop-filter: blur(8px) saturate(1.15);
+  backdrop-filter: blur(8px) saturate(1.15);
 }
 
 @supports not (
@@ -151,16 +353,37 @@
   background-image: linear-gradient(
     120deg,
     var(--color-primary),
-    var(--color-secondary)
+    var(--brand-wine)
   );
 }
+/* The rim and the shadow the component library draws around a filled wine
+   button or badge follow the fill, not the (lighter, at night) text wine. */
+.btn-secondary:not(.btn-outline, .btn-soft, .btn-dash, .btn-ghost, .btn-link) {
+  --btn-color: var(--brand-wine);
+}
+.badge-secondary:not(.badge-soft, .badge-dash, .badge-ghost) {
+  --badge-color: var(--brand-wine);
+}
 
-.btn-primary:hover,
-.btn-secondary:hover {
+/* Hover is for pointers that can hover: on a touch screen a tapped button
+   would otherwise keep its hover fill until something else is tapped. */
+@media (hover: hover) and (pointer: fine) {
+  .btn-primary:hover,
+  .btn-secondary:hover {
+    background-image: linear-gradient(
+      120deg,
+      color-mix(in oklab, var(--color-primary) 85%, black),
+      color-mix(in oklab, var(--brand-wine) 85%, black)
+    );
+  }
+}
+/* A finger gets its answer on the way down, not on the way up. */
+.btn-primary:active:not(:disabled),
+.btn-secondary:active:not(:disabled) {
   background-image: linear-gradient(
     120deg,
-    color-mix(in oklab, var(--color-primary) 85%, black),
-    color-mix(in oklab, var(--color-secondary) 85%, black)
+    color-mix(in oklab, var(--color-primary) 80%, black),
+    color-mix(in oklab, var(--brand-wine) 80%, black)
   );
 }
 
@@ -232,10 +455,64 @@
   animation: marquee-x 26s linear infinite;
 }
 
+/* The basket in the navbar answers when something lands in it — one small
+   nod, so an "add" in the middle of a long page is seen to have arrived. */
+@keyframes basket-nod {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.22) rotate(-6deg);
+  }
+  70% {
+    transform: scale(0.96) rotate(3deg);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.basket-nod {
+  animation: basket-nod 0.42s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+/* A panel that comes up from the bottom edge (the phone's filter sheet,
+   the buy bar) or in from the side (drawers). Ease-out: fast to arrive,
+   gentle to settle. */
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+.sheet-up {
+  animation: sheet-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.fade-in {
+  animation: fade-in 0.2s ease-out both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .rise-in,
   .animate-pop,
-  .marquee-track {
+  .marquee-track,
+  .basket-nod,
+  .sheet-up,
+  .fade-in,
+  /* the placeholders that hold a page's shape while it loads: still there,
+     no longer pulsing (the spinners stay — they are the only word that
+     something is happening) */
+  .animate-pulse,
+  .skeleton {
     animation: none !important;
   }
 }
@@ -254,10 +531,24 @@
   object-fit: cover;
   /* The shop's slow lean-in: the photo takes its time arriving, like
      proofing dough — unhurried on the way in, unhurried on the way out. */
-  transition: transform 1.6s cubic-bezier(0.22, 0.61, 0.21, 1);
+  transition:
+    transform 1.6s cubic-bezier(0.22, 0.61, 0.21, 1),
+    opacity 0.45s ease-out;
 }
-.group:hover .photo-tile img {
-  transform: scale(1.06);
+/* A photo still on its way holds its place as a quiet tile and then fades
+   in, instead of painting itself top to bottom. */
+.photo-tile img[data-loaded="false"] {
+  opacity: 0;
+}
+@media (hover: hover) and (pointer: fine) {
+  .group:hover .photo-tile img {
+    transform: scale(1.06);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .photo-tile img {
+    transition: none;
+  }
 }
 
 /* ------------------------------------------------------------------ */

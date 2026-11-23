@@ -197,13 +197,13 @@ export default function BulkOrder() {
             {sending ? <span className="loading loading-spinner loading-sm" /> : null}
             {sending ? "Sending…" : "Send the enquiry"}
           </button>
-          <p className="text-xs opacity-60">
+          <p className="text-xs opacity-70">
             No account needed · nothing charged until you approve the quote
           </p>
         </div>
       </form>
 
-      <p className="mt-6 text-center text-xs tracking-wide opacity-55">
+      <p className="mt-6 text-center text-xs tracking-wide opacity-65">
         Tell us the date · We quote within a day · Baked the same morning as your event
       </p>
     </div>

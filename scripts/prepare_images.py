@@ -79,6 +79,38 @@ def save_logo(image: Image.Image, path: Path, size: int) -> None:
     print(f"  {path.name:<28} {size}x{size}      {path.stat().st_size // 1024} KB")
 
 
+# The page's own paper (theme "bakery", --color-base-100) — what the shop's
+# badge sits on when a phone puts it on a home screen.
+ICON_BACKGROUND = (252, 246, 238)
+
+
+def save_app_icon(image: Image.Image, path: Path, size: int, badge: float) -> None:
+    """The badge on a cream square, for a phone's home screen. `badge` is
+    the share of the square the mark fills: a "maskable" icon may be cut to
+    a circle by the phone, so its mark stays inside the middle 60%."""
+    alpha = image.getchannel("A")
+    mark = image.crop(alpha.getbbox())
+    side = round(size * badge)
+    mark = mark.resize((side, side), Image.LANCZOS)
+    canvas = Image.new("RGB", (size, size), ICON_BACKGROUND)
+    offset = (size - side) // 2
+    canvas.paste(mark, (offset, offset), mark)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(path, "PNG", optimize=True)
+    print(f"  {path.name:<28} {size}x{size}      {path.stat().st_size // 1024} KB")
+
+
+def save_app_icons() -> None:
+    """Home-screen icons (frontend/public/manifest.json names these files)."""
+    print("App icons -> frontend/public/icons/")
+    logo = Image.open(SOURCE / "banners" / "Djini_s_Bakehouse_1_-removebg-preview.png")
+    icons = PUBLIC / "icons"
+    save_app_icon(logo, icons / "icon-192.png", 192, 0.8)
+    save_app_icon(logo, icons / "icon-512.png", 512, 0.8)
+    save_app_icon(logo, icons / "icon-maskable-512.png", 512, 0.6)
+    save_app_icon(logo, icons / "apple-touch-icon.png", 180, 0.8)
+
+
 def main() -> None:
     print("Product photos -> backend/static/products/")
     for slug, filename in PRODUCTS.items():
@@ -92,6 +124,8 @@ def main() -> None:
 
     print("Favicon -> frontend/public/")
     save_logo(Image.open(SOURCE / "banners" / "Djini_s_Bakehouse_1_-removebg-preview.png"), PUBLIC / "favicon.png", 64)
+
+    save_app_icons()
 
 
 if __name__ == "__main__":

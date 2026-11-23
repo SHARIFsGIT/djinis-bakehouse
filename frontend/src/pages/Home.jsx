@@ -87,10 +87,17 @@ function TestimonialFigure({ t }) {
         )}
         <div className="min-w-0">
           <p className="font-semibold">{t.name}</p>
-          {t.role && <p className="text-xs opacity-60">{t.role}</p>}
+          {t.role && <p className="text-xs opacity-70">{t.role}</p>}
+          {/* On a phone the stars sit under the name: beside it they left
+              the name a sliver to wrap in. */}
+          {t.rating && (
+            <div className="mt-1.5 sm:hidden">
+              <Stars rating={t.rating} />
+            </div>
+          )}
         </div>
         {t.rating && (
-          <div className="ms-auto shrink-0">
+          <div className="ms-auto hidden shrink-0 sm:block">
             <Stars rating={t.rating} />
           </div>
         )}
@@ -112,6 +119,31 @@ export default function Home() {
   const [testimonials, setTestimonials] = useState([]);
   const [comingSoon, setComingSoon] = useState([]);
   const [marquee, setMarquee] = useState(DEFAULT_MARQUEE);
+  const [shop, setShop] = useState(null);
+
+  // The shop, described for search engines and maps (schema.org "Bakery")
+  // — built only from what the baker has written in Settings, so it never
+  // states an address or a number the shop has not published itself.
+  useEffect(() => {
+    const address = shop?.contact_address?.trim();
+    if (!address) return undefined;
+    const script = document.createElement("script");
+    script.type = "application/ld+json";
+    script.id = "shop-structured-data";
+    script.textContent = JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "Bakery",
+      name: "Djini's Bakehouse",
+      url: window.location.origin,
+      logo: new URL("/static/site/logo.png", window.location.origin).href,
+      image: new URL(shop.hero_image || DEFAULT_HERO, window.location.origin).href,
+      address: { "@type": "PostalAddress", streetAddress: address },
+      ...(shop.contact_phone ? { telephone: shop.contact_phone } : {}),
+      ...(shop.contact_email ? { email: shop.contact_email } : {}),
+    });
+    document.head.appendChild(script);
+    return () => script.remove();
+  }, [shop]);
 
   useEffect(() => {
     client
@@ -128,6 +160,7 @@ export default function Home() {
         setHeroImage(data.hero_image || DEFAULT_HERO);
         cacheHeroImage(data.hero_image || null);
         setMarquee(data.marquee);
+        setShop(data);
       })
       // The API is unreachable — fall back to the shipped photo rather than
       // a permanent skeleton (a cached custom photo stays; it was real once).
@@ -149,7 +182,10 @@ export default function Home() {
       {/* Hero                                                              */}
       {/* ---------------------------------------------------------------- */}
       <section className="relative overflow-hidden">
-        <div className="mx-auto grid max-w-7xl items-center gap-12 px-4 py-14 md:grid-cols-2 md:py-20">
+        {/* grid-cols-1 is not decoration: without it the phone's single
+            column is as wide as its widest unbreakable child, and on a 320px
+            screen the whole hero ran off the right edge. */}
+        <div className="mx-auto grid max-w-7xl grid-cols-1 items-center gap-12 px-4 py-14 md:grid-cols-2 md:py-20">
           <div className="rise-in">
             <p className="badge badge-outline badge-secondary px-3 py-3 text-xs font-bold tracking-widest text-white uppercase">
               Home kitchen · Small size bakery
@@ -162,28 +198,31 @@ export default function Home() {
               Made with patience, baked with love — small batches out of our
               little kitchen, on your table the same day.
             </p>
-            <div className="mt-8 flex flex-wrap gap-5">
-              <Link to="/products" className="btn btn-primary btn-lg shadow-md">
+            {/* Two equal buttons side by side on a phone wide enough for
+                both labels; one above the other, full width, on one that is
+                not (320px). Their natural sizes from a tablet up. */}
+            <div className="mt-8 flex flex-wrap gap-3 sm:gap-5">
+              <Link to="/products" className="btn btn-primary flex-1 whitespace-nowrap shadow-md sm:btn-lg sm:flex-none">
                 Explore Our Bakes
               </Link>
               <Link
                 to="/bulk"
-                className="btn btn-ghost btn-lg border border-base-300 transition hover:bg-base-200"
+                className="btn btn-ghost flex-1 border border-base-300 whitespace-nowrap transition hover:bg-base-200 sm:btn-lg sm:flex-none"
               >
-                <Users size={20} />
+                <Users size={18} aria-hidden="true" />
                 Bulk Order
               </Link>
             </div>
             {/* The shop's promises — icons, two columns, no ceremony. The
                 free-delivery card hides itself while its figure is pending
                 owner approval as an EUR value. */}
-            <div className="mt-10 grid max-w-md grid-cols-1 gap-x-6 gap-y-3.5 sm:grid-cols-2">
+            <div className="mt-8 grid max-w-md grid-cols-2 gap-x-4 gap-y-3.5 sm:mt-10 sm:gap-x-6">
               {PROMISES.filter((p) => !p.when || p.when()).map(({ Icon, title }) => (
-                <div key={String(title)} className="flex items-center gap-3">
+                <div key={String(title)} className="flex items-center gap-2.5 sm:gap-3">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary/15 text-secondary">
-                    <Icon size={17} />
+                    <Icon size={17} aria-hidden="true" />
                   </span>
-                  <p className="text-sm leading-snug font-semibold">
+                  <p className="text-sm leading-snug font-semibold text-pretty">
                     {typeof title === "function" ? title() : title}
                   </p>
                 </div>
@@ -255,7 +294,7 @@ export default function Home() {
                   key={i}
                   className="font-display flex items-center gap-10 text-sm font-bold tracking-[0.2em] uppercase"
                 >
-                  {item} <span className="opacity-50">·</span>
+                  {item} <span className="opacity-65">·</span>
                 </span>
               ));
             })()}
@@ -273,17 +312,20 @@ export default function Home() {
           </h2>
           <Link
             to="/products"
-            className="link link-secondary hidden text-sm font-semibold sm:inline"
+            className="link link-secondary shrink-0 text-sm font-semibold"
           >
             See everything
           </Link>
         </div>
-        <div className="grid gap-4 sm:grid-cols-3">
+        {/* A row to swipe on a phone — each shelf most of a screen wide, the
+            next one peeking in at the edge — and a grid from a tablet up.
+            Stacked, the three tiles were three full screens of scrolling. */}
+        <div className="swipe-row -mx-4 gap-4 px-4 pb-1 sm:mx-0 sm:grid sm:grid-cols-3 sm:overflow-visible sm:px-0 sm:pb-0">
           {categories.slice(0, 6).map((c, i) => (
             <Link
               key={c.slug}
               to={`/products?category=${c.slug}`}
-              className="group rise-in relative overflow-hidden rounded-box shadow-sm ring-1 ring-base-300/60"
+              className="group rise-in relative w-[78%] overflow-hidden rounded-box shadow-sm ring-1 ring-base-300/60 sm:w-auto"
               style={{ animationDelay: `${i * 0.06}s` }}
             >
               <PhotoTile

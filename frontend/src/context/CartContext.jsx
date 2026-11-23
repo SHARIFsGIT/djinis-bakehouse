@@ -26,6 +26,8 @@ function load() {
 export function CartProvider({ children }) {
   const { user } = useAuth();
   const [items, setItems] = useState(load);
+  // Counts the "add"s of this visit — the navbar's basket nods on each one.
+  const [added, setAdded] = useState(0);
 
   useEffect(() => {
     try {
@@ -62,6 +64,7 @@ export function CartProvider({ children }) {
 
   const value = useMemo(() => {
     const add = (product, quantity = 1) => {
+      setAdded((n) => n + 1);
       setItems((current) => {
         const existing = current.find((i) => i.product_id === product.id);
         if (existing) {
@@ -111,8 +114,8 @@ export function CartProvider({ children }) {
     const count = items.reduce((sum, i) => sum + i.quantity, 0);
     const subtotal = items.reduce((sum, i) => sum + i.unit_price * i.quantity, 0);
 
-    return { items, add, setQuantity, remove, clear, count, subtotal };
-  }, [items]);
+    return { items, add, setQuantity, remove, clear, count, subtotal, added };
+  }, [items, added]);
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }

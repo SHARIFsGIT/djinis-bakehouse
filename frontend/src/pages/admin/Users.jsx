@@ -6,6 +6,7 @@ import { formatDateTime, hasNonActiveCurrency, money } from "../../lib/format";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { LoadError, Loading } from "../../components/Loading";
+import Pager from "../../components/Pager";
 import Drawer from "../../components/Drawer";
 
 /* What each tier wears. The rules live on the server (admin.py) — this is
@@ -26,7 +27,7 @@ const TIERS = {
     Icon: Hourglass,
     badge: "badge-ghost gap-1 opacity-70",
   },
-  regular: { label: "Regular", Icon: null, badge: "badge-ghost opacity-60" },
+  regular: { label: "Regular", Icon: null, badge: "badge-ghost opacity-70" },
 };
 
 const TIER_FILTERS = [
@@ -136,13 +137,13 @@ function CustomerDrawer({ user, onClose, onChanged, onUpdate }) {
             <span className="font-semibold">{user.order_count} {user.order_count === 1 ? "order" : "orders"}</span>
             <span className="opacity-70">{user.order_count > 0 ? money(user.lifetime_spend) : "—"}</span>
             {user.last_order_at && (
-              <span className="text-xs opacity-60">last {formatDateTime(user.last_order_at)}</span>
+              <span className="text-xs opacity-70">last {formatDateTime(user.last_order_at)}</span>
             )}
           </section>
 
           {/* Marketing permission — the gate every campaign and voucher email passes */}
           <section>
-            <h3 className="font-display text-sm font-bold uppercase tracking-widest opacity-55">
+            <h3 className="font-display text-sm font-bold uppercase tracking-widest opacity-65">
               Marketing permission
             </h3>
             {consent.marketing_consent_at ? (
@@ -217,7 +218,7 @@ function CustomerDrawer({ user, onClose, onChanged, onUpdate }) {
 
           {/* The classification ledger — newest first, exactly as the server keeps it */}
           <section>
-            <h3 className="font-display text-sm font-bold uppercase tracking-widest opacity-55">
+            <h3 className="font-display text-sm font-bold uppercase tracking-widest opacity-65">
               Classification history
             </h3>
             {ledger === null ? (
@@ -226,7 +227,7 @@ function CustomerDrawer({ user, onClose, onChanged, onUpdate }) {
                 <div className="skeleton h-4 w-2/3" />
               </div>
             ) : ledger.length === 0 ? (
-              <p className="mt-2 text-xs opacity-60">
+              <p className="mt-2 text-xs opacity-70">
                 No changes recorded yet — the desk hasn't set a word for this customer.
               </p>
             ) : (
@@ -236,7 +237,7 @@ function CustomerDrawer({ user, onClose, onChanged, onUpdate }) {
                     <span className="font-semibold">{wordOf(event.from_classification)}</span>
                     {" → "}
                     <span className="font-semibold text-secondary">{wordOf(event.to_classification)}</span>
-                    <span className="opacity-60">
+                    <span className="opacity-70">
                       {" "}· {event.admin_name} · {formatDateTime(event.created_at)}
                     </span>
                   </li>
@@ -247,7 +248,7 @@ function CustomerDrawer({ user, onClose, onChanged, onUpdate }) {
 
           {/* Account — the rare knobs, kept in the card so the roll stays a roll */}
           <section>
-            <h3 className="font-display text-sm font-bold uppercase tracking-widest opacity-55">
+            <h3 className="font-display text-sm font-bold uppercase tracking-widest opacity-65">
               Account
             </h3>
             <div className="mt-2 flex flex-wrap items-end gap-5 rounded-box border border-base-300 bg-base-200/50 p-4">
@@ -276,7 +277,7 @@ function CustomerDrawer({ user, onClose, onChanged, onUpdate }) {
                 />
               </div>
               {user.id === me.id && (
-                <p className="w-full text-[11px] opacity-50">
+                <p className="w-full text-[11px] opacity-65">
                   This is your own account — the shop never lets the last admin step down from here.
                 </p>
               )}
@@ -533,7 +534,7 @@ export default function AdminUsers() {
       {worthAVoucher > 0 && (
         <div className="rounded-box glass px-4 py-2 text-sm shadow-sm ring-1 ring-base-300/60">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-            <span className="text-xs font-semibold uppercase tracking-widest opacity-50">
+            <span className="text-xs font-semibold uppercase tracking-widest opacity-65">
               Loyalty codes
             </span>
             {VOUCHER_TIERS.map((key) => {
@@ -555,7 +556,7 @@ export default function AdminUsers() {
                       {coupon.code} · {coupon.percent_off}%
                     </button>
                   ) : (
-                    <span className="opacity-50">no code yet</span>
+                    <span className="opacity-65">no code yet</span>
                   )}
                 </span>
               );
@@ -600,7 +601,7 @@ export default function AdminUsers() {
       <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
         <table className="table table-sm">
           <thead>
-            <tr className="text-xs uppercase opacity-50">
+            <tr className="text-xs uppercase opacity-65">
               <th>Customer</th>
               <th className="text-right">Orders</th>
               {/* On phones the roll keeps just who + how many; lifetime,
@@ -617,24 +618,34 @@ export default function AdminUsers() {
                 <tr key={u.id} className="hover:bg-base-200/50">
                   <td>
                     <div className="flex items-center gap-3">
+                      {/* Under 360px the portrait steps aside, so the
+                          address beside it has a line to itself. */}
                       {u.avatar_url ? (
                         <img
                           src={u.avatar_url}
                           alt=""
-                          className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-base-300"
+                          className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-base-300 max-[359px]:hidden"
                         />
                       ) : (
-                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary/15 text-sm font-bold text-secondary">
+                        <span
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary/15 text-sm font-bold text-secondary max-[359px]:hidden"
+                          aria-hidden="true"
+                        >
                           {u.first_name?.[0]?.toUpperCase() ?? "?"}
                         </span>
                       )}
                       <div>
                         <p className="flex flex-wrap items-center gap-1.5 font-semibold">
                           {u.first_name} {u.last_name}
-                          {u.id === me.id && <span className="text-xs opacity-50">(you)</span>}
+                          {u.id === me.id && <span className="text-xs opacity-65">(you)</span>}
                           <TierBadge loyalty={u.loyalty} />
                         </p>
-                        <p className="break-all text-xs opacity-60">{u.email}{u.phone ? ` · ${u.phone}` : ""}</p>
+                        {/* If the address has to wrap on a phone, it wraps
+                            after the @ — not through "example.co / m". */}
+                        <p className="text-xs opacity-70 [overflow-wrap:anywhere]">
+                          {u.email.split("@")[0]}@<wbr />{u.email.split("@").slice(1).join("@")}
+                          {u.phone ? ` · ${u.phone}` : ""}
+                        </p>
                       </div>
                     </div>
                   </td>
@@ -643,7 +654,7 @@ export default function AdminUsers() {
                     {u.order_count > 0 ? money(u.lifetime_spend) : "—"}
                     {u.order_count > 0 &&
                       hasNonActiveCurrency(Object.keys(u.lifetime_spend_by_currency ?? {})) && (
-                        <span className="block text-[11px] font-normal opacity-60">
+                        <span className="block text-[11px] font-normal opacity-70">
                           {Object.entries(u.lifetime_spend_by_currency)
                             .map(([code, amount]) => money(amount, code))
                             .join(" · ")}
@@ -670,7 +681,7 @@ export default function AdminUsers() {
                           <MailCheck size={13} aria-label="Has marketing consent" />
                         </span>
                       ) : (
-                        <span className="opacity-30" title="No recorded consent">
+                        <span className="opacity-65" title="No recorded consent">
                           <MailX size={13} aria-label="No marketing consent" />
                         </span>
                       )}
@@ -715,7 +726,7 @@ export default function AdminUsers() {
             })}
             {users.length === 0 && (
               <tr>
-                <td colSpan={5} className="py-10 text-center text-sm opacity-60">
+                <td colSpan={5} className="py-10 text-center text-sm opacity-70">
                   Nobody matches — try another tier or search.
                 </td>
               </tr>
@@ -724,29 +735,12 @@ export default function AdminUsers() {
         </table>
       </div>
 
-      {data.pagination.total_pages > 1 && (
-        <div className="flex justify-center">
-          <div className="join">
-            <button
-              className="btn join-item btn-sm"
-              disabled={page <= 1}
-              onClick={() => setParam("page", String(page - 1))}
-            >
-              «
-            </button>
-            <button className="btn join-item btn-sm pointer-events-none">
-              Page {data.pagination.page} / {data.pagination.total_pages}
-            </button>
-            <button
-              className="btn join-item btn-sm"
-              disabled={page >= data.pagination.total_pages}
-              onClick={() => setParam("page", String(page + 1))}
-            >
-              »
-            </button>
-          </div>
-        </div>
-      )}
+      <Pager
+        label="Pages of customers"
+        page={data.pagination.page}
+        pages={data.pagination.total_pages}
+        onPage={(next) => setParam("page", String(next))}
+      />
 
       {card !== null && (
         <CustomerDrawer

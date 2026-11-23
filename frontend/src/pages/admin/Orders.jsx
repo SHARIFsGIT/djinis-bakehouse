@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { CalendarHeart, Mail, Send, Trash2, Users } from "lucide-react";
+import { CalendarHeart, ChevronRight, Mail, Send, Trash2, Users } from "lucide-react";
 import client, { apiError } from "../../api/client";
 import {
   BULK_STATUSES,
@@ -21,6 +21,7 @@ import {
 import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import { LoadError, Loading } from "../../components/Loading";
+import Pager from "../../components/Pager";
 import { useEscape, useFocusHandoff, useScrollLock } from "../../components/Drawer";
 import { PaymentsPanel, providerHoldsMoney, ReconciliationReport } from "./OrderPayments";
 
@@ -220,7 +221,7 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
       <div className="flex items-start justify-between gap-3 border-b border-base-300 p-5">
         <div>
           <h3 className="font-display text-xl font-bold">{order.order_number}</h3>
-          <p className="text-xs opacity-60">
+          <p className="text-xs opacity-70">
             {order.customer_name} · {order.customer_email} · {formatDateTime(order.created_at)}
           </p>
         </div>
@@ -245,13 +246,13 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
           <ul className="divide-y divide-base-200 text-sm">
             {order.items.map((i) => (
               <li key={i.id} className="flex justify-between gap-3 py-2">
-                <span className="font-semibold">{i.product_name} <span className="opacity-60">× {i.quantity}</span></span>
+                <span className="font-semibold">{i.product_name} <span className="opacity-70">× {i.quantity}</span></span>
                 <span className="font-bold">{money(i.subtotal, order.currency)}</span>
               </li>
             ))}
           </ul>
           <div className="mt-2 space-y-1 text-sm">
-            <div className="flex justify-between"><span className="opacity-60">Subtotal</span><span>{money(order.subtotal, order.currency)}</span></div>
+            <div className="flex justify-between"><span className="opacity-70">Subtotal</span><span>{money(order.subtotal, order.currency)}</span></div>
             {order.discount_amount > 0 && (
               <div className="flex justify-between text-secondary">
                 <span>Discount {order.coupon_code ? `(${order.coupon_code})` : ""}</span>
@@ -261,9 +262,9 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
             {/* No row while no tax was charged — and in VAT-inclusive mode the
                 figure is already inside the lines, so it says so. */}
             {order.tax > 0 && (
-              <div className="flex justify-between"><span className="opacity-60">{order.tax_included ? "VAT (included)" : "Tax"}</span><span>{money(order.tax, order.currency)}</span></div>
+              <div className="flex justify-between"><span className="opacity-70">{order.tax_included ? "VAT (included)" : "Tax"}</span><span>{money(order.tax, order.currency)}</span></div>
             )}
-            <div className="flex justify-between"><span className="opacity-60">Delivery</span><span>{order.shipping_fee === 0 ? "FREE" : money(order.shipping_fee, order.currency)}</span></div>
+            <div className="flex justify-between"><span className="opacity-70">Delivery</span><span>{order.shipping_fee === 0 ? "FREE" : money(order.shipping_fee, order.currency)}</span></div>
             <div className="flex justify-between border-t border-dashed border-base-300 pt-1 font-bold">
               <span>Total</span><span>{money(order.total, order.currency)}</span>
             </div>
@@ -295,7 +296,7 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
                 Wanted {formatDate(order.delivery_date)}
               </span>
             ) : (
-              <span className="text-xs opacity-60">Next delivery run</span>
+              <span className="text-xs opacity-70">Next delivery run</span>
             )}
           </div>
           <p className="mt-1 opacity-80">
@@ -369,7 +370,7 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
         ) : (
           /* Labels only — these never move money (see setPayment). */
           <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="opacity-60">Payment label:</span>
+            <span className="opacity-70">Payment label:</span>
             {order.payment_status !== "paid" && (
               <button type="button" className="btn btn-success btn-xs" onClick={() => setPayment("paid")} disabled={paymentBusy}>
                 Mark paid
@@ -497,7 +498,7 @@ function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
       <div className="flex items-start justify-between gap-3 border-b border-base-300 p-5">
         <div>
           <h3 className="font-display text-xl font-bold">{enquiry.name}</h3>
-          <p className="text-xs opacity-60">
+          <p className="text-xs opacity-70">
             {enquiry.email}{enquiry.phone ? ` · ${enquiry.phone}` : ""} · sent {formatDateTime(enquiry.created_at)}
           </p>
         </div>
@@ -544,7 +545,7 @@ function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
                   className="rounded-box border border-secondary/30 bg-secondary/5 p-3 text-sm"
                 >
                   <p className="whitespace-pre-line">{r.message}</p>
-                  <p className="mt-1.5 text-xs opacity-50">
+                  <p className="mt-1.5 text-xs opacity-65">
                     emailed {formatDateTime(r.created_at)}
                   </p>
                 </li>
@@ -577,7 +578,7 @@ function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
             onChange={(e) => setReply(e.target.value)}
           />
           <div className="flex items-center justify-between gap-2">
-            <p className="text-xs opacity-50">
+            <p className="text-xs opacity-65">
               Goes to their inbox · a first reply marks the lead “contacted”
             </p>
             <button
@@ -766,59 +767,72 @@ function OrdersTab() {
           <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
             <table className="table table-sm">
               <thead>
-                <tr className="text-xs uppercase opacity-50">
+                {/* On a phone the rail is three columns — the order (with
+                    who it is for), where it stands (with what it comes to),
+                    and the way in — so "Manage" is on the screen, not a
+                    sideways scroll away. The rest joins from a tablet up;
+                    the two dates wait for a wide screen (at `lg` the desk's
+                    sidebar arrives and the table has less room, not more). */}
+                <tr className="text-xs uppercase opacity-65">
                   <th>Order</th>
-                  <th>Recipient</th>
+                  <th className="hidden sm:table-cell">Recipient</th>
                   <th>Status</th>
-                  <th>Payment</th>
-                  <th className="text-right">Total</th>
-                  <th>Wanted for</th>
-                  <th className="text-right">Placed</th>
+                  <th className="hidden md:table-cell">Payment</th>
+                  <th className="hidden text-right sm:table-cell">Total</th>
+                  <th className="hidden xl:table-cell">Wanted for</th>
+                  <th className="hidden text-right xl:table-cell">Placed</th>
                   <th><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody>
                 {data.orders.map((o) => (
                   <tr key={o.id} className="hover:bg-base-200/50">
-                    <td className="font-bold whitespace-nowrap">{o.order_number}</td>
-                    <td className="max-w-36 truncate">{o.recipient}</td>
+                    <td className="whitespace-nowrap">
+                      <span className="font-bold">{o.order_number}</span>
+                      <span className="block max-w-36 truncate text-xs opacity-70 sm:hidden">{o.recipient}</span>
+                    </td>
+                    <td className="hidden max-w-36 truncate sm:table-cell">{o.recipient}</td>
                     <td>
                       <span className={`badge badge-sm ${statusBadge(o.status)} border whitespace-nowrap`}>{statusLabel(o.status)}</span>
+                      <span className="figures mt-1 block text-xs font-bold sm:hidden">{money(o.total, o.currency)}</span>
                     </td>
-                    <td className="text-xs">
+                    <td className="hidden text-xs md:table-cell">
                       <span className={`badge badge-sm ${PAYMENT_STATUSES[o.payment_status]?.badge ?? "badge-ghost"} whitespace-nowrap`}>
                         {PAYMENT_STATUSES[o.payment_status]?.label ?? statusLabel(o.payment_status)}
                       </span>
-                      <span className="mt-0.5 block whitespace-nowrap opacity-60">
+                      <span className="mt-0.5 block whitespace-nowrap opacity-70">
                         {PAYMENT_METHODS[o.payment_method] ?? o.payment_method}
                       </span>
                     </td>
-                    <td className="text-right font-bold whitespace-nowrap">{money(o.total, o.currency)}</td>
+                    <td className="figures hidden text-right font-bold whitespace-nowrap sm:table-cell">{money(o.total, o.currency)}</td>
                     {/* The delivery day the customer picked at checkout —
                         blank means "the next run", which the dash says. */}
-                    <td className="text-xs whitespace-nowrap">
+                    <td className="hidden text-xs whitespace-nowrap xl:table-cell">
                       {o.delivery_date ? (
                         <span className="font-semibold">{formatDate(o.delivery_date)}</span>
                       ) : (
                         <span className="opacity-40" title="No day picked — next delivery run">—</span>
                       )}
                     </td>
-                    <td className="text-right text-xs whitespace-nowrap opacity-60">{formatDateTime(o.created_at)}</td>
+                    <td className="hidden text-right text-xs whitespace-nowrap opacity-70 xl:table-cell">{formatDateTime(o.created_at)}</td>
                     <td className="text-right">
+                      {/* The word from 360px up; on a narrower phone the
+                          arrow alone (still named), so the row fits. */}
                       <button
                         type="button"
                         className="btn btn-ghost btn-xs"
                         onClick={() => setSelectedId(o.id)}
                         aria-label={`Manage order ${o.order_number}`}
                       >
-                        Manage
+                        <span className="max-[359px]:hidden">Manage</span>
+                        <ChevronRight size={16} className="min-[360px]:hidden" aria-hidden="true" />
                       </button>
                     </td>
                   </tr>
                 ))}
                 {data.orders.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="py-10 text-center text-sm opacity-60">
+                    <td colSpan={8} className="py-10 text-center text-sm opacity-70">
                       No orders match — try clearing the filters.
                     </td>
                   </tr>
@@ -827,25 +841,13 @@ function OrdersTab() {
             </table>
           </div>
 
-          {data.pagination.total_pages > 1 && (
-            <div className="mt-4 flex justify-center">
-              <div className="join">
-                <button type="button" className="btn join-item btn-sm" disabled={page <= 1} onClick={() => goPage(page - 1)} aria-label="Previous page">«</button>
-                <span className="btn join-item btn-sm pointer-events-none" aria-current="page">
-                  Page {data.pagination.page} / {data.pagination.total_pages}
-                </span>
-                <button
-                  type="button"
-                  className="btn join-item btn-sm"
-                  disabled={page >= data.pagination.total_pages}
-                  onClick={() => goPage(page + 1)}
-                  aria-label="Next page"
-                >
-                  »
-                </button>
-              </div>
-            </div>
-          )}
+          <Pager
+            className="mt-4"
+            label="Pages of orders"
+            page={data.pagination.page}
+            pages={data.pagination.total_pages}
+            onPage={goPage}
+          />
         </>
       )}
 
@@ -948,13 +950,16 @@ function BulkTab() {
         <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
           <table className="table table-sm">
             <thead>
-              <tr className="text-xs uppercase opacity-50">
+              {/* Three columns on a phone, like the order rail: the event
+                  (with who asked), where it stands (with the headcount) and
+                  the way in. */}
+              <tr className="text-xs uppercase opacity-65">
                 <th>Event</th>
-                <th>Customer</th>
-                <th className="text-right">Guests</th>
+                <th className="hidden sm:table-cell">Customer</th>
+                <th className="hidden text-right sm:table-cell">Guests</th>
                 <th>Status</th>
-                <th className="text-right">Sent</th>
-                <th />
+                <th className="hidden text-right md:table-cell">Sent</th>
+                <th><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
@@ -962,21 +967,25 @@ function BulkTab() {
                 <tr key={e.id} className="hover:bg-base-200/50">
                   <td>
                     <p className="font-bold whitespace-nowrap">{formatDate(e.event_date)}</p>
-                    <p className="text-xs opacity-60">
+                    <p className="text-xs opacity-70">
                       {EVENT_TYPES.find((t) => t.value === e.event_type)?.label ?? e.event_type}
                     </p>
+                    <p className="max-w-36 truncate text-xs opacity-70 sm:hidden">{e.name}</p>
                   </td>
-                  <td>
+                  <td className="hidden sm:table-cell">
                     <p className="max-w-44 truncate font-semibold">{e.name}</p>
-                    <p className="max-w-44 truncate text-xs opacity-60">{e.email}</p>
+                    <p className="max-w-44 truncate text-xs opacity-70">{e.email}</p>
                   </td>
-                  <td className="text-right font-bold">{e.guests}</td>
+                  <td className="hidden text-right font-bold sm:table-cell">{e.guests}</td>
                   <td>
                     <span className={`badge badge-sm ${bulkBadge(e.status)} border whitespace-nowrap`}>
                       {bulkLabel(e.status)}
                     </span>
+                    <span className="mt-1 block text-xs opacity-70 sm:hidden">
+                      {e.guests} {e.guests === 1 ? "guest" : "guests"}
+                    </span>
                   </td>
-                  <td className="text-right text-xs whitespace-nowrap opacity-60">
+                  <td className="hidden text-right text-xs whitespace-nowrap opacity-70 md:table-cell">
                     {formatDateTime(e.created_at)}
                   </td>
                   <td className="text-right">
@@ -984,15 +993,17 @@ function BulkTab() {
                       type="button"
                       className="btn btn-ghost btn-xs"
                       onClick={() => setSelected(e)}
+                      aria-label={`Manage the enquiry from ${e.name}`}
                     >
-                      Manage
+                      <span className="max-[359px]:hidden">Manage</span>
+                      <ChevronRight size={16} className="min-[360px]:hidden" aria-hidden="true" />
                     </button>
                   </td>
                 </tr>
               ))}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-10 text-center text-sm opacity-60">
+                  <td colSpan={6} className="py-10 text-center text-sm opacity-70">
                     No enquiries yet — the /bulk page feeds this rail.
                   </td>
                 </tr>

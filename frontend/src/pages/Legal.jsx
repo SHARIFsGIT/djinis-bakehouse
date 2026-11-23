@@ -44,7 +44,7 @@ function LegalPage({ eyebrow, title, updated, children }) {
         {eyebrow}
       </p>
       <h1 className="mt-2 font-display text-4xl font-semibold">{title}</h1>
-      <p className="mt-2 text-xs opacity-55">Last updated: {updated}</p>
+      <p className="mt-2 text-xs opacity-65">Last updated: {updated}</p>
       <div className="mt-8 space-y-6 text-[0.95rem] leading-relaxed opacity-85">
         {children}
       </div>
@@ -260,7 +260,7 @@ export function LegalNotice() {
     <div className="mx-auto max-w-3xl px-4 py-12">
       <p className="text-xs font-bold uppercase tracking-[0.2em] text-secondary">The paperwork</p>
       <h1 className="mt-2 font-display text-4xl font-semibold">Legal notice</h1>
-      <p className="mt-1 text-sm opacity-60" lang="de">Impressum</p>
+      <p className="mt-1 text-sm opacity-70" lang="de">Impressum</p>
       {notice.text ? (
         <p className="mt-8 whitespace-pre-line text-[0.95rem] leading-relaxed opacity-85">
           {notice.text}

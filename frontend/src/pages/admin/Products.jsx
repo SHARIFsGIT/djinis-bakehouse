@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ImagePlus, Trash2 } from "lucide-react";
+import { ImagePlus, Pencil, Trash2 } from "lucide-react";
 import client, { apiError } from "../../api/client";
 import { money } from "../../lib/format";
 import { shrinkImage } from "../../lib/imageResize";
@@ -7,6 +7,8 @@ import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import PhotoTile from "../../components/PhotoTile";
 import { LoadError, Loading } from "../../components/Loading";
+import Modal from "../../components/Modal";
+import Pager from "../../components/Pager";
 
 const EMPTY_FORM = {
   name: "",
@@ -327,7 +329,7 @@ export default function AdminProducts() {
           up in the table below (tap it again, or clear, for the whole case);
           the trash retires any shelf — its bakes land unshelved, not gone. */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold tracking-wide uppercase opacity-50">
+        <span className="text-xs font-semibold tracking-wide uppercase opacity-65">
           Shelves
         </span>
         {categories.map((c) => {
@@ -353,7 +355,7 @@ export default function AdminProducts() {
                 }
               >
                 {c.name}
-                <span className="opacity-60">{c.product_count}</span>
+                <span className="opacity-70">{c.product_count}</span>
               </button>
               <button
                 type="button"
@@ -395,12 +397,15 @@ export default function AdminProducts() {
         <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
           <table className="table table-sm">
             <thead>
-              <tr className="text-xs uppercase opacity-50">
+              {/* Product, price, stock and the two actions fit a phone;
+                  the shelf and the flags join from a tablet up (on a phone
+                  the shelf sits under the bake's name). */}
+              <tr className="text-xs uppercase opacity-65">
                 <th>Product</th>
-                <th>Category</th>
+                <th className="hidden md:table-cell">Category</th>
                 <th className="text-right">Price</th>
                 <th className="text-right">Stock</th>
-                <th>Flags</th>
+                <th className="hidden lg:table-cell">Flags</th>
                 <th className="text-right">Actions</th>
               </tr>
             </thead>
@@ -409,26 +414,36 @@ export default function AdminProducts() {
                 <tr key={p.id} className="hover:bg-base-200/50">
                   <td>
                     <div className="flex items-center gap-3">
-                      <span className="h-9 w-9 shrink-0 overflow-hidden rounded-lg">
+                      {/* Under 360px the thumbnail steps aside: the name,
+                          the price, the stock and both actions are what the
+                          row is for, and all of them fit without it. */}
+                      <span className="h-9 w-9 shrink-0 overflow-hidden rounded-lg max-[359px]:hidden">
                         <PhotoTile
                           src={p.image_url}
                           name={p.name}
+                          decorative
                           className="h-full w-full"
                         />
                       </span>
-                      <span className="font-semibold">{p.name}</span>
+                      <span className="min-w-0">
+                        <span className="block font-semibold">{p.name}</span>
+                        <span className="block text-xs opacity-70 md:hidden">
+                          {p.category_name ?? "No shelf"}
+                          {!p.is_available && " · hidden"}
+                        </span>
+                      </span>
                     </div>
                   </td>
-                  <td className="text-sm opacity-70">
+                  <td className="hidden text-sm opacity-70 md:table-cell">
                     {p.category_name ?? "—"}
                   </td>
-                  <td className="text-right">
+                  <td className="figures text-right">
                     {p.is_on_sale ? (
                       <span>
                         <span className="font-bold text-secondary">
                           {money(p.current_price)}
                         </span>{" "}
-                        <span className="text-xs line-through opacity-50">
+                        <span className="text-xs line-through opacity-65">
                           {money(p.price)}
                         </span>
                       </span>
@@ -451,7 +466,7 @@ export default function AdminProducts() {
                       {p.stock}
                     </span>
                   </td>
-                  <td>
+                  <td className="hidden lg:table-cell">
                     <div className="flex gap-1">
                       {p.is_featured && (
                         <span className="badge badge-primary badge-xs">
@@ -489,19 +504,26 @@ export default function AdminProducts() {
                     </div>
                   </td>
                   <td className="text-right whitespace-nowrap">
+                    {/* Words from a tablet up; on a phone the two actions
+                        are their icons (named for a screen reader), so both
+                        stay on the screen. */}
                     <button
                       type="button"
                       className="btn btn-ghost btn-xs"
                       onClick={() => openEdit(p)}
+                      aria-label={`Edit ${p.name}`}
                     >
-                      Edit
+                      <Pencil size={14} className="sm:hidden" aria-hidden="true" />
+                      <span className="hidden sm:inline">Edit</span>
                     </button>
                     <button
                       type="button"
                       className="btn btn-ghost btn-xs text-error"
                       onClick={() => setDeleting({ id: p.id, name: p.name })}
+                      aria-label={`Remove ${p.name}`}
                     >
-                      Remove
+                      <Trash2 size={14} className="sm:hidden" aria-hidden="true" />
+                      <span className="hidden sm:inline">Remove</span>
                     </button>
                   </td>
                 </tr>
@@ -510,7 +532,7 @@ export default function AdminProducts() {
                 <tr>
                   <td
                     colSpan={6}
-                    className="py-10 text-center text-sm opacity-60"
+                    className="py-10 text-center text-sm opacity-70"
                   >
                     Nothing found.
                   </td>
@@ -521,321 +543,301 @@ export default function AdminProducts() {
         </div>
       )}
 
-      {data && data.pagination.total_pages > 1 && (
-        <div className="mt-4 flex justify-center">
-          <div className="join">
-            <button
-              className="btn join-item btn-sm"
-              disabled={page <= 1}
-              onClick={() => setPage(page - 1)}
-            >
-              «
-            </button>
-            <button className="btn join-item btn-sm pointer-events-none">
-              Page {data.pagination.page} / {data.pagination.total_pages}
-            </button>
-            <button
-              className="btn join-item btn-sm"
-              disabled={page >= data.pagination.total_pages}
-              onClick={() => setPage(page + 1)}
-            >
-              »
-            </button>
-          </div>
-        </div>
+      {data && (
+        <Pager
+          className="mt-4"
+          label="Pages of products"
+          page={data.pagination.page}
+          pages={data.pagination.total_pages}
+          onPage={setPage}
+        />
       )}
 
       {/* Create / edit dialog */}
       {editing && (
-        <div className="modal modal-open">
-          <div className="modal-box max-w-2xl">
-            <h3 className="font-display text-xl font-bold">
-              {editing.id ? "Edit product" : "New product"}
-            </h3>
-            <form
-              onSubmit={save}
-              id="product-form"
-              className="mt-4 grid gap-3 sm:grid-cols-2"
-            >
-              <div className="sm:col-span-2">
-                <label className="label text-xs">Name *</label>
-                <input
-                  className="input input-bordered w-full"
-                  required
-                  maxLength={150}
-                  value={editing.form.name}
-                  onChange={(e) => setField("name", e.target.value)}
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="label text-xs">Description</label>
-                <textarea
-                  className="textarea textarea-bordered w-full"
-                  rows={2}
-                  value={editing.form.description}
-                  onChange={(e) => setField("description", e.target.value)}
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="label text-xs">Photo</label>
-                <div className="flex items-center gap-4">
-                  <span className="h-20 w-20 shrink-0 overflow-hidden rounded-xl ring-1 ring-base-300">
-                    <PhotoTile
-                      src={editing.photo?.preview ?? editing.form.image_url}
-                      name={editing.form.name}
-                      className="h-full w-full"
+        <Modal title={editing.id ? "Edit product" : "New product"} onClose={closeDialog} busy={busy}>
+          <form
+            onSubmit={save}
+            id="product-form"
+            className="mt-4 grid gap-3 sm:grid-cols-2"
+          >
+            <div className="sm:col-span-2">
+              <label className="label text-xs">Name *</label>
+              <input
+                className="input input-bordered w-full"
+                required
+                maxLength={150}
+                value={editing.form.name}
+                onChange={(e) => setField("name", e.target.value)}
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="label text-xs">Description</label>
+              <textarea
+                className="textarea textarea-bordered w-full"
+                rows={2}
+                value={editing.form.description}
+                onChange={(e) => setField("description", e.target.value)}
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="label text-xs">Photo</label>
+              <div className="flex items-center gap-4">
+                <span className="h-20 w-20 shrink-0 overflow-hidden rounded-xl ring-1 ring-base-300">
+                  <PhotoTile
+                    src={editing.photo?.preview ?? editing.form.image_url}
+                    name={editing.form.name}
+                    className="h-full w-full"
+                  />
+                </span>
+                <div className="space-y-1.5">
+                  <label className="btn btn-outline btn-sm">
+                    <ImagePlus size={18} />
+                    {editing.form.image_url || editing.photo
+                      ? "Replace photo"
+                      : "Upload photo"}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={pickPhoto}
+                      aria-label="Product photo"
                     />
-                  </span>
-                  <div className="space-y-1.5">
-                    <label className="btn btn-outline btn-sm">
-                      <ImagePlus size={18} />
-                      {editing.form.image_url || editing.photo
-                        ? "Replace photo"
-                        : "Upload photo"}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={pickPhoto}
-                        aria-label="Product photo"
-                      />
-                    </label>
-                    {(editing.form.image_url || editing.photo) && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-xs text-error"
-                        onClick={clearPhoto}
-                      >
-                        Remove photo
-                      </button>
-                    )}
-                    <p className="text-xs opacity-60">
-                      From this PC or straight off the phone camera. Left blank
-                      shows a plain tile.
-                    </p>
-                  </div>
+                  </label>
+                  {(editing.form.image_url || editing.photo) && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs text-error"
+                      onClick={clearPhoto}
+                    >
+                      Remove photo
+                    </button>
+                  )}
+                  <p className="text-xs opacity-70">
+                    From this PC or straight off the phone camera. Left blank
+                    shows a plain tile.
+                  </p>
                 </div>
               </div>
-              <div>
-                <label className="label text-xs">Category</label>
-                <select
-                  className="select select-bordered w-full"
-                  value={editing.form.category_id}
-                  onChange={(e) => setField("category_id", e.target.value)}
-                >
-                  <option value="">— none —</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                  <option value={NEW_CATEGORY}>+ New shelf…</option>
-                </select>
-                {editing.form.category_id === NEW_CATEGORY && (
-                  <div className="mt-2">
-                    <label className="label text-xs">New shelf name</label>
-                    <input
-                      className="input input-bordered w-full"
-                      placeholder="Shelf name — e.g. Tarts"
-                      maxLength={100}
-                      value={editing.newCategory}
-                      onChange={(e) =>
-                        setEditing((s) => ({ ...s, newCategory: e.target.value }))
-                      }
-                      aria-label="New category name"
-                    />
-                  </div>
-                )}
-              </div>
-              {NUM_FIELDS.map(([key, label, step, min]) => (
-                <div key={key}>
-                  <label className="label text-xs">{label}</label>
+            </div>
+            <div>
+              <label className="label text-xs">Category</label>
+              <select
+                className="select select-bordered w-full"
+                value={editing.form.category_id}
+                onChange={(e) => setField("category_id", e.target.value)}
+              >
+                <option value="">— none —</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+                <option value={NEW_CATEGORY}>+ New shelf…</option>
+              </select>
+              {editing.form.category_id === NEW_CATEGORY && (
+                <div className="mt-2">
+                  <label className="label text-xs">New shelf name</label>
                   <input
-                    type="number"
                     className="input input-bordered w-full"
-                    step={step}
-                    min={min}
-                    value={editing.form[key]}
-                    onChange={(e) => setField(key, e.target.value)}
+                    placeholder="Shelf name — e.g. Tarts"
+                    maxLength={100}
+                    value={editing.newCategory}
+                    onChange={(e) =>
+                      setEditing((s) => ({ ...s, newCategory: e.target.value }))
+                    }
+                    aria-label="New category name"
                   />
                 </div>
-              ))}
-              <div className="sm:col-span-2">
-                <label className="label text-xs">Ingredients</label>
+              )}
+            </div>
+            {NUM_FIELDS.map(([key, label, step, min]) => (
+              <div key={key}>
+                <label className="label text-xs">{label}</label>
                 <input
+                  type="number"
                   className="input input-bordered w-full"
-                  value={editing.form.ingredients}
-                  onChange={(e) => setField("ingredients", e.target.value)}
+                  step={step}
+                  min={min}
+                  value={editing.form[key]}
+                  onChange={(e) => setField(key, e.target.value)}
                 />
               </div>
-              <div className="sm:col-span-2">
-                <label className="label text-xs">Allergens</label>
-                <input
-                  className="input input-bordered w-full"
-                  placeholder="Gluten, Dairy…"
-                  value={editing.form.allergens}
-                  onChange={(e) => setField("allergens", e.target.value)}
-                />
-              </div>
+            ))}
+            <div className="sm:col-span-2">
+              <label className="label text-xs">Ingredients</label>
+              <input
+                className="input input-bordered w-full"
+                value={editing.form.ingredients}
+                onChange={(e) => setField("ingredients", e.target.value)}
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="label text-xs">Allergens</label>
+              <input
+                className="input input-bordered w-full"
+                placeholder="Gluten, Dairy…"
+                value={editing.form.allergens}
+                onChange={(e) => setField("allergens", e.target.value)}
+              />
+            </div>
 
-              {/* VAT classification — provisional until the tax adviser
-                  confirms each product. Saved via its own audited endpoint. */}
-              <div className="sm:col-span-2 rounded-box bg-base-200/60 p-4">
-                <p className="mb-2 text-xs font-semibold tracking-wide uppercase opacity-60">
-                  VAT classification
-                </p>
-                <div className="grid gap-3 sm:grid-cols-2">
+            {/* VAT classification — provisional until the tax adviser
+                confirms each product. Saved via its own audited endpoint. */}
+            <div className="sm:col-span-2 rounded-box bg-base-200/60 p-4">
+              <p className="mb-2 text-xs font-semibold tracking-wide uppercase opacity-70">
+                VAT classification
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="label text-xs">Category</label>
+                  <select
+                    className="select select-bordered w-full"
+                    value={editing.form.vat_category}
+                    onChange={(e) => {
+                      const category = e.target.value;
+                      setEditing((s) => ({
+                        ...s,
+                        form: {
+                          ...s.form,
+                          vat_category: category,
+                          // parking a product takes it off the approved
+                          // list — those categories never carry approval
+                          ...(REVIEW_PARKED.includes(category) &&
+                          s.form.vat_review_status === "approved"
+                            ? { vat_review_status: "pending" }
+                            : {}),
+                          // milk only belongs to milk drinks
+                          ...(category !== "MILK_DRINK"
+                            ? { milk_content_percent: "" }
+                            : {}),
+                        },
+                      }));
+                    }}
+                  >
+                    <option value="">— not classified yet —</option>
+                    {VAT_CATEGORIES.map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label text-xs">Review status</label>
+                  <select
+                    className="select select-bordered w-full"
+                    value={editing.form.vat_review_status}
+                    onChange={(e) =>
+                      setField("vat_review_status", e.target.value)
+                    }
+                  >
+                    {VAT_STATUSES.map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-[11px] leading-tight opacity-70">
+                    Approving records your internal sign-off only — it does
+                    not replace classification by your tax adviser.
+                  </p>
+                </div>
+                {editing.form.vat_category === "MILK_DRINK" && (
                   <div>
-                    <label className="label text-xs">Category</label>
-                    <select
-                      className="select select-bordered w-full"
-                      value={editing.form.vat_category}
-                      onChange={(e) => {
-                        const category = e.target.value;
-                        setEditing((s) => ({
-                          ...s,
-                          form: {
-                            ...s.form,
-                            vat_category: category,
-                            // parking a product takes it off the approved
-                            // list — those categories never carry approval
-                            ...(REVIEW_PARKED.includes(category) &&
-                            s.form.vat_review_status === "approved"
-                              ? { vat_review_status: "pending" }
-                              : {}),
-                            // milk only belongs to milk drinks
-                            ...(category !== "MILK_DRINK"
-                              ? { milk_content_percent: "" }
-                              : {}),
-                          },
-                        }));
-                      }}
-                    >
-                      <option value="">— not classified yet —</option>
-                      {VAT_CATEGORIES.map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="label text-xs">Review status</label>
-                    <select
-                      className="select select-bordered w-full"
-                      value={editing.form.vat_review_status}
+                    <label className="label text-xs">
+                      Cow's-milk content (%) *
+                    </label>
+                    <input
+                      type="number"
+                      className="input input-bordered w-full"
+                      step="0.01"
+                      min="0"
+                      max="100"
+                      value={editing.form.milk_content_percent}
                       onChange={(e) =>
-                        setField("vat_review_status", e.target.value)
+                        setField("milk_content_percent", e.target.value)
                       }
-                    >
-                      {VAT_STATUSES.map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-[11px] leading-tight opacity-60">
-                      Approving records your internal sign-off only — it does
-                      not replace classification by your tax adviser.
+                    />
+                    <p className="mt-1 text-[11px] leading-tight opacity-70">
+                      Cow's-milk share of the finished drink — 75% or more
+                      earns the reduced rate. Plant-based milks never count;
+                      enter their real cow's-milk share (usually 0).
                     </p>
                   </div>
-                  {editing.form.vat_category === "MILK_DRINK" && (
-                    <div>
-                      <label className="label text-xs">
-                        Cow's-milk content (%) *
-                      </label>
-                      <input
-                        type="number"
-                        className="input input-bordered w-full"
-                        step="0.01"
-                        min="0"
-                        max="100"
-                        value={editing.form.milk_content_percent}
-                        onChange={(e) =>
-                          setField("milk_content_percent", e.target.value)
-                        }
-                      />
-                      <p className="mt-1 text-[11px] leading-tight opacity-60">
-                        Cow's-milk share of the finished drink — 75% or more
-                        earns the reduced rate. Plant-based milks never count;
-                        enter their real cow's-milk share (usually 0).
-                      </p>
+                )}
+                <div className="sm:col-span-2 space-y-2">
+                  {editing.form.vat_review_status !== "approved" && (
+                    <div
+                      className="alert alert-warning py-2 text-xs"
+                      role="status"
+                    >
+                      <span>
+                        {editing.form.vat_category
+                          ? "Provisional classification — not cleared for VAT-inclusive checkout yet. Await your tax adviser's confirmation before the euro cutover."
+                          : "No VAT category yet — every product needs one (plus approval) before VAT-inclusive checkout can price it."}
+                      </span>
                     </div>
                   )}
-                  <div className="sm:col-span-2 space-y-2">
-                    {editing.form.vat_review_status !== "approved" && (
-                      <div
-                        className="alert alert-warning py-2 text-xs"
-                        role="status"
-                      >
-                        <span>
-                          {editing.form.vat_category
-                            ? "Provisional classification — not cleared for VAT-inclusive checkout yet. Await your tax adviser's confirmation before the euro cutover."
-                            : "No VAT category yet — every product needs one (plus approval) before VAT-inclusive checkout can price it."}
-                        </span>
-                      </div>
-                    )}
-                    {editing.vat_rate_preview != null ? (
-                      <p className="text-[11px] opacity-60">
-                        Provisional rate implied by the saved classification:{" "}
-                        {editing.vat_rate_preview}% — set by shop configuration,
-                        not a legal determination.
-                      </p>
-                    ) : (
-                      <p className="text-[11px] opacity-60">
-                        The saved classification implies no rate yet.
-                      </p>
-                    )}
-                  </div>
+                  {editing.vat_rate_preview != null ? (
+                    <p className="text-[11px] opacity-70">
+                      Provisional rate implied by the saved classification:{" "}
+                      {editing.vat_rate_preview}% — set by shop configuration,
+                      not a legal determination.
+                    </p>
+                  ) : (
+                    <p className="text-[11px] opacity-70">
+                      The saved classification implies no rate yet.
+                    </p>
+                  )}
                 </div>
               </div>
-              <label className="label cursor-pointer justify-start gap-3">
-                <input
-                  type="checkbox"
-                  className="toggle toggle-secondary toggle-sm"
-                  checked={editing.form.is_featured}
-                  onChange={(e) => setField("is_featured", e.target.checked)}
-                />
-                <span className="label-text text-sm">
-                  Featured on the home page
-                </span>
-              </label>
-              <label className="label cursor-pointer justify-start gap-3">
-                <input
-                  type="checkbox"
-                  className="toggle toggle-secondary toggle-sm"
-                  checked={editing.form.is_available}
-                  onChange={(e) => setField("is_available", e.target.checked)}
-                />
-                <span className="label-text text-sm">Visible in the shop</span>
-              </label>
-            </form>
-            <div className="modal-action">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={closeDialog}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                form="product-form"
-                className="btn btn-primary btn-sm"
-                disabled={busy}
-              >
-                {busy ? (
-                  <span className="loading loading-spinner loading-xs" />
-                ) : editing.id ? (
-                  "Save changes"
-                ) : (
-                  "Add product"
-                )}
-              </button>
             </div>
+            <label className="label cursor-pointer justify-start gap-3">
+              <input
+                type="checkbox"
+                className="toggle toggle-secondary toggle-sm"
+                checked={editing.form.is_featured}
+                onChange={(e) => setField("is_featured", e.target.checked)}
+              />
+              <span className="label-text text-sm">
+                Featured on the home page
+              </span>
+            </label>
+            <label className="label cursor-pointer justify-start gap-3">
+              <input
+                type="checkbox"
+                className="toggle toggle-secondary toggle-sm"
+                checked={editing.form.is_available}
+                onChange={(e) => setField("is_available", e.target.checked)}
+              />
+              <span className="label-text text-sm">Visible in the shop</span>
+            </label>
+          </form>
+          <div className="modal-action">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={closeDialog}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="product-form"
+              className="btn btn-primary btn-sm"
+              disabled={busy}
+            >
+              {busy ? (
+                <span className="loading loading-spinner loading-xs" />
+              ) : editing.id ? (
+                "Save changes"
+              ) : (
+                "Add product"
+              )}
+            </button>
           </div>
-          <div className="modal-backdrop" onClick={closeDialog} />
-        </div>
+        </Modal>
       )}
 
       {/* Shelf delete confirm */}

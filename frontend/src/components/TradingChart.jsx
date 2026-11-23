@@ -59,7 +59,7 @@ export default function TradingChart({ series }) {
 
   if (peak <= 0) {
     return (
-      <p className="mt-4 text-sm opacity-60">
+      <p className="mt-4 text-sm opacity-70">
         No sales in the window yet — the chart fills as orders land.
       </p>
     );
@@ -160,7 +160,7 @@ export default function TradingChart({ series }) {
           }}
         >
           <p className="font-bold">{money(days[hovered].revenue)}</p>
-          <p className="opacity-60">
+          <p className="opacity-70">
             {labelFor(days[hovered])} · {days[hovered].orders} order
             {days[hovered].orders === 1 ? "" : "s"}
           </p>

@@ -2,11 +2,13 @@ import { lazy, Suspense, useEffect } from "react";
 import { Outlet, Route, Routes, useLocation } from "react-router";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
+import BackToTop from "./components/BackToTop";
 import { Loading } from "./components/Loading";
 import { AdminRoute, ProtectedRoute } from "./components/RouteGuards";
 import { applyShopConfig } from "./lib/format";
 import { fetchStore } from "./lib/store";
 import { applyBrandColor } from "./lib/theme";
+import { titleFor } from "./lib/titles";
 
 import Home from "./pages/Home";
 import Products from "./pages/Products";
@@ -20,6 +22,7 @@ import SocialCallback from "./pages/SocialCallback";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import Unsubscribe from "./pages/Unsubscribe";
+import Contact from "./pages/Contact";
 import NotFound from "./pages/NotFound";
 import { LegalNotice, PrivacyPolicy, RefundPolicy, TermsOfService } from "./pages/Legal";
 import AccountLayout from "./pages/account/AccountLayout";
@@ -75,25 +78,35 @@ const AdminUsers = deskPage(() => import("./pages/admin/Users"));
 const Marketing = deskPage(() => import("./pages/admin/Marketing"));
 const Settings = deskPage(() => import("./pages/admin/Settings"));
 
-function ScrollToTop() {
+/* What every navigation does besides drawing the page: start at the top,
+   and name the browser tab after where the shopper now is (lib/titles.js —
+   a product page then writes its own bake's name over it). */
+function OnNavigate() {
   const { pathname } = useLocation();
   useEffect(() => {
-    window.scrollTo({ top: 0 });
+    // "instant": a new page begins at its top, it does not glide there.
+    window.scrollTo({ top: 0, behavior: "instant" });
+    document.title = titleFor(pathname);
   }, [pathname]);
   return null;
 }
 
 function ShopLayout() {
   return (
-    <div className="flex min-h-screen flex-col">
+    // dvh, not vh: on a phone "100vh" is taller than the screen whenever
+    // the browser's own bars are showing.
+    <div className="flex min-h-dvh flex-col">
+      {/* The first Tab on any page: past the navigation, to the content. */}
+      <a href="#main" className="skip-link no-print">Skip to the content</a>
       <Navbar />
-      <main className="flex-1">
+      <main id="main" tabIndex={-1} className="flex-1 outline-none">
         {/* The net under any lazily-loaded page that has no closer boundary */}
         <Suspense fallback={<Loading />}>
           <Outlet />
         </Suspense>
       </main>
       <Footer />
+      <BackToTop />
     </div>
   );
 }
@@ -117,7 +130,7 @@ export default function App() {
   return (
     <>
       <div className="grain-overlay" aria-hidden="true" />
-      <ScrollToTop />
+      <OnNavigate />
       <Routes>
         <Route element={<ShopLayout />}>
           <Route index element={<Home />} />
@@ -125,6 +138,7 @@ export default function App() {
           <Route path="products/:slug" element={<ProductDetail />} />
           <Route path="cart" element={<Cart />} />
           <Route path="bulk" element={<BulkOrder />} />
+          <Route path="contact" element={<Contact />} />
           <Route path="login" element={<Login />} />
           <Route path="register" element={<Register />} />
           <Route path="auth/callback" element={<SocialCallback />} />

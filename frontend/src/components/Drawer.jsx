@@ -72,7 +72,7 @@ export default function Drawer({ title, subtitle = null, label, onClose, busy = 
         <div className="flex items-start justify-between gap-3 border-b border-base-300/70 px-6 py-4">
           <div className="min-w-0">
             <h2 className="font-display truncate text-xl font-semibold">{title}</h2>
-            {subtitle && <p className="text-xs opacity-60">{subtitle}</p>}
+            {subtitle && <p className="text-xs opacity-70">{subtitle}</p>}
           </div>
           <button
             type="button"

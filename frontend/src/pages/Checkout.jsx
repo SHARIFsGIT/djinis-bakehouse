@@ -490,7 +490,7 @@ export default function Checkout() {
                 value={deliveryDate}
                 onChange={(e) => setDeliveryDate(e.target.value)}
               />
-              <p className="mt-1.5 text-xs opacity-60">Leave blank for the next delivery run.</p>
+              <p className="mt-1.5 text-xs opacity-70">Leave blank for the next delivery run.</p>
             </div>
 
             <fieldset className="mt-5">
@@ -518,7 +518,7 @@ export default function Checkout() {
                     <Icon size={20} className="shrink-0 text-secondary" aria-hidden="true" />
                     <div className="min-w-0">
                       <p className="text-sm font-semibold">{title}</p>
-                      <p className="text-xs opacity-60">{hint}</p>
+                      <p className="text-xs opacity-70">{hint}</p>
                     </div>
                   </label>
                 ))}
@@ -569,14 +569,14 @@ export default function Checkout() {
           <h2 className="font-display text-xl font-semibold">
             Your order
             {quoteState.status === "loading" && quote && (
-              <span className="loading loading-spinner loading-xs ml-2 align-middle opacity-50" aria-label="Refreshing your total" />
+              <span className="loading loading-spinner loading-xs ml-2 align-middle opacity-65" aria-label="Refreshing your total" />
             )}
           </h2>
           <ul className="mt-4 space-y-2 text-sm">
             {items.map((i) => (
               <li key={i.product_id} className="flex justify-between gap-3">
                 <span className="opacity-80">
-                  {i.name} <span className="opacity-60">× {i.quantity}</span>
+                  {i.name} <span className="opacity-70">× {i.quantity}</span>
                 </span>
                 <span className="shrink-0 font-semibold">
                   {money(quoteLines.get(i.product_id)?.line_total ?? i.unit_price * i.quantity)}
@@ -733,13 +733,13 @@ export default function Checkout() {
               chosen.action(money(quote.total))
             )}
           </button>
-          <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-xs opacity-60">
+          <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-xs opacity-70">
             <Lock size={16} className="shrink-0" aria-hidden="true" />
             {chosen.lock}
           </p>
           {/* What pressing the button agrees to, with each document one tap
               away (new tabs — a half-filled checkout is not thrown away). */}
-          <p className="mt-3 text-center text-xs opacity-60">
+          <p className="mt-3 text-center text-xs opacity-70">
             By ordering you accept our{" "}
             <Link to="/terms" target="_blank" rel="noopener" className="link">terms</Link> and{" "}
             <Link to="/refunds" target="_blank" rel="noopener" className="link">

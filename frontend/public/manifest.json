@@ -1,0 +1,20 @@
+{
+  "name": "Djini's Bakehouse",
+  "short_name": "Djini's",
+  "description": "Small-batch breads, pastries and sweet things baked from scratch every morning.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fcf6ee",
+  "theme_color": "#7f2230",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Explore the bakes", "url": "/products" },
+    { "name": "Your basket", "url": "/cart" },
+    { "name": "Your orders", "url": "/account/orders" }
+  ]
+}

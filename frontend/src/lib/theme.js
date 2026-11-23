@@ -71,7 +71,12 @@ export function hexToOklch(hex) {
    are what keep cream text readable on every button and wine links readable
    on every background — so a pick re-seats the hue (and a tamed share of the
    picked chroma) rather than swapping the colour wholesale. Caps mirror the
-   shipped burgundy relationship (primary 0.16, secondary ~0.14 of that). */
+   shipped burgundy relationship (primary 0.16, secondary ~0.14 of that).
+
+   At night the wine has two seats, as in index.css: --color-secondary (66%)
+   is the one read as text and links on the dark paper, --brand-wine (56%)
+   the one that sits under cream text at the far end of the gradient. By day
+   one seat (54%) does both, and --brand-wine simply follows it. */
 const LIGHT_PRIMARY_C = 0.16;
 const LIGHT_SECONDARY_C = 0.14;
 const NIGHT_PRIMARY_C = 0.15;
@@ -94,7 +99,8 @@ export function brandCss(hex) {
     `--color-secondary:${seat(54, Math.min(c * 0.875, LIGHT_SECONDARY_C), h)}`;
   const night =
     `--color-primary:${seat(45, Math.min(c, NIGHT_PRIMARY_C), h)};` +
-    `--color-secondary:${seat(60, Math.min(c * 0.9, NIGHT_SECONDARY_C), h)}`;
+    `--color-secondary:${seat(66, Math.min(c * 0.9, NIGHT_SECONDARY_C), h)};` +
+    `--brand-wine:${seat(56, Math.min(c * 0.9, NIGHT_SECONDARY_C), h)}`;
   return (
     `:root{${light}}` +
     `[data-theme="midnight"]{${night}}` +

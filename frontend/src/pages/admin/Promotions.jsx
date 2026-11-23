@@ -1,4 +1,4 @@
-import { Percent, Plus, Search } from "lucide-react";
+import { Pencil, Percent, Plus, Search, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import client, { apiError } from "../../api/client";
 import ConfirmDialog from "../../components/ConfirmDialog";
@@ -24,7 +24,7 @@ const STATUS_FILTERS = [
 function StatChip({ label, value, tone = "" }) {
   return (
     <div className="glass flex min-h-17 items-center justify-between gap-3 rounded-box px-4 py-3 ring-1 ring-base-300/60">
-      <span className="text-xs font-bold tracking-widest uppercase opacity-55">{label}</span>
+      <span className="text-xs font-bold tracking-widest uppercase opacity-65">{label}</span>
       <span className={`font-display text-2xl font-bold ${tone}`}>{value}</span>
     </div>
   );
@@ -114,7 +114,7 @@ function CouponDrawer({ coupon, onClose, onSaved }) {
             <input
               id="pr-code"
               ref={firstField}
-              className={`input input-bordered w-full font-mono uppercase ${editing ? "opacity-60" : ""}`}
+              className={`input input-bordered w-full font-mono uppercase ${editing ? "opacity-70" : ""}`}
               required
               minLength={3}
               maxLength={50}
@@ -126,7 +126,7 @@ function CouponDrawer({ coupon, onClose, onSaved }) {
               disabled={editing}
               readOnly={editing}
             />
-            <p className="mt-1 text-xs opacity-60">
+            <p className="mt-1 text-xs opacity-70">
               {editing ? "The code is its public identity — it stays as typed at birth." : "Letters and numbers, typed once: this is what customers will enter."}
             </p>
           </div>
@@ -178,7 +178,7 @@ function CouponDrawer({ coupon, onClose, onSaved }) {
                 <option key={rule.value} value={rule.value}>{rule.label}</option>
               ))}
             </select>
-            <p className="mt-1 text-xs opacity-60">
+            <p className="mt-1 text-xs opacity-70">
               A 1-per-customer code frees up again if that order is cancelled.
             </p>
           </div>
@@ -312,7 +312,7 @@ export default function Promotions() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-semibold">Promotions</h1>
-          <p className="mt-0.5 text-sm opacity-60">
+          <p className="mt-0.5 text-sm opacity-70">
             Coupon codes, their limits and their honest usage — every basket re-checks the rules at checkout.
           </p>
         </div>
@@ -365,7 +365,7 @@ export default function Promotions() {
         {!loaded ? (
           <div className="flex h-64 items-center justify-center">
             <span className="loading loading-spinner loading-md text-secondary" />
-            <span className="ml-3 text-sm opacity-60">Fetching the coupon tin…</span>
+            <span className="ml-3 text-sm opacity-70">Fetching the coupon tin…</span>
           </div>
         ) : failed ? (
           // The list never arrived — say so (and offer another go) rather
@@ -374,7 +374,7 @@ export default function Promotions() {
         ) : visible.length === 0 ? (
           <div className="flex h-64 flex-col items-center justify-center gap-3 text-center">
             <Percent size={28} className="opacity-30" />
-            <p className="text-sm opacity-60">
+            <p className="text-sm opacity-70">
               {(coupons ?? []).length === 0
                 ? "No promotions yet — create the first one."
                 : "Nothing matches this filter."}
@@ -383,43 +383,58 @@ export default function Promotions() {
         ) : (
           <table className="table table-sm">
             <thead>
-              <tr className="text-xs uppercase opacity-50">
+              {/* A phone gets the code (with what it gives written under
+                  it), the switch and the two actions — everything needed to
+                  run a promotion, on the screen. The figures take columns of
+                  their own from a tablet up, the note and the date on a wide
+                  screen; it used to be eight columns at every width, with
+                  the switch and the actions a sideways scroll away. */}
+              <tr className="text-xs uppercase opacity-65">
                 <th>Code</th>
-                <th className="text-right">Discount</th>
-                <th className="text-right">Minimum</th>
-                <th className="text-right">Redemptions</th>
-                <th>Note</th>
+                <th className="hidden text-right sm:table-cell">Discount</th>
+                <th className="hidden text-right sm:table-cell">Minimum</th>
+                <th className="hidden text-right sm:table-cell">Redemptions</th>
+                <th className="hidden xl:table-cell">Note</th>
                 <th>Status</th>
-                <th className="hidden text-right md:table-cell">Added</th>
+                <th className="hidden text-right xl:table-cell">Added</th>
                 <th className="text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {visible.map((c) => (
-                <tr key={c.id} className={c.is_active ? "hover:bg-base-200/50" : "opacity-55"}>
+                <tr key={c.id} className={c.is_active ? "hover:bg-base-200/50" : "opacity-65"}>
                   <td className="max-w-56">
                     <span className="inline-flex items-center gap-2">
                       <span className="truncate font-mono font-bold" title={c.code}>{c.code}</span>
                     </span>
+                    <span className="block text-xs opacity-70 sm:hidden">
+                      {c.percent_off}% off ·{" "}
+                      {c.min_subtotal == null
+                        ? "any basket"
+                        : c.min_subtotal_approved
+                          ? `from ${money(c.min_subtotal)}`
+                          : `${money(c.min_subtotal)} minimum pending review`}{" "}
+                      · {c.redemptions ?? 0} used
+                    </span>
                   </td>
-                  <td className="whitespace-nowrap text-right font-bold">{c.percent_off}% off</td>
-                  <td className="whitespace-nowrap text-right">
+                  <td className="hidden whitespace-nowrap text-right font-bold sm:table-cell">{c.percent_off}% off</td>
+                  <td className="hidden whitespace-nowrap text-right sm:table-cell">
                     {c.min_subtotal == null ? (
-                      <span className="opacity-50">none</span>
+                      <span className="opacity-65">none</span>
                     ) : c.min_subtotal_approved ? (
                       `${money(c.min_subtotal)}+`
                     ) : (
                       // A number recorded before the EUR cutover — a dollar
                       // numeral, not an approved euro threshold. Shoppers
                       // can't use the code until it is re-saved from the editor.
-                      <span className="inline-flex items-center gap-1 text-warning">
+                      <span className="inline-flex items-center gap-1 text-caution">
                         {money(c.min_subtotal)}
                         <span className="badge badge-warning badge-xs whitespace-nowrap">pending review</span>
                       </span>
                     )}
                   </td>
-                  <td className="text-right tabular-nums">{c.redemptions ?? 0}</td>
-                  <td className="max-w-48 truncate text-sm opacity-70" title={c.description ?? ""}>
+                  <td className="hidden text-right tabular-nums sm:table-cell">{c.redemptions ?? 0}</td>
+                  <td className="hidden max-w-48 truncate text-sm opacity-70 xl:table-cell" title={c.description ?? ""}>
                     {c.description ?? "—"}
                   </td>
                   <td>
@@ -432,26 +447,30 @@ export default function Promotions() {
                         disabled={togglingId === c.id}
                         aria-label={`Toggle ${c.code}`}
                       />
-                      <span className={`badge badge-sm ${c.is_active ? "badge-success" : "badge-ghost"}`}>
+                      <span className={`badge badge-sm hidden sm:inline-flex ${c.is_active ? "badge-success" : "badge-ghost"}`}>
                         {c.is_active ? "live" : "paused"}
                       </span>
                     </span>
                   </td>
-                  <td className="hidden text-right text-xs whitespace-nowrap opacity-60 md:table-cell">{formatDate(c.created_at)}</td>
+                  <td className="hidden text-right text-xs whitespace-nowrap opacity-70 xl:table-cell">{formatDate(c.created_at)}</td>
                   <td className="text-right whitespace-nowrap">
                     <button
                       type="button"
-                      className="btn btn-ghost btn-xs min-w-16"
+                      className="btn btn-ghost btn-xs sm:min-w-16"
                       onClick={() => setDrawer(c)}
+                      aria-label={`Edit ${c.code}`}
                     >
-                      Edit
+                      <Pencil size={14} className="sm:hidden" aria-hidden="true" />
+                      <span className="hidden sm:inline">Edit</span>
                     </button>
                     <button
                       type="button"
-                      className="btn btn-ghost btn-xs min-w-16 text-error"
+                      className="btn btn-ghost btn-xs text-error sm:min-w-16"
                       onClick={() => setDeleting(c)}
+                      aria-label={`Remove ${c.code}`}
                     >
-                      Remove
+                      <Trash2 size={14} className="sm:hidden" aria-hidden="true" />
+                      <span className="hidden sm:inline">Remove</span>
                     </button>
                   </td>
                 </tr>

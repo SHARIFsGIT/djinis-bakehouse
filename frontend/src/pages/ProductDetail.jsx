@@ -3,6 +3,8 @@ import { Link, useLocation, useParams } from "react-router";
 import { BadgeCheck, Bell, Heart, Share2, Star, Truck, Wheat } from "lucide-react";
 import client, { apiError } from "../api/client";
 import { formatDate, MAX_LINE_QUANTITY, shopConfig } from "../lib/format";
+import { rememberBake } from "../lib/recent";
+import { DEFAULT_TITLE, SHOP_NAME } from "../lib/titles";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
 import { useFavorites } from "../context/FavoritesContext";
@@ -12,9 +14,33 @@ import PriceTag from "../components/PriceTag";
 import RatingStars from "../components/RatingStars";
 import QuantityInput from "../components/QuantityInput";
 import ProductCard from "../components/ProductCard";
-import { Loading } from "../components/Loading";
+import DockBar from "../components/DockBar";
+import Lightbox from "../components/Lightbox";
+import RecentlyViewed from "../components/RecentlyViewed";
+import useDock from "../hooks/useDock";
 
-const DEFAULT_TITLE = "Djini's Bakehouse — Fresh from the oven";
+/** The page's own outline while the bake is on its way: the photo's frame
+    and the lines of text hold their places, so nothing jumps when the real
+    thing lands (a bare spinner gave the page nothing to stand on). */
+function ProductSkeleton() {
+  return (
+    <div className="mx-auto max-w-7xl px-4 py-10" aria-busy="true" aria-label="Pulling it from the shelf…">
+      <div className="mb-6 h-4 w-48 animate-pulse rounded bg-base-200" />
+      <div className="grid grid-cols-1 gap-10 lg:grid-cols-2">
+        <div className="aspect-square w-full animate-pulse rounded-box bg-base-200 sm:aspect-[4/5] lg:aspect-[3/4]" />
+        <div className="space-y-4">
+          <div className="h-5 w-24 animate-pulse rounded-full bg-base-200" />
+          <div className="h-11 w-3/4 animate-pulse rounded bg-base-200" />
+          <div className="h-4 w-40 animate-pulse rounded bg-base-200" />
+          <div className="h-9 w-28 animate-pulse rounded bg-base-200" />
+          <div className="h-4 w-full animate-pulse rounded bg-base-200" />
+          <div className="h-4 w-5/6 animate-pulse rounded bg-base-200" />
+          <div className="h-12 w-full animate-pulse rounded-box bg-base-200 sm:w-72" />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** Set (or replace) a <meta name=…> tag — crawlers and share cards read
     these after the SPA paints, so each product page carries its own. */
@@ -34,7 +60,7 @@ function setMetaTag(name, content) {
 function useProductHead(product) {
   useEffect(() => {
     if (!product) return undefined;
-    document.title = `${product.name} — Djini's Bakehouse`;
+    document.title = `${product.name} — ${SHOP_NAME}`;
     const description = (product.description || DEFAULT_TITLE).slice(0, 160);
     setMetaTag("description", description);
 
@@ -154,7 +180,7 @@ function InteractiveRating({ average, count, onPick, canReview }) {
       >
         {stars}
       </div>
-      <p className="text-xs opacity-60">{caption}</p>
+      <p className="text-xs opacity-70">{caption}</p>
     </div>
   );
 }
@@ -176,8 +202,19 @@ export default function ProductDetail() {
   const [restockEmail, setRestockEmail] = useState("");
   const [restockDone, setRestockDone] = useState(false);
   const [restockSending, setRestockSending] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
+  // The main "Add to basket" button. While it is off screen, a phone gets
+  // the same button docked to the bottom edge.
+  const buyButton = useRef(null);
+  // Not for a bake that is sold out: a docked "Sold out" offers nothing.
+  const docked = useDock(buyButton, { key: product?.id, enabled: (product?.stock ?? 0) > 0 });
 
   useProductHead(product);
+
+  // Opening a bake's page puts it on this browser's "recently viewed" list.
+  useEffect(() => {
+    if (product) rememberBake(product);
+  }, [product?.slug]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // The slug this page is showing *now*. An answer for a bake the shopper
   // has already clicked away from (a slow connection, a quick tap on a
@@ -242,7 +279,7 @@ export default function ProductDetail() {
       </div>
     );
   }
-  if (!product) return <Loading label="Pulling it from the shelf…" />;
+  if (!product) return <ProductSkeleton />;
 
   const soldOut = product.stock <= 0;
   const lowStock = !soldOut && product.stock <= 5;
@@ -264,12 +301,32 @@ export default function ProductDetail() {
     });
   };
 
+  const addToBasket = () => {
+    add(product, quantity);
+    toast.success(`${quantity} × ${product.name} in your basket`, {
+      action: { label: "View basket", to: "/cart" },
+    });
+  };
+
   const shareLink = async () => {
+    const url = window.location.href;
+    // A phone has its own share sheet (messages, mail, the neighbour's
+    // chat) — use it there; copy the link everywhere else. A desktop
+    // browser may offer a share dialog too, but at a desk "copied" is the
+    // quicker answer, so the sheet is kept for touch screens.
+    if (typeof navigator.share === "function" && window.matchMedia?.("(pointer: coarse)").matches) {
+      try {
+        await navigator.share({ title: product.name, url });
+      } catch {
+        // The sheet was closed without sharing — nothing to say about that.
+      }
+      return;
+    }
     try {
-      await navigator.clipboard.writeText(window.location.href);
+      await navigator.clipboard.writeText(url);
       toast.success("Link copied — pass it on");
     } catch {
-      toast.info(window.location.href);
+      toast.info(url);
     }
   };
 
@@ -338,20 +395,39 @@ export default function ProductDetail() {
               </Link>
             </li>
           )}
-          <li className="opacity-60">{product.name}</li>
+          {/* The page itself: the one crumb that may be cut short (with an
+              ellipsis) when the trail is longer than a phone is wide. */}
+          <li className="min-w-0 opacity-70" aria-current="page">
+            <span className="truncate">{product.name}</span>
+          </li>
         </ul>
       </nav>
 
       <div className="grid grid-cols-1 gap-10 lg:grid-cols-2">
         {/* Photo */}
         <div className="rise-in relative">
-          <div className="overflow-hidden rounded-box shadow-lg ring-1 ring-base-300/60">
-            <PhotoTile
-              src={product.image_url}
-              name={product.name}
-              className="aspect-[3/4] w-full"
-            />
-          </div>
+          {/* Square on a phone, so the name and the price are on the first
+              screen with it; the tall portrait from a tablet up. A tap opens
+              the photo large. */}
+          {product.image_url ? (
+            <button
+              type="button"
+              onClick={() => setZoomed(true)}
+              className="block w-full cursor-zoom-in overflow-hidden rounded-box shadow-lg ring-1 ring-base-300/60"
+              aria-label={`Enlarge the photo of ${product.name}`}
+            >
+              <PhotoTile
+                src={product.image_url}
+                name={product.name}
+                eager
+                className="aspect-square w-full sm:aspect-[4/5] lg:aspect-[3/4]"
+              />
+            </button>
+          ) : (
+            <div className="overflow-hidden rounded-box shadow-lg ring-1 ring-base-300/60">
+              <PhotoTile name={product.name} className="aspect-square w-full sm:aspect-[4/5] lg:aspect-[3/4]" />
+            </div>
+          )}
           {product.is_on_sale && (
             <span className="badge badge-secondary badge-lg absolute top-4 left-4 -rotate-6 border-dashed border-secondary-content/40 px-3 py-3 font-display text-base font-bold shadow">
               −{product.discount_percentage}% today
@@ -434,46 +510,45 @@ export default function ProductDetail() {
             )}
           </div>
 
-          <div className="dash-divider mt-6 flex flex-wrap items-center gap-4 pt-6">
+          {/* One line from a tablet up. On a phone the stepper shares its
+              row with save and share, and the button takes a full row of
+              its own — it used to be squeezed until its label broke in two. */}
+          <div className="dash-divider mt-6 flex flex-wrap items-center gap-3 pt-6 sm:gap-4">
             <QuantityInput
               value={quantity}
               onChange={setQuantity}
               max={Math.min(Math.max(product.stock, 1), MAX_LINE_QUANTITY)}
             />
             <button
+              ref={buyButton}
               type="button"
-              className="btn btn-primary btn-lg flex-1 sm:flex-none"
+              className="btn btn-primary btn-lg order-last w-full whitespace-nowrap sm:order-none sm:w-auto"
               disabled={soldOut}
-              onClick={() => {
-                add(product, quantity);
-                toast.success(`${quantity} × ${product.name} in your basket`);
-              }}
+              onClick={addToBasket}
             >
               {soldOut ? "Sold out" : "Add to basket"}
             </button>
-            <button
-              type="button"
-              className={`btn btn-sm btn-square ${saved ? "btn-secondary text-secondary-content" : "btn-ghost border border-base-300"}`}
-              onClick={() => toggle(product)}
-              aria-label={saved ? "Remove from saved bakes" : "Save for later"}
-              aria-pressed={saved}
-              title={saved ? "Remove from saved bakes" : "Save for later"}
-            >
-              {saved ? (
-                <Heart size={18} className="fill-current" />
-              ) : (
-                <Heart size={18} />
-              )}
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-square btn-ghost border border-base-300"
-              onClick={shareLink}
-              aria-label="Copy link to this bake"
-              title="Copy link"
-            >
-              <Share2 size={18} />
-            </button>
+            <div className="ml-auto flex items-center gap-2 sm:ml-0">
+              <button
+                type="button"
+                className={`btn btn-square ${saved ? "btn-secondary text-secondary-content" : "btn-ghost border border-base-300"}`}
+                onClick={() => toggle(product)}
+                aria-label={saved ? "Remove from saved bakes" : "Save for later"}
+                aria-pressed={saved}
+                title={saved ? "Remove from saved bakes" : "Save for later"}
+              >
+                <Heart key={String(saved)} size={18} className={saved ? "animate-pop fill-current" : ""} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="btn btn-square btn-ghost border border-base-300"
+                onClick={shareLink}
+                aria-label="Share this bake"
+                title="Share"
+              >
+                <Share2 size={18} aria-hidden="true" />
+              </button>
+            </div>
           </div>
 
           {soldOut &&
@@ -559,12 +634,16 @@ export default function ProductDetail() {
               What the neighborhood says
             </h2>
             <div className="mt-4 flex items-end gap-3">
-              <p className="font-display text-6xl font-bold text-secondary">
-                {product.review_count ? product.average_rating.toFixed(1) : "—"}
-              </p>
-              <div className="pb-2">
+              {/* The big figure only once there is one — a lone dash in
+                  its place read as a stray line. */}
+              {product.review_count > 0 && (
+                <p className="font-display text-6xl font-bold text-secondary">
+                  {product.average_rating.toFixed(1)}
+                </p>
+              )}
+              <div className={product.review_count > 0 ? "pb-2" : ""}>
                 <RatingStars rating={product.average_rating} />
-                <p className="text-xs opacity-60">
+                <p className="text-xs opacity-70">
                   {product.review_count} {product.review_count === 1 ? "review" : "reviews"}
                 </p>
               </div>
@@ -586,7 +665,7 @@ export default function ProductDetail() {
                         }}
                       />
                     </div>
-                    <span className="w-6 text-right opacity-60">{count}</span>
+                    <span className="w-6 text-right opacity-70">{count}</span>
                   </li>
                 ))}
               </ul>
@@ -655,7 +734,7 @@ export default function ProductDetail() {
 
           <div className="space-y-4">
             {wall.length === 0 && (
-              <p className="rounded-box border border-dashed border-base-300 p-6 text-center text-sm opacity-60">
+              <p className="rounded-box border border-dashed border-base-300 p-6 text-center text-sm opacity-70">
                 No reviews yet — be the first to write one
               </p>
             )}
@@ -673,7 +752,7 @@ export default function ProductDetail() {
                       </span>
                     )}
                   </p>
-                  <p className="text-xs opacity-50">
+                  <p className="text-xs opacity-65">
                     {formatDate(r.created_at)}
                   </p>
                 </div>
@@ -703,6 +782,34 @@ export default function ProductDetail() {
             ))}
           </div>
         </section>
+      )}
+
+      <RecentlyViewed exclude={product.slug} />
+
+      {zoomed && product.image_url && (
+        <Lightbox src={product.image_url} alt={product.name} onClose={() => setZoomed(false)} />
+      )}
+
+      {/* The buy bar: on a phone, whenever the button above has scrolled
+          out of sight, the same button waits at the bottom edge — reading
+          the reviews never means scrolling back up to buy. */}
+      {docked && (
+        <DockBar label="Buy this bake">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold">{product.name}</p>
+            <p className="figures text-sm">
+              <PriceTag product={product} />
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary whitespace-nowrap"
+            disabled={soldOut}
+            onClick={addToBasket}
+          >
+            {soldOut ? "Sold out" : "Add to basket"}
+          </button>
+        </DockBar>
       )}
     </div>
   );

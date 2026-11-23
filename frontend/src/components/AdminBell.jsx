@@ -112,7 +112,7 @@ export default function AdminBell() {
 
         <ul className="max-h-96 overflow-y-auto max-sm:max-h-[calc(100dvh-var(--bell-top,5.5rem)-4.5rem)]">
           {board.items.length === 0 && (
-            <li className="px-4 py-8 text-center text-sm opacity-55">
+            <li className="px-4 py-8 text-center text-sm opacity-65">
               All caught up — the shop is quiet.
             </li>
           )}
@@ -124,7 +124,7 @@ export default function AdminBell() {
                   type="button"
                   onClick={() => open(n)}
                   className={`flex w-full items-start gap-3 px-4 py-3 text-left transition hover:bg-base-200/60 ${
-                    n.is_read ? "opacity-60" : ""
+                    n.is_read ? "opacity-70" : ""
                   }`}
                 >
                   <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${className}`}>
@@ -138,7 +138,7 @@ export default function AdminBell() {
                       </span>
                     )}
                     <span
-                      className="mt-1 block text-[11px] opacity-50"
+                      className="mt-1 block text-[11px] opacity-65"
                       title={formatDateTime(n.created_at)}
                     >
                       {stampTime(n.created_at)}

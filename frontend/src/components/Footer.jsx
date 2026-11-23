@@ -23,6 +23,7 @@ export default function Footer() {
   const address = store?.contact_address?.trim();
   const phone = store?.contact_phone?.trim();
   const contactEmail = store?.contact_email?.trim();
+  const hasContact = Boolean(address || phone || contactEmail);
 
   const subscribe = async (e) => {
     e.preventDefault();
@@ -46,7 +47,14 @@ export default function Footer() {
 
   return (
     <footer className="mt-20 border-t border-base-300/60 bg-base-200/60">
-      <div className="mx-auto grid max-w-7xl gap-10 px-4 py-12 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Three columns or four — the bake-hours column exists only once the
+          baker has written hours, and the row is spread over what is there
+          instead of leaving a quarter of the footer empty. */}
+      <div
+        className={`mx-auto grid max-w-7xl gap-10 px-4 py-12 sm:grid-cols-2 ${
+          hours.length > 0 ? "lg:grid-cols-4" : "lg:grid-cols-3"
+        }`}
+      >
         <div>
           <div className="flex items-center gap-2.5">
             <img src="/static/site/logo.png" alt="Djini's Bakehouse" className="h-9 w-9 object-contain" />
@@ -68,6 +76,7 @@ export default function Footer() {
             <li><Link to="/products?category=desserts" className="link link-hover">Desserts</Link></li>
             <li><Link to="/cart" className="link link-hover">Your basket</Link></li>
             <li><Link to="/bulk" className="link link-hover">Bulk &amp; event orders</Link></li>
+            <li><Link to="/contact" className="link link-hover">Find us</Link></li>
           </ul>
         </div>
 
@@ -83,33 +92,38 @@ export default function Footer() {
         )}
 
         <div>
-          {(address || phone || contactEmail) && (
+          {hasContact && (
             <p className="mb-3 font-display font-semibold">Say hello</p>
           )}
-          <ul className="space-y-2.5 text-sm opacity-80">
+          <ul className={`space-y-2.5 text-sm opacity-80 ${hasContact ? "" : "hidden"}`}>
             {address && (
               <li className="flex items-start gap-2.5">
-                <MapPin size={16} className="mt-0.5 shrink-0 opacity-60" />
+                <MapPin size={16} className="mt-0.5 shrink-0 opacity-70" aria-hidden="true" />
                 <span>{address}</span>
               </li>
             )}
             {/* Tappable: on a phone, a number is something to call. */}
             {phone && (
               <li className="flex items-center gap-2.5">
-                <Phone size={16} className="shrink-0 opacity-60" aria-hidden="true" />
+                <Phone size={16} className="shrink-0 opacity-70" aria-hidden="true" />
                 <a href={`tel:${phone.replace(/[^+\d]/g, "")}`} className="link link-hover">{phone}</a>
               </li>
             )}
             {contactEmail && (
               <li className="flex items-center gap-2.5">
-                <Mail size={16} className="shrink-0 opacity-60" aria-hidden="true" />
+                <Mail size={16} className="shrink-0 opacity-70" aria-hidden="true" />
                 <a href={`mailto:${contactEmail}`} className="link link-hover break-all">{contactEmail}</a>
               </li>
             )}
           </ul>
 
-          <form onSubmit={subscribe} className="mt-5">
-            <label className="label mb-1.5 text-xs font-semibold" htmlFor="newsletter-email">
+          {/* Under the contact lines when there are any; at the head of the
+              column, level with its neighbours, when there are none. */}
+          <form onSubmit={subscribe} className={hasContact ? "mt-5" : ""}>
+            <label
+              className={`mb-2 block ${hasContact ? "text-xs font-semibold" : "font-display font-semibold"}`}
+              htmlFor="newsletter-email"
+            >
               First peek at the weekend case
             </label>
             {done ? (
@@ -117,13 +131,15 @@ export default function Footer() {
                 You&rsquo;re on the list — WELCOME10 is yours
               </p>
             ) : (
-              <div className="join">
+              <div className="join w-full max-w-xs">
                 <input
                   id="newsletter-email"
                   type="email"
                   required
                   className="input input-bordered input-sm join-item w-full bg-base-100"
                   placeholder="you@example.com"
+                  autoComplete="email"
+                  enterKeyHint="send"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
@@ -133,11 +149,15 @@ export default function Footer() {
                   disabled={sending}
                   aria-label="Subscribe"
                 >
-                  {sending ? "…" : <Send size={15} />}
+                  {sending ? (
+                    <span className="loading loading-spinner loading-xs" aria-hidden="true" />
+                  ) : (
+                    <Send size={15} aria-hidden="true" />
+                  )}
                 </button>
               </div>
             )}
-            <p className="mt-1.5 text-xs opacity-55">
+            <p className="mt-1.5 text-xs opacity-65">
               One email a week, Friday mornings. No spam, ever —{" "}
               <Link to="/privacy" className="link">how we handle your address</Link>.
             </p>
@@ -145,23 +165,31 @@ export default function Footer() {
         </div>
       </div>
 
-      <div className="border-t border-base-300/60 py-4 text-center text-xs opacity-60">
-        © {new Date().getFullYear()} Djini&rsquo;s Bakehouse
-        <span className="mx-2" aria-hidden="true">·</span>
-        <Link to="/privacy" className="link link-hover">Privacy</Link>
-        <span className="mx-2" aria-hidden="true">·</span>
-        <Link to="/terms" className="link link-hover">Terms</Link>
-        <span className="mx-2" aria-hidden="true">·</span>
-        <Link to="/refunds" className="link link-hover">Refunds &amp; cancellations</Link>
+      {/* Each entry is one unbreakable phrase: on a narrow screen the row
+          wraps between entries, never through the middle of "Refunds &
+          cancellations". The row ends clear of a phone's home indicator, of
+          whatever a page has docked to the bottom edge (--dock) and of the
+          back-to-top button when it is out (--top-button) — so the last
+          links on the page can always be scrolled into view and tapped. */}
+      <ul
+        className="flex flex-wrap items-center justify-center gap-x-5 gap-y-1.5 border-t border-base-300/60 px-4 py-4 text-xs opacity-70"
+        style={{
+          paddingBottom:
+            "calc(1rem + env(safe-area-inset-bottom, 0px) + var(--dock, 0px) + var(--top-button, 0px))",
+        }}
+      >
+        <li className="whitespace-nowrap">© {new Date().getFullYear()} Djini&rsquo;s Bakehouse</li>
+        <li className="whitespace-nowrap"><Link to="/privacy" className="link link-hover">Privacy</Link></li>
+        <li className="whitespace-nowrap"><Link to="/terms" className="link link-hover">Terms</Link></li>
+        <li className="whitespace-nowrap">
+          <Link to="/refunds" className="link link-hover">Refunds &amp; cancellations</Link>
+        </li>
         {/* Only once the baker has published one — never a link to an
             empty legal page. */}
         {store?.legal_notice_published && (
-          <>
-            <span className="mx-2" aria-hidden="true">·</span>
-            <Link to="/imprint" className="link link-hover">Legal notice</Link>
-          </>
+          <li className="whitespace-nowrap"><Link to="/imprint" className="link link-hover">Legal notice</Link></li>
         )}
-      </div>
+      </ul>
     </footer>
   );
 }

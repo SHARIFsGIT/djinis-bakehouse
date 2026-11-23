@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
   Bike,
@@ -103,6 +103,47 @@ export default function OrderDetail() {
       .catch((e) => setError(apiError(e, "Order not found")));
     return () => clearTimeout(retryTimer);
   }, [id, params, checkPayment]);
+
+  // The page follows the order. While it is still on its way, a quiet look
+  // every so often — and whenever the tab comes back into view — keeps the
+  // timeline true without a reload: "confirmed" turns to "baking" in front
+  // of the customer watching for it. A plain read of the shop's own book;
+  // it never asks a payment provider anything.
+  const status = order?.status ?? null;
+  const onItsWay = status !== null && status !== "delivered" && status !== "cancelled";
+  const knownStatus = useRef(null);
+  useEffect(() => {
+    knownStatus.current = status;
+  }, [status]);
+  useEffect(() => {
+    if (!onItsWay) return undefined;
+    let stopped = false;
+    const look = () => {
+      if (document.visibilityState !== "visible") return;
+      client
+        .get(`/orders/${id}`)
+        .then(({ data }) => {
+          if (stopped) return;
+          if (knownStatus.current && data.status !== knownStatus.current) {
+            toast.info(
+              data.status === "cancelled"
+                ? "This order has been cancelled"
+                : `Your order moved on — ${statusLabel(data.status).toLowerCase()}`,
+            );
+          }
+          setOrder(data);
+        })
+        .catch(() => {}); // a missed look is not news — the next one comes
+    };
+    const timer = setInterval(look, 45_000);
+    document.addEventListener("visibilitychange", look);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", look);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, onItsWay]);
 
   if (error) {
     return (
@@ -305,7 +346,7 @@ export default function OrderDetail() {
             All orders
           </Link>
           <h2 className="font-display mt-2 text-3xl font-bold">{order.order_number}</h2>
-          <p className="text-sm opacity-60">Placed {formatDateTime(order.created_at)}</p>
+          <p className="text-sm opacity-70">Placed {formatDateTime(order.created_at)}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className={`badge badge-lg ${statusBadge(order.status)} border`}>
@@ -375,7 +416,7 @@ export default function OrderDetail() {
                     ) : (
                       <span className="font-semibold">{item.product_name}</span>
                     )}
-                    <p className="text-xs opacity-60">
+                    <p className="text-xs opacity-70">
                       {money(item.unit_price, order.currency)} × {item.quantity}
                     </p>
                   </div>
@@ -397,7 +438,7 @@ export default function OrderDetail() {
                       <Icon size={12} />
                     </span>
                     <p className="font-semibold">{statusLabel(event.status)}</p>
-                    <p className="text-xs opacity-60">
+                    <p className="text-xs opacity-70">
                       {formatDateTime(event.created_at)}
                       {event.comment && ` — ${event.comment}`}
                     </p>
@@ -434,7 +475,7 @@ export default function OrderDetail() {
                 <span>Total</span><span>{money(order.total, order.currency)}</span>
               </div>
               {order.cancel_fee > 0 && (
-                <div className="flex justify-between pt-1 text-warning">
+                <div className="flex justify-between pt-1 text-caution">
                   <span>Late-cancellation fee kept</span>
                   <span>{money(order.cancel_fee, order.currency)}</span>
                 </div>
@@ -448,7 +489,7 @@ export default function OrderDetail() {
             </div>
             {/* "Paid via" only once it is — an unpaid order names its method
                 without claiming the money arrived. */}
-            <p className="mt-3 text-xs opacity-60">
+            <p className="mt-3 text-xs opacity-70">
               {order.payment_status === "pending" ? "Payment by" : "Paid via"}{" "}
               {PAYMENT_METHODS[order.payment_method] ?? order.payment_method}
             </p>
@@ -548,7 +589,7 @@ export default function OrderDetail() {
               ) : (
                 <>
                   {order.cancellation_fee > 0 && (
-                    <p className="mb-2 text-xs font-semibold text-warning">
+                    <p className="mb-2 text-xs font-semibold text-caution">
                       Baking has started — cancelling now keeps a {money(order.cancellation_fee, order.currency)} fee with the shop.
                     </p>
                   )}

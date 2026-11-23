@@ -9,7 +9,7 @@ export default function PriceTag({ product, large = false }) {
       <span className={`font-bold text-secondary ${large ? "text-3xl" : ""}`}>
         {money(product.current_price)}
       </span>
-      <span className={`line-through opacity-50 ${large ? "text-lg" : "text-xs"}`}>
+      <span className={`line-through opacity-65 ${large ? "text-lg" : "text-xs"}`}>
         {money(product.price)}
       </span>
     </span>

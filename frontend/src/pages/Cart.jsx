@@ -1,7 +1,8 @@
-import { BadgePercent, Plus, Truck } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ArrowLeft, BadgePercent, Plus, Truck } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import client, { apiError, checkoutPaused } from "../api/client";
+import DockBar from "../components/DockBar";
 import EmptyState from "../components/EmptyState";
 import PhotoTile from "../components/PhotoTile";
 import PriceTag from "../components/PriceTag";
@@ -10,6 +11,7 @@ import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
 import { useToast } from "../context/ToastContext";
 import useBasketQuote from "../hooks/useBasketQuote";
+import useDock from "../hooks/useDock";
 import { getStoredCoupon, storeCoupon } from "../lib/coupon";
 import { MAX_LINE_QUANTITY, money, shopConfig, taxLabel } from "../lib/format";
 
@@ -97,6 +99,16 @@ export default function Cart() {
   // The server prices this basket — coupon included — exactly as checkout
   // will; the browser holds no money arithmetic of its own anymore.
   const quoteState = useBasketQuote(items, appliedCode);
+
+  // On a phone the tally sits under the lines, the add-ons and the vouchers.
+  // While its Checkout button is off screen, the total and the same button
+  // ride the bottom edge. Stood down while the basket is refused — then the
+  // tally's own message is the thing to read first.
+  const checkoutButton = useRef(null);
+  const docked = useDock(checkoutButton, {
+    key: items.length > 0,
+    enabled: quoteState.status !== "error",
+  });
 
   // A quote the server refuses while a voucher is aboard almost always means
   // the voucher itself (paused, already spent, or the basket no longer
@@ -242,7 +254,7 @@ export default function Cart() {
                 >
                   {item.name}
                 </Link>
-                <p className="text-sm opacity-60">
+                <p className="text-sm opacity-70">
                   {money(item.unit_price)} each
                 </p>
                 {refused?.product_id === item.product_id ? (
@@ -281,9 +293,10 @@ export default function Cart() {
 
           <Link
             to="/products"
-            className="link link-secondary text-sm font-semibold"
+            className="link link-secondary inline-flex items-center gap-1.5 text-sm font-semibold"
           >
-            ← Keep browsing
+            <ArrowLeft size={15} aria-hidden="true" />
+            Keep browsing
           </Link>
 
           {picks.length > 0 && (
@@ -341,7 +354,7 @@ export default function Cart() {
           <h2 className="font-display text-xl font-semibold">
             The tally
             {quoteState.status === "loading" && quote && (
-              <span className="loading loading-spinner loading-xs ml-2 align-middle opacity-50" aria-label="Refreshing the tally" />
+              <span className="loading loading-spinner loading-xs ml-2 align-middle opacity-65" aria-label="Refreshing the tally" />
             )}
           </h2>
 
@@ -490,17 +503,34 @@ export default function Cart() {
               page looks for it (it used to be a ?from= the page never read,
               and a guest who logged in to pay landed on the home page). */}
           <Link
+            ref={checkoutButton}
             to={user ? "/checkout" : "/login"}
             state={user ? undefined : { from: "/checkout" }}
             className="btn btn-primary btn-lg mt-6 w-full"
           >
             {user ? "Checkout" : "Log in to checkout"}
           </Link>
-          <p className="mt-3 text-center text-xs opacity-60">
+          <p className="mt-3 text-center text-xs opacity-70">
             Totals confirmed at checkout
           </p>
         </aside>
       </div>
+
+      {docked && (
+        <DockBar label="Checkout">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs opacity-70">{quote ? "Estimated total" : "Subtotal"}</p>
+            <p className="figures font-bold">{money(quote ? quote.total : subtotal)}</p>
+          </div>
+          <Link
+            to={user ? "/checkout" : "/login"}
+            state={user ? undefined : { from: "/checkout" }}
+            className="btn btn-primary whitespace-nowrap"
+          >
+            {user ? "Checkout" : "Log in to checkout"}
+          </Link>
+        </DockBar>
+      )}
     </div>
   );
 }

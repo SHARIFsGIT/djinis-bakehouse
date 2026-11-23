@@ -239,13 +239,15 @@ function ComingSoonManager() {
           <li
             key={item.id}
             className={`flex flex-wrap items-center gap-3 rounded-xl border p-3 ${
-              item.is_active ? "border-base-300 bg-base-200/40" : "border-dashed border-base-300 opacity-60"
+              item.is_active ? "border-base-300 bg-base-200/40" : "border-dashed border-base-300 opacity-70"
             }`}
           >
             <span className="h-10 w-16 shrink-0 overflow-hidden rounded-lg bg-base-300">
               {item.image_url && <img src={item.image_url} alt="" className="h-full w-full object-cover" />}
             </span>
-            <div className="min-w-0 flex-1">
+            {/* A floor under the words: on a phone the controls drop to a
+                row of their own rather than squeezing the title to nothing. */}
+            <div className="min-w-40 flex-1">
               <p className="truncate text-sm font-semibold">
                 {item.title}
                 {item.eta_label && (
@@ -253,7 +255,7 @@ function ComingSoonManager() {
                 )}
               </p>
               {item.description && (
-                <p className="truncate text-xs opacity-60">{item.description}</p>
+                <p className="truncate text-xs opacity-70">{item.description}</p>
               )}
             </div>
             <div className="flex items-center gap-1">
@@ -297,7 +299,7 @@ function ComingSoonManager() {
           </li>
         ))}
         {items.length === 0 && (
-          <li className="rounded-xl border border-dashed border-base-300 p-4 text-center text-sm opacity-60">
+          <li className="rounded-xl border border-dashed border-base-300 p-4 text-center text-sm opacity-70">
             Nothing on the horizon yet — add the first item.
           </li>
         )}
@@ -346,7 +348,7 @@ function StarPicker({ value = 0, onChange }) {
             />
           </button>
         ))}
-        <span className="ml-2 text-xs opacity-60">
+        <span className="ml-2 text-xs opacity-70">
           {value ? `${value} of 5` : "no stars"}
         </span>
       </div>
@@ -471,7 +473,7 @@ function TestimonialsManager() {
                 value={form.avatar_url}
                 onChange={(e) => setForm({ ...form, avatar_url: e.target.value })}
               />
-              <p className="mt-1 text-xs opacity-60">Empty shows the customer&rsquo;s initial instead.</p>
+              <p className="mt-1 text-xs opacity-70">Empty shows the customer&rsquo;s initial instead.</p>
             </div>
             <label className="label cursor-pointer justify-start gap-3 text-sm">
               <input
@@ -499,7 +501,7 @@ function TestimonialsManager() {
           <li
             key={item.id}
             className={`flex flex-wrap items-center gap-3 rounded-xl border p-3 ${
-              item.is_active ? "border-base-300 bg-base-200/40" : "border-dashed border-base-300 opacity-60"
+              item.is_active ? "border-base-300 bg-base-200/40" : "border-dashed border-base-300 opacity-70"
             }`}
           >
             {item.avatar_url ? (
@@ -509,12 +511,14 @@ function TestimonialsManager() {
                 {item.name.charAt(0).toUpperCase()}
               </span>
             )}
-            <div className="min-w-0 flex-1">
+            {/* Same floor as the list above — without it the name was set
+                one word to a line beside the five controls. */}
+            <div className="min-w-40 flex-1">
               <p className="text-sm font-semibold">
                 {item.name}
-                {item.role && <span className="ml-2 text-xs font-normal opacity-60">{item.role}</span>}
+                {item.role && <span className="ml-2 text-xs font-normal opacity-70">{item.role}</span>}
               </p>
-              <p className="truncate text-xs opacity-60">
+              <p className="truncate text-xs opacity-70">
                 {item.rating ? "★".repeat(item.rating) + " · " : ""}“{item.quote}”
               </p>
             </div>
@@ -559,7 +563,7 @@ function TestimonialsManager() {
           </li>
         ))}
         {items.length === 0 && (
-          <li className="rounded-xl border border-dashed border-base-300 p-4 text-center text-sm opacity-60">
+          <li className="rounded-xl border border-dashed border-base-300 p-4 text-center text-sm opacity-70">
             No words yet — add the first one.
           </li>
         )}
@@ -641,7 +645,7 @@ function BrandColorCard({ brand, savedBrand, dirty, saving, onPick, onSave }) {
         </label>
       </div>
 
-      <p className="mt-3 text-xs opacity-60">
+      <p className="mt-3 text-xs opacity-70">
         Now wearing: <span className="font-semibold">{brand ?? "the original burgundy"}</span>
         {dirty && " · previewing, not saved yet"}
       </p>
@@ -902,7 +906,7 @@ export default function Settings() {
             >
               Use the original photo
             </button>
-            <p className="text-xs opacity-60">
+            <p className="text-xs opacity-70">
               JPEG, PNG or WebP — “the original” restores the shipped photo.
             </p>
           </div>
@@ -971,7 +975,7 @@ export default function Settings() {
               value={form.marquee}
               onChange={(e) => setForm({ ...form, marquee: e.target.value })}
             />
-            <p className="mt-1.5 text-xs opacity-60">
+            <p className="mt-1.5 text-xs opacity-70">
               Empty lines are skipped; clear the box to hide the strip.
             </p>
           </div>
@@ -987,7 +991,7 @@ export default function Settings() {
             {saving === "copy" ? "Saving…" : "Save copy"}
           </button>
           {copyDirty && (
-            <span className="text-xs opacity-60">Unsaved change</span>
+            <span className="text-xs opacity-70">Unsaved change</span>
           )}
         </div>
       </section>
@@ -1034,7 +1038,7 @@ export default function Settings() {
             {saving === "fee" ? "Saving…" : "Save policy"}
           </button>
           {feeDirty && (
-            <span className="pb-2 text-xs opacity-60">Unsaved change</span>
+            <span className="pb-2 text-xs opacity-70">Unsaved change</span>
           )}
         </div>
       </section>
@@ -1096,7 +1100,7 @@ export default function Settings() {
               value={form.hours}
               onChange={(e) => setForm({ ...form, hours: e.target.value })}
             />
-            <p className="mt-1.5 text-xs opacity-60">
+            <p className="mt-1.5 text-xs opacity-70">
               Each line shows in the footer — clear the box to hide the column.
             </p>
           </div>
@@ -1111,7 +1115,7 @@ export default function Settings() {
           >
             {saving === "contact" ? "Saving…" : "Save contact"}
           </button>
-          {contactDirty && <span className="text-xs opacity-60">Unsaved change</span>}
+          {contactDirty && <span className="text-xs opacity-70">Unsaved change</span>}
         </div>
       </section>
 
@@ -1135,7 +1139,7 @@ export default function Settings() {
             value={form.delivery_area}
             onChange={(e) => setForm({ ...form, delivery_area: e.target.value })}
           />
-          <p className="mt-1.5 text-xs opacity-60">
+          <p className="mt-1.5 text-xs opacity-70">
             Separate codes with commas or new lines. A star covers a whole area —{" "}
             <span className="font-mono">101*</span> is every code starting with 101. Leave the
             box empty to deliver anywhere: checkout then makes no postal-code check.
@@ -1151,7 +1155,7 @@ export default function Settings() {
           >
             {saving === "area" ? "Saving…" : "Save delivery area"}
           </button>
-          <span className="text-xs opacity-60">
+          <span className="text-xs opacity-70">
             {areaDirty
               ? "Unsaved change"
               : areaEntries > 0
@@ -1183,7 +1187,7 @@ export default function Settings() {
             value={form.legal_notice}
             onChange={(e) => setForm({ ...form, legal_notice: e.target.value })}
           />
-          <p className="mt-1.5 text-xs opacity-60">
+          <p className="mt-1.5 text-xs opacity-70">
             Shown exactly as written, line breaks kept. A shop selling online in Germany or
             the EU is expected to name its operator — usually the business name and legal form,
             a postal address, a phone number or email that reaches you quickly, and the VAT ID
@@ -1201,7 +1205,7 @@ export default function Settings() {
           >
             {saving === "legal" ? "Saving…" : "Save legal notice"}
           </button>
-          {legalDirty && <span className="text-xs opacity-60">Unsaved change</span>}
+          {legalDirty && <span className="text-xs opacity-70">Unsaved change</span>}
           {saved.legal_notice && (
             <a href="/imprint" target="_blank" rel="noopener" className="link text-xs">
               View the published page

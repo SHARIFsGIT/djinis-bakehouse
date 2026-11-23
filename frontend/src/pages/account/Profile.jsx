@@ -106,7 +106,7 @@ export default function Profile() {
       {/* Left column: who you are */}
       <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
         <h2 className="font-display text-2xl font-semibold">Your profile</h2>
-        <p className="mt-1 text-sm opacity-60">
+        <p className="mt-1 text-sm opacity-70">
           Member since {formatDate(user.created_at)} · {user.role === "admin" ? "Head baker" : "Regular"}
         </p>
 
@@ -170,7 +170,7 @@ export default function Profile() {
           </div>
           <div>
             <label className="label text-xs" htmlFor="p-email">Email (login)</label>
-            <input id="p-email" className="input input-bordered w-full opacity-60" value={user.email} disabled />
+            <input id="p-email" className="input input-bordered w-full opacity-70" value={user.email} disabled />
           </div>
           <div>
             <label className="label text-xs" htmlFor="p-phone">Phone</label>
@@ -181,7 +181,7 @@ export default function Profile() {
               value={form.phone}
               onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
             />
-            <p className="mt-1 text-xs opacity-60">
+            <p className="mt-1 text-xs opacity-70">
               Saves with the country code — “+49 176 …” — so it works for phone sign-in.
             </p>
           </div>
@@ -223,12 +223,12 @@ export default function Profile() {
       {/* Your account — close it, on your own say-so */}
       <section className="h-fit rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
         <h2 className="font-display text-2xl font-semibold">Close your account</h2>
-        <p className="mt-1 text-sm opacity-60">
+        <p className="mt-1 text-sm opacity-70">
           Closing the account erases your personal details — only anonymized
           invoices remain, as the law requires. Your password confirms it&rsquo;s
           really you.
         </p>
-        <p className="mt-2 text-xs opacity-60">
+        <p className="mt-2 text-xs opacity-70">
           Signed up with Facebook and never set a password? Use{" "}
           <Link to="/forgot-password" className="link link-secondary">forgot password</Link>{" "}
           to choose one first.

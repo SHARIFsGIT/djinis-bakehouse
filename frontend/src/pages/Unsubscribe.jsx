@@ -46,7 +46,7 @@ export default function Unsubscribe() {
       </h1>
       <p className="mt-3 text-sm opacity-75">{state.message || "Processing your unsubscribe…"}</p>
       {state.status !== "working" && (
-        <p className="mt-2 text-xs opacity-60">
+        <p className="mt-2 text-xs opacity-70">
           Receipts and updates about orders you've placed still arrive — they're not marketing.
         </p>
       )}

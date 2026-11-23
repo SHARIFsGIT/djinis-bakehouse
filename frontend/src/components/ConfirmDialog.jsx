@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef } from "react";
+import { createPortal } from "react-dom";
 
 /** The house "are you sure?" — one box, so every destructive action in the
  *  back of house keeps the same shape, sizing and escape hatches (backdrop
@@ -6,7 +7,13 @@ import { useEffect, useId, useRef } from "react";
  *
  *  It is a real dialog to a keyboard and a screen reader too: focus moves to
  *  the safe button when it opens (so Enter never confirms by reflex), comes
- *  back to whatever opened it when it closes, and the title is announced. */
+ *  back to whatever opened it when it closes, and the title is announced.
+ *
+ *  It is drawn at the end of <body>, not where it is written. A frosted
+ *  card (backdrop-filter) or a drawer that slid in (transform) becomes the
+ *  box that anything "fixed" inside it is laid out in — so the dialog used
+ *  to open inside whichever card held the button, its scrim dimming that
+ *  card alone, and half off the screen when the card was. */
 export default function ConfirmDialog({
   title,
   children = null,
@@ -40,7 +47,7 @@ export default function ConfirmDialog({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [busy, onCancel]);
 
-  return (
+  return createPortal(
     <div className="modal modal-open" role="alertdialog" aria-modal="true" aria-labelledby={titleId}>
       <div className="modal-box max-w-sm">
         <h3 id={titleId} className="font-display text-lg font-bold">{title}</h3>
@@ -66,6 +73,7 @@ export default function ConfirmDialog({
         </div>
       </div>
       <div className="modal-backdrop" onClick={() => !busy && onCancel()} aria-hidden="true" />
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -35,7 +35,7 @@ const CAMPAIGN_STATUS = {
 function StatChip({ label, value, tone = "" }) {
   return (
     <div className="glass flex min-h-17 items-center justify-between gap-3 rounded-box px-4 py-3 ring-1 ring-base-300/60">
-      <span className="text-xs font-bold tracking-widest uppercase opacity-55">{label}</span>
+      <span className="text-xs font-bold tracking-widest uppercase opacity-65">{label}</span>
       <span className={`font-display text-2xl font-bold ${tone}`}>{value}</span>
     </div>
   );
@@ -96,11 +96,11 @@ function CustomerPicker({ picked, onPick, idPrefix }) {
             {picked.marketing_consent_at ? (
               <MailCheck size={14} className="shrink-0 text-success" aria-label="Has marketing consent" />
             ) : (
-              <MailX size={14} className="shrink-0 opacity-40" aria-label="No marketing consent" />
+              <MailX size={14} className="shrink-0 opacity-65" aria-label="No marketing consent" />
             )}
             <span className="truncate">
               {picked.first_name} {picked.last_name}
-              <span className="ml-1 font-normal opacity-60">{picked.email}</span>
+              <span className="ml-1 font-normal opacity-70">{picked.email}</span>
             </span>
           </span>
           <button
@@ -126,7 +126,7 @@ function CustomerPicker({ picked, onPick, idPrefix }) {
               autoComplete="off"
             />
             {searching && (
-              <span className="loading loading-spinner loading-xs absolute top-1/2 right-3 -translate-y-1/2 opacity-50" />
+              <span className="loading loading-spinner loading-xs absolute top-1/2 right-3 -translate-y-1/2 opacity-65" />
             )}
           </div>
           {open && results.length > 0 && (
@@ -145,11 +145,11 @@ function CustomerPicker({ picked, onPick, idPrefix }) {
                     {u.marketing_consent_at ? (
                       <MailCheck size={13} className="shrink-0 text-success" aria-label="Has marketing consent" />
                     ) : (
-                      <MailX size={13} className="shrink-0 opacity-40" aria-label="No marketing consent" />
+                      <MailX size={13} className="shrink-0 opacity-65" aria-label="No marketing consent" />
                     )}
                     <span className="min-w-0 truncate">
                       <span className="font-semibold">{u.first_name} {u.last_name}</span>
-                      <span className="ml-1 opacity-60">{u.email}</span>
+                      <span className="ml-1 opacity-70">{u.email}</span>
                     </span>
                   </button>
                 </li>
@@ -157,7 +157,7 @@ function CustomerPicker({ picked, onPick, idPrefix }) {
             </ul>
           )}
           {open && results.length === 0 && !searching && (
-            <p className="absolute z-30 mt-1 w-full rounded-box border border-base-300 bg-base-100 px-3 py-2 text-xs opacity-60 shadow-lg">
+            <p className="absolute z-30 mt-1 w-full rounded-box border border-base-300 bg-base-100 px-3 py-2 text-xs opacity-70 shadow-lg">
               Nobody matches “{term.trim()}”.
             </p>
           )}
@@ -171,7 +171,7 @@ function CustomerPicker({ picked, onPick, idPrefix }) {
 function ChipRow({ title, options, values, onToggle }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="mr-1 text-xs font-semibold uppercase tracking-widest opacity-50">{title}</span>
+      <span className="mr-1 text-xs font-semibold uppercase tracking-widest opacity-65">{title}</span>
       {options.map((opt) => {
         const on = values.includes(opt);
         return (
@@ -295,19 +295,19 @@ function CampaignDrawer({ campaignId, onClose, onSent }) {
             )}
 
             <section>
-              <h3 className="font-display text-sm font-bold uppercase tracking-widest opacity-55">The email</h3>
+              <h3 className="font-display text-sm font-bold uppercase tracking-widest opacity-65">The email</h3>
               <pre className="mt-2 rounded-box border border-base-300/70 bg-base-200/40 p-3 font-sans text-xs whitespace-pre-wrap">
                 {detail.body}
               </pre>
-              <p className="mt-1 text-[11px] opacity-50">
+              <p className="mt-1 text-[11px] opacity-65">
                 Every copy carries the shop's footer with a working unsubscribe link.
               </p>
             </section>
 
             <section>
-              <h3 className="font-display text-sm font-bold uppercase tracking-widest opacity-55">Delivery</h3>
+              <h3 className="font-display text-sm font-bold uppercase tracking-widest opacity-65">Delivery</h3>
               {detail.deliveries.length === 0 ? (
-                <p className="mt-2 text-xs opacity-60">No delivery rows — this one hasn't been sent.</p>
+                <p className="mt-2 text-xs opacity-70">No delivery rows — this one hasn't been sent.</p>
               ) : (
                 <div className="mt-2 space-y-3">
                   {[
@@ -320,13 +320,13 @@ function CampaignDrawer({ campaignId, onClose, onSent }) {
                     .map(([key, title, rows]) => (
                       <div key={key}>
                         <p className="text-xs font-semibold">
-                          {title} <span className="opacity-50">({rows.length})</span>
+                          {title} <span className="opacity-65">({rows.length})</span>
                         </p>
                         <ul className="mt-1 space-y-1">
                           {rows.map((d) => (
                             <li key={d.id} className="rounded border border-base-300/60 bg-base-200/30 px-2 py-1 text-xs">
                               <span className="font-semibold">{d.customer_name ?? d.email}</span>
-                              {d.reason && <span className="opacity-60"> — {d.reason}</span>}
+                              {d.reason && <span className="opacity-70"> — {d.reason}</span>}
                             </li>
                           ))}
                         </ul>
@@ -412,7 +412,7 @@ function NewsletterList({ total, onChanged }) {
     <section className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-display text-2xl font-semibold">
-          Newsletter sign-ups <span className="text-base font-normal opacity-50">· {total}</span>
+          Newsletter sign-ups <span className="text-base font-normal opacity-65">· {total}</span>
         </h2>
         <button
           type="button"
@@ -424,7 +424,7 @@ function NewsletterList({ total, onChanged }) {
           {exporting ? "Preparing…" : "Export CSV"}
         </button>
       </div>
-      <p className="text-xs opacity-55">
+      <p className="text-xs opacity-65">
         Addresses typed into the footer&rsquo;s sign-up box. This is a separate list from campaign
         consent — the campaigns above never mail it. The export is for your newsletter tool.
       </p>
@@ -437,7 +437,7 @@ function NewsletterList({ total, onChanged }) {
         <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
           <table className="table table-sm">
             <thead>
-              <tr className="text-xs uppercase opacity-50">
+              <tr className="text-xs uppercase opacity-65">
                 <th>Email</th>
                 <th className="hidden sm:table-cell">Signed up</th>
                 <th className="hidden sm:table-cell">From</th>
@@ -453,7 +453,7 @@ function NewsletterList({ total, onChanged }) {
                   <td className="hidden text-xs whitespace-nowrap opacity-70 sm:table-cell">
                     {formatDateTime(s.created_at)}
                   </td>
-                  <td className="hidden text-xs opacity-60 sm:table-cell">{s.source ?? "—"}</td>
+                  <td className="hidden text-xs opacity-70 sm:table-cell">{s.source ?? "—"}</td>
                   <td>
                     <div className="flex justify-end">
                       <button
@@ -471,7 +471,7 @@ function NewsletterList({ total, onChanged }) {
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="py-10 text-center text-sm opacity-60">
+                  <td colSpan={4} className="py-10 text-center text-sm opacity-70">
                     Nobody has signed up yet — the box lives in the footer of every page.
                   </td>
                 </tr>
@@ -491,7 +491,7 @@ function NewsletterList({ total, onChanged }) {
           >
             Newer
           </button>
-          <span className="opacity-60">
+          <span className="opacity-70">
             Page {page} of {pages}
           </span>
           <button
@@ -739,9 +739,9 @@ export default function Marketing() {
 
       {/* ------------------------------------------------- CAMPAIGNS ---- */}
       <section className="space-y-4">
-        <div className="flex items-baseline justify-between gap-2">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
           <h2 className="font-display text-2xl font-semibold">Campaigns</h2>
-          <p className="text-xs opacity-55">
+          <p className="text-xs opacity-70 sm:max-w-md sm:text-right">
             Only consenting customers are ever mailed — every send leaves its delivery record.
           </p>
         </div>
@@ -780,7 +780,7 @@ export default function Marketing() {
                 values={tiers}
                 onToggle={toggleTier}
               />
-              <p className="text-[11px] opacity-50">
+              <p className="text-[11px] opacity-65">
                 Both rows narrow together; leave both empty to address every consenting customer.
               </p>
             </div>
@@ -822,7 +822,7 @@ export default function Marketing() {
               value={form.body}
               onChange={(e) => setForm((f) => ({ ...f, body: e.target.value }))}
             />
-            <p className="mt-1 text-[11px] opacity-50">
+            <p className="mt-1 text-[11px] opacity-65">
               <code>{"{{first_name}}"}</code> becomes each customer's own name — nobody sees anyone else's.
             </p>
           </div>
@@ -830,7 +830,7 @@ export default function Marketing() {
           {preview && (
             <div className="rounded-box border border-base-300 bg-base-200/50 p-3 text-sm">
               <p className="font-semibold">
-                <Megaphone size={14} className="mr-1 inline opacity-60" aria-hidden="true" />
+                <Megaphone size={14} className="mr-1 inline opacity-70" aria-hidden="true" />
                 Would reach {preview.recipients}{" "}
                 {preview.recipients === 1 ? "customer" : "customers"}
                 {preview.held.length > 0 && ` · ${preview.held.length} held back`}
@@ -864,7 +864,7 @@ export default function Marketing() {
         <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
           <table className="table table-sm">
             <thead>
-              <tr className="text-xs uppercase opacity-50">
+              <tr className="text-xs uppercase opacity-65">
                 <th>Campaign</th>
                 <th className="hidden sm:table-cell">Audience</th>
                 <th>Status</th>
@@ -878,7 +878,7 @@ export default function Marketing() {
                 <tr key={c.id} className="hover:bg-base-200/50">
                   <td>
                     <p className="font-semibold">{c.name}</p>
-                    <p className="text-xs opacity-60">{c.subject}</p>
+                    <p className="text-xs opacity-70">{c.subject}</p>
                   </td>
                   <td className="hidden text-xs sm:table-cell">{audienceLabel(c)}</td>
                   <td>
@@ -907,7 +907,7 @@ export default function Marketing() {
               ))}
               {campaigns.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-10 text-center text-sm opacity-60">
+                  <td colSpan={6} className="py-10 text-center text-sm opacity-70">
                     No campaigns yet — write the first one above.
                   </td>
                 </tr>
@@ -919,9 +919,9 @@ export default function Marketing() {
 
       {/* -------------------------------------------------- VOUCHERS ---- */}
       <section className="space-y-4">
-        <div className="flex items-baseline justify-between gap-2">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
           <h2 className="font-display text-2xl font-semibold">Personal vouchers</h2>
-          <p className="text-xs opacity-55">
+          <p className="text-xs opacity-70 sm:max-w-md sm:text-right">
             {overview.voucher_percent_cap != null ? (
               <>
                 The 40% margin floor caps any voucher at {overview.voucher_percent_cap}% or{" "}
@@ -975,7 +975,7 @@ export default function Marketing() {
                   onChange={(e) => setVoucher((v) => ({ ...v, percent: e.target.value }))}
                 />
                 {overview.voucher_percent_cap != null && (
-                  <p className="mt-1 text-[11px] opacity-50">up to {overview.voucher_percent_cap}%</p>
+                  <p className="mt-1 text-[11px] opacity-65">up to {overview.voucher_percent_cap}%</p>
                 )}
               </div>
             ) : (
@@ -992,7 +992,7 @@ export default function Marketing() {
                   onChange={(e) => setVoucher((v) => ({ ...v, amount: e.target.value }))}
                 />
                 {overview.voucher_fixed_cap != null && (
-                  <p className="mt-1 text-[11px] opacity-50">up to {money(overview.voucher_fixed_cap)}</p>
+                  <p className="mt-1 text-[11px] opacity-65">up to {money(overview.voucher_fixed_cap)}</p>
                 )}
               </div>
             )}
@@ -1030,7 +1030,7 @@ export default function Marketing() {
               onChange={(e) => setVoucher((v) => ({ ...v, note: e.target.value }))}
             />
           </div>
-          <p className="text-[11px] opacity-50">
+          <p className="text-[11px] opacity-65">
             Every voucher is one-per-customer and locked to its account — only its owner can ever
             redeem it, and nobody else can even see it on the board.
           </p>
@@ -1047,7 +1047,7 @@ export default function Marketing() {
         <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
           <table className="table table-sm">
             <thead>
-              <tr className="text-xs uppercase opacity-50">
+              <tr className="text-xs uppercase opacity-65">
                 <th>Code</th>
                 <th>For</th>
                 <th>Worth</th>
@@ -1073,7 +1073,7 @@ export default function Marketing() {
                   </td>
                   <td className="text-right text-sm">
                     {v.redemptions}
-                    {v.max_redemptions != null && <span className="opacity-50"> / {v.max_redemptions}</span>}
+                    {v.max_redemptions != null && <span className="opacity-65"> / {v.max_redemptions}</span>}
                   </td>
                   <td>
                     <div className="flex items-center justify-end gap-1">
@@ -1102,7 +1102,7 @@ export default function Marketing() {
               ))}
               {vouchers.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-10 text-center text-sm opacity-60">
+                  <td colSpan={6} className="py-10 text-center text-sm opacity-70">
                     No personal vouchers yet — mint one above.
                   </td>
                 </tr>
@@ -1114,9 +1114,9 @@ export default function Marketing() {
 
       {/* ---------------------------------------------- SUPPRESSION ---- */}
       <section className="space-y-4">
-        <div className="flex items-baseline justify-between gap-2">
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
           <h2 className="font-display text-2xl font-semibold">Suppression list</h2>
-          <p className="text-xs opacity-55">
+          <p className="text-xs opacity-70 sm:max-w-md sm:text-right">
             Nothing marketing is ever mailed to these addresses. Rows leave one way only: a freshly
             recorded consent.
           </p>
@@ -1124,7 +1124,7 @@ export default function Marketing() {
         <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
           <table className="table table-sm">
             <thead>
-              <tr className="text-xs uppercase opacity-50">
+              <tr className="text-xs uppercase opacity-65">
                 <th>Email</th>
                 <th>Reason</th>
                 <th>Note</th>
@@ -1139,13 +1139,13 @@ export default function Marketing() {
                     {s.email}
                   </td>
                   <td><span className="badge badge-sm badge-ghost">{s.reason}</span></td>
-                  <td className="text-xs opacity-60">{s.note ?? "—"}</td>
+                  <td className="text-xs opacity-70">{s.note ?? "—"}</td>
                   <td className="hidden text-xs whitespace-nowrap opacity-70 sm:table-cell">{formatDateTime(s.created_at)}</td>
                 </tr>
               ))}
               {suppression.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="py-10 text-center text-sm opacity-60">
+                  <td colSpan={4} className="py-10 text-center text-sm opacity-70">
                     Empty — nobody has asked the shop to stop.
                   </td>
                 </tr>

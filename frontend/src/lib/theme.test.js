@@ -74,9 +74,18 @@ test("brandCss re-seats both themes and caps chroma at the shipped seats", () =>
   assert.ok(css.includes(":root{"), "light block");
   assert.ok(css.includes('[data-theme="midnight"]{'), "midnight block");
   assert.ok(css.includes("@media (prefers-color-scheme: dark)"), "dark fallback");
-  // Every seat keeps its lightness scaffold — the contrast contract.
+  // Every seat keeps its lightness scaffold — the contrast contract. By day
+  // one wine does both jobs; at night the wine read as text and the wine
+  // under cream text are two seats (index.css says why).
   assert.ok(css.includes("--color-primary:oklch(45% "), "primary lightness");
-  assert.ok(css.match(/--color-secondary:oklch\((54|60)% /), "secondary lightness");
+  assert.match(css, /^:root\{[^}]*--color-secondary:oklch\(54% /, "day wine");
+  assert.ok(!/^:root\{[^}]*--brand-wine/.test(css), "by day the fill follows the wine");
+  const night = [...css.matchAll(/(?:\[data-theme="midnight"\]|:root:not\(\[data-theme\]\))\{([^}]*)\}/g)].map((m) => m[1]);
+  assert.equal(night.length, 2, "both night blocks");
+  for (const block of night) {
+    assert.match(block, /--color-secondary:oklch\(66% /, "night wine as text");
+    assert.match(block, /--brand-wine:oklch\(56% /, "night wine under cream text");
+  }
 
   // A neon pick (blue's chroma ≈ 0.31) is tamed to the seats' own ceilings.
   const neon = brandCss("#0000ff");

@@ -11,6 +11,7 @@ import {
 import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import { LoadError, Loading } from "../../components/Loading";
+import Modal from "../../components/Modal";
 
 /* The Phase 2 costing desk — the UI over the /api/admin/costing surface.
    Five tabs, the way the work actually runs: what needs review, the
@@ -164,7 +165,7 @@ export default function Costing() {
       {/* Page head — every desk page names itself the same way */}
       <div>
         <h1 className="font-display text-2xl font-semibold">Costing</h1>
-        <p className="mt-0.5 text-sm opacity-60">
+        <p className="mt-0.5 text-sm opacity-70">
           What each bake truly costs — ingredients, hands-on time and overhead, kept honest by review.
         </p>
       </div>
@@ -249,7 +250,7 @@ function ReviewTab({ onOpenRecipe }) {
       >
         <div className="min-w-0 flex-1">
           <p className="font-semibold">{entry.product_name}</p>
-          <p className="text-xs opacity-60">
+          <p className="text-xs opacity-70">
             {REVIEW_REASONS[entry.reason] ?? entry.reason}
             {entry.next_reviewed && ` · review due ${formatDate(entry.next_reviewed)}`}
           </p>
@@ -258,7 +259,7 @@ function ReviewTab({ onOpenRecipe }) {
         {cost?.total_cost != null && (
           <span className="text-sm font-bold">
             {money(cost.total_cost, cost.currency)}
-            <span className="ml-1 text-xs font-normal opacity-60">per unit</span>
+            <span className="ml-1 text-xs font-normal opacity-70">per unit</span>
           </span>
         )}
         <button
@@ -288,12 +289,12 @@ function ReviewTab({ onOpenRecipe }) {
         </Card>
       )}
 
-      <div className={refreshing ? "space-y-6 opacity-60 transition-opacity" : "space-y-6 transition-opacity"}>
+      <div className={refreshing ? "space-y-6 opacity-70 transition-opacity" : "space-y-6 transition-opacity"}>
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-display text-lg font-semibold">
             Overdue ({overdue.length})
-            {refreshing && <span className="loading loading-spinner loading-xs ml-2 align-middle opacity-60" />}
+            {refreshing && <span className="loading loading-spinner loading-xs ml-2 align-middle opacity-70" />}
           </h3>
           <label className="flex items-center gap-2 text-xs opacity-70">
             Upcoming window
@@ -311,7 +312,7 @@ function ReviewTab({ onOpenRecipe }) {
           </label>
         </div>
         {overdue.length === 0 ? (
-          <p className="mt-3 text-sm opacity-60">Nothing overdue — the book is current.</p>
+          <p className="mt-3 text-sm opacity-70">Nothing overdue — the book is current.</p>
         ) : (
           <div className="mt-3 space-y-2">{overdue.map(entryRow)}</div>
         )}
@@ -320,7 +321,7 @@ function ReviewTab({ onOpenRecipe }) {
       <Card>
         <h3 className="font-display text-lg font-semibold">Upcoming ({upcoming.length})</h3>
         {upcoming.length === 0 ? (
-          <p className="mt-3 text-sm opacity-60">No reviews fall due in the next {windowDays} days.</p>
+          <p className="mt-3 text-sm opacity-70">No reviews fall due in the next {windowDays} days.</p>
         ) : (
           <div className="mt-3 space-y-2">{upcoming.map(entryRow)}</div>
         )}
@@ -675,7 +676,7 @@ function IngredientsTab() {
         <Card>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="font-display text-base font-semibold">Ingredient categories</h3>
-            <p className="text-xs opacity-50">
+            <p className="text-xs opacity-65">
               A category sets the default review cadence its members inherit.
             </p>
           </div>
@@ -713,7 +714,7 @@ function IngredientsTab() {
             <div className="mt-3 overflow-x-auto">
               <table className="table table-sm">
                 <thead>
-                  <tr className="text-xs uppercase opacity-50">
+                  <tr className="text-xs uppercase opacity-65">
                     <th>Category</th>
                     <th className="text-right">Review interval</th>
                     <th className="text-right">Ingredients</th>
@@ -744,7 +745,7 @@ function IngredientsTab() {
                             }
                           />
                         </td>
-                        <td className="text-right text-sm opacity-60">{cat.ingredient_count}</td>
+                        <td className="text-right text-sm opacity-70">{cat.ingredient_count}</td>
                         <td className="text-right whitespace-nowrap">
                           <button
                             type="button"
@@ -854,14 +855,14 @@ function IngredientsTab() {
       {data === null ? (
         <TabLoad failed={failed} label="Weighing the ingredients…" onRetry={fetchList} />
       ) : ingredients.length === 0 ? (
-        <p className="rounded-box glass p-8 text-center text-sm opacity-60 ring-1 ring-base-300/60">
+        <p className="rounded-box glass p-8 text-center text-sm opacity-70 ring-1 ring-base-300/60">
           No ingredients match — add the first one above.
         </p>
       ) : (
         <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
           <table className="table table-sm">
             <thead>
-              <tr className="text-xs uppercase opacity-50">
+              <tr className="text-xs uppercase opacity-65">
                 <th>Ingredient</th>
                 <th>Purchase</th>
                 <th className="text-right">Per unit</th>
@@ -969,7 +970,7 @@ function IngredientRow({
             <EstBadge isEstimate={ing.is_estimate} />
           </span>
           {ing.category_name && (
-            <span className="block text-xs opacity-50">{ing.category_name}</span>
+            <span className="block text-xs opacity-65">{ing.category_name}</span>
           )}
         </td>
         <td className="whitespace-nowrap text-sm">
@@ -982,12 +983,12 @@ function IngredientRow({
         </td>
         <td className="whitespace-nowrap text-xs">
           {ing.next_reviewed ? (
-            <span className={ing.overdue ? "text-error font-semibold" : "opacity-60"}>
+            <span className={ing.overdue ? "text-error font-semibold" : "opacity-70"}>
               {ing.overdue ? "overdue " : "due "}
               {formatDate(ing.next_reviewed)}
             </span>
           ) : (
-            <span className="opacity-50">never reviewed</span>
+            <span className="opacity-65">never reviewed</span>
           )}
         </td>
         <td className="text-right whitespace-nowrap">
@@ -1102,14 +1103,14 @@ function IngredientRow({
         <tr className="bg-base-200/40">
           <td colSpan={5}>
             {history === null ? (
-              <p className="p-2 text-xs opacity-60">Loading price history…</p>
+              <p className="p-2 text-xs opacity-70">Loading price history…</p>
             ) : history.length === 0 ? (
-              <p className="p-2 text-xs opacity-60">No price changes recorded yet.</p>
+              <p className="p-2 text-xs opacity-70">No price changes recorded yet.</p>
             ) : (
               <div className="overflow-x-auto p-2">
                 <table className="table table-xs">
                   <thead>
-                    <tr className="uppercase opacity-50">
+                    <tr className="uppercase opacity-65">
                       <th>From</th>
                       <th>By</th>
                       <th>Qty</th>
@@ -1350,7 +1351,7 @@ function RecipesTab({ products, productsFailed, onReloadProducts, selectedId, on
               <div className="skeleton h-8 w-1/2" />
             </div>
           ) : (
-            <p className="pb-2 text-sm opacity-60">
+            <p className="pb-2 text-sm opacity-70">
               Pick a product to see or record its recipe.
             </p>
           )}
@@ -1418,7 +1419,7 @@ function RecipesTab({ products, productsFailed, onReloadProducts, selectedId, on
             <div className="mt-4 overflow-x-auto">
               <table className="table table-sm">
                 <thead>
-                  <tr className="text-xs uppercase opacity-50">
+                  <tr className="text-xs uppercase opacity-65">
                     <th>Ingredient</th>
                     <th>Usable qty</th>
                     <th>Unit</th>
@@ -1430,7 +1431,7 @@ function RecipesTab({ products, productsFailed, onReloadProducts, selectedId, on
                 <tbody>
                   {recipe.items.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="text-center text-sm opacity-50">
+                      <td colSpan={6} className="text-center text-sm opacity-65">
                         No lines yet — a recipe without lines records as incomplete.
                       </td>
                     </tr>
@@ -1533,7 +1534,7 @@ function RecipesTab({ products, productsFailed, onReloadProducts, selectedId, on
               <StatusBadge status={costStatus} />
             </div>
             {!cost || cost.total_cost == null ? (
-              <p className="mt-2 text-sm opacity-60">
+              <p className="mt-2 text-sm opacity-70">
                 {cost && cost.missing?.length
                   ? `Missing: ${cost.missing.map(missingLabel).join(", ")}`
                   : "No complete cost yet — record the recipe, prices, overhead month and labour rate."}
@@ -1542,9 +1543,9 @@ function RecipesTab({ products, productsFailed, onReloadProducts, selectedId, on
               <div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-1">
                 <span className="font-display text-2xl font-bold">
                   {money(cost.total_cost, cost.currency)}
-                  <span className="ml-1 text-sm font-normal opacity-60">per unit</span>
+                  <span className="ml-1 text-sm font-normal opacity-70">per unit</span>
                 </span>
-                <span className="text-xs opacity-60">computed {formatDate(cost.computed_at)}</span>
+                <span className="text-xs opacity-70">computed {formatDate(cost.computed_at)}</span>
                 {["regular", "sale"].map((kind) => {
                   const m = margins[kind];
                   if (!m || m.status === "not_set") return null;
@@ -1567,7 +1568,7 @@ function RecipesTab({ products, productsFailed, onReloadProducts, selectedId, on
                   );
                 })}
                 {cost.missing?.length > 0 && (
-                  <span className="text-xs opacity-60">
+                  <span className="text-xs opacity-70">
                     still missing: {cost.missing.map(missingLabel).join(", ")}
                   </span>
                 )}
@@ -1759,16 +1760,16 @@ function BatchesTab({ products }) {
       {batches === null ? (
         <TabLoad failed={failed} label="Counting the ovens…" onRetry={fetchList} />
       ) : (
-        <div className={refreshing ? "opacity-60 transition-opacity" : "transition-opacity"}>
+        <div className={refreshing ? "opacity-70 transition-opacity" : "transition-opacity"}>
           {batches.length === 0 ? (
-            <p className="rounded-box glass p-8 text-center text-sm opacity-60 ring-1 ring-base-300/60">
+            <p className="rounded-box glass p-8 text-center text-sm opacity-70 ring-1 ring-base-300/60">
               No batches yet — open one when production starts.
             </p>
           ) : (
             <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
           <table className="table table-sm">
             <thead>
-              <tr className="text-xs uppercase opacity-50">
+              <tr className="text-xs uppercase opacity-65">
                 <th>Product</th>
                 <th>Produced</th>
                 <th className="text-right">Yield exp → act</th>
@@ -1814,7 +1815,7 @@ function BatchesTab({ products }) {
                         Close batch
                       </button>
                     ) : (
-                      <span className="text-xs opacity-50">
+                      <span className="text-xs opacity-65">
                         closed {formatDate(b.closed_at)}
                       </span>
                     )}
@@ -1829,51 +1830,47 @@ function BatchesTab({ products }) {
       )}
 
       {closingId && (
-        <div className="modal modal-open">
-          <div className="modal-box max-w-lg">
-            <h3 className="font-display text-lg font-bold">Close this batch</h3>
-            <p className="mt-1 text-sm opacity-70">
-              Record what actually came out of the oven. Costing recomputes from
-              the latest closed batch.
-            </p>
-            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <Field label="Actual yield *">
-                <input
-                  type="number" min="0" className={inputCls} autoFocus
-                  value={closeDraft.actual_yield}
-                  onChange={(e) => setCloseDraft((d) => ({ ...d, actual_yield: e.target.value }))}
-                />
-              </Field>
-              <Field label="Actual overhead *">
-                <input
-                  type="number" min="0" step="any" className={inputCls}
-                  value={closeDraft.batch_overhead_actual}
-                  onChange={(e) => setCloseDraft((d) => ({ ...d, batch_overhead_actual: e.target.value }))}
-                />
-              </Field>
-              <Field label="Usage notes">
-                <input
-                  className={inputCls} maxLength={4000}
-                  value={closeDraft.usage_notes}
-                  onChange={(e) => setCloseDraft((d) => ({ ...d, usage_notes: e.target.value }))}
-                />
-              </Field>
-            </div>
-            <div className="modal-action">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => setClosingId(null)}
-              >
-                Keep it open
-              </button>
-              <button type="button" className="btn btn-error btn-sm" onClick={confirmClose}>
-                Close batch
-              </button>
-            </div>
+        <Modal title="Close this batch" onClose={() => setClosingId(null)} size="max-w-lg" titleClass="text-lg">
+          <p className="mt-1 text-sm opacity-70">
+            Record what actually came out of the oven. Costing recomputes from
+            the latest closed batch.
+          </p>
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <Field label="Actual yield *">
+              <input
+                type="number" min="0" className={inputCls} autoFocus
+                value={closeDraft.actual_yield}
+                onChange={(e) => setCloseDraft((d) => ({ ...d, actual_yield: e.target.value }))}
+              />
+            </Field>
+            <Field label="Actual overhead *">
+              <input
+                type="number" min="0" step="any" className={inputCls}
+                value={closeDraft.batch_overhead_actual}
+                onChange={(e) => setCloseDraft((d) => ({ ...d, batch_overhead_actual: e.target.value }))}
+              />
+            </Field>
+            <Field label="Usage notes">
+              <input
+                className={inputCls} maxLength={4000}
+                value={closeDraft.usage_notes}
+                onChange={(e) => setCloseDraft((d) => ({ ...d, usage_notes: e.target.value }))}
+              />
+            </Field>
           </div>
-          <div className="modal-backdrop" onClick={() => setClosingId(null)} />
-        </div>
+          <div className="modal-action">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setClosingId(null)}
+            >
+              Keep it open
+            </button>
+            <button type="button" className="btn btn-error btn-sm" onClick={confirmClose}>
+              Close batch
+            </button>
+          </div>
+        </Modal>
       )}
     </div>
   );
@@ -1889,13 +1886,13 @@ function RateTile({ label, Icon, value, sub }) {
   return (
     <div className="glass rounded-box p-5 shadow-sm ring-1 ring-base-300/60">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-xs font-bold tracking-widest uppercase opacity-50">{label}</p>
+        <p className="text-xs font-bold tracking-widest uppercase opacity-65">{label}</p>
         <span className="flex h-8 w-8 items-center justify-center rounded-full bg-secondary/15 text-secondary">
           <Icon size={16} />
         </span>
       </div>
       <p className="font-display mt-2 text-2xl font-bold">{value}</p>
-      {sub && <p className="mt-1 text-xs opacity-60">{sub}</p>}
+      {sub && <p className="mt-1 text-xs opacity-70">{sub}</p>}
     </div>
   );
 }
@@ -2130,14 +2127,14 @@ function OverheadTab() {
         {months === null ? (
           <TabLoad failed={failed} label="Opening the ledger…" onRetry={fetchBoth} />
         ) : months.length === 0 ? (
-          <p className="rounded-box glass p-8 text-center text-sm opacity-60 ring-1 ring-base-300/60">
+          <p className="rounded-box glass p-8 text-center text-sm opacity-70 ring-1 ring-base-300/60">
             No overhead months yet — costing needs one before it can allocate.
           </p>
         ) : (
           <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
             <table className="table table-sm">
               <thead>
-                <tr className="text-xs uppercase opacity-50">
+                <tr className="text-xs uppercase opacity-65">
                   <th>Month</th>
                   <th className="text-right">Fixed total</th>
                   <th className="text-right">Forecast h</th>
@@ -2179,7 +2176,7 @@ function OverheadTab() {
             <div className="mt-2 overflow-x-auto">
                 <table className="table table-xs">
                   <thead>
-                    <tr className="uppercase opacity-50">
+                    <tr className="uppercase opacity-65">
                       <th>Effective from</th>
                       <th className="text-right">Rate</th>
                       <th>Source</th>
@@ -2190,7 +2187,7 @@ function OverheadTab() {
                       <tr key={r.valid_from}>
                         <td className="whitespace-nowrap">{formatDate(r.valid_from)}</td>
                         <td className="text-right">{money(r.rate, r.currency)}/h</td>
-                        <td className="max-w-48 truncate text-xs opacity-60">{r.source ?? "—"}</td>
+                        <td className="max-w-48 truncate text-xs opacity-70">{r.source ?? "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -2240,7 +2237,7 @@ function OverheadTab() {
             Set rate
           </button>
         </form>
-        <p className="text-xs opacity-50">
+        <p className="text-xs opacity-65">
           Rates are append-only: a new effective date adds a row, history is never rewritten.
         </p>
       </div>

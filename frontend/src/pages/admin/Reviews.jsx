@@ -66,7 +66,7 @@ function ReviewRow({ review, highlighted, focusRef, onModerate, onDelete }) {
                   </span>
                 )}
               </p>
-              <p className="mt-0.5 text-xs opacity-60">
+              <p className="mt-0.5 text-xs opacity-70">
                 {review.author_name ?? "Someone"} · {review.author_email} ·{" "}
                 <span title={formatDateTime(review.created_at)}>
                   {stampTime(review.created_at)}
@@ -214,7 +214,7 @@ export default function AdminReviews() {
           ))}
         </div>
         <label className="input input-bordered input-sm flex w-full max-w-56 items-center gap-2 bg-base-100 sm:w-56">
-          <Search size={15} className="opacity-50" />
+          <Search size={15} className="opacity-65" />
           <input
             type="search"
             className="grow"
@@ -229,13 +229,13 @@ export default function AdminReviews() {
       {counts.live_average !== null && (
         <p className="text-sm opacity-70">
           The wall averages{" "}
-          <span className="font-semibold text-warning">{counts.live_average} of 5</span>{" "}
+          <span className="font-semibold text-caution">{counts.live_average} of 5</span>{" "}
           across {counts.live} live review{counts.live === 1 ? "" : "s"}.
         </p>
       )}
 
       {visible.length === 0 && (
-        <p className="rounded-box border border-dashed border-base-300 p-8 text-center text-sm opacity-60">
+        <p className="rounded-box border border-dashed border-base-300 p-8 text-center text-sm opacity-70">
           {needle
             ? `Nothing on this shelf matches “${query.trim()}”.`
             : filter === "hidden"

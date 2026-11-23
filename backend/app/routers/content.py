@@ -64,6 +64,7 @@ def sitemap(request: Request, db: DbSession):
         _url(base, "/", changefreq="daily", priority="1.0"),
         _url(base, "/products", changefreq="daily", priority="0.9"),
         _url(base, "/bulk", changefreq="monthly", priority="0.6"),
+        _url(base, "/contact", changefreq="monthly", priority="0.5"),
         _url(base, "/privacy", changefreq="yearly", priority="0.2"),
         _url(base, "/terms", changefreq="yearly", priority="0.2"),
         _url(base, "/refunds", changefreq="yearly", priority="0.2"),

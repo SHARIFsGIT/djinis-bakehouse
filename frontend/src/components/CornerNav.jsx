@@ -91,7 +91,7 @@ function Section({ title, tabs, first = false }) {
   return (
     <>
       <li
-        className={`px-3 pb-1 text-[0.65rem] font-bold tracking-[0.18em] uppercase opacity-45 ${
+        className={`px-3 pb-1 text-[0.65rem] font-bold tracking-[0.18em] uppercase opacity-65 ${
           first ? "pt-1.5" : "pt-3"
         }`}
       >

@@ -4670,6 +4670,7 @@ def test_sitemap_lists_the_shop_and_its_bakes():
     body = sitemap.text
     assert body.startswith('<?xml version="1.0"')
     assert "<loc>http://testserver/</loc>" in body
+    assert "<loc>http://testserver/contact</loc>" in body  # where the counter is
     assert "<loc>http://testserver/products/butter-croissant</loc>" in body
     assert "<changefreq>weekly</changefreq>" in body
     assert "<lastmod>" in body  # every bake stamps its last change

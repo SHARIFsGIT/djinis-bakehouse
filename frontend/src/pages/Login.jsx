@@ -239,7 +239,7 @@ export default function Login() {
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
               />
-              <p className="mt-1.5 text-xs opacity-60">
+              <p className="mt-1.5 text-xs opacity-70">
                 The number saved on your account — country code included.
               </p>
             </div>
@@ -256,7 +256,7 @@ export default function Login() {
 
         {rails.facebook && (
           <>
-            <div className="mt-5 flex items-center gap-3 text-xs opacity-50">
+            <div className="mt-5 flex items-center gap-3 text-xs opacity-65">
               <span className="h-px flex-1 bg-base-content/20" />
               or
               <span className="h-px flex-1 bg-base-content/20" />
@@ -285,7 +285,7 @@ export default function Login() {
       {/* Demo credentials — handy for exploring, hidden on real deployments */}
       {demoAccounts && (
         <div className="mt-6 rounded-box border border-dashed border-base-300 p-4">
-          <p className="text-center text-xs font-bold tracking-widest uppercase opacity-50">
+          <p className="text-center text-xs font-bold tracking-widest uppercase opacity-65">
             Demo accounts
           </p>
           <div className="mt-3 grid grid-cols-2 gap-2">

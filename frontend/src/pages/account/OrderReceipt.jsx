@@ -126,7 +126,7 @@ export default function OrderReceipt() {
                 Djini&rsquo;s{" "}
                 <span className="italic text-secondary">Bakehouse</span>
               </p>
-              <p className="text-xs opacity-60">Receipt of purchase</p>
+              <p className="text-xs opacity-70">Receipt of purchase</p>
             </div>
           </div>
           <span className={`badge badge-lg border ${payment.badge}`}>
@@ -136,7 +136,7 @@ export default function OrderReceipt() {
 
         <div className="mt-6 border-t-2 border-dashed border-base-300 pt-5">
           <p className="font-display text-2xl font-bold">{order.order_number}</p>
-          <p className="mt-0.5 text-sm opacity-60">
+          <p className="mt-0.5 text-sm opacity-70">
             Placed {formatDateTime(order.created_at)}
             {order.delivery_date && ` · delivery ${formatDate(order.delivery_date)}`}
           </p>
@@ -151,7 +151,7 @@ export default function OrderReceipt() {
             >
               <span className="font-semibold">
                 {item.product_name}
-                <span className="ml-2 text-sm font-normal opacity-60">
+                <span className="ml-2 text-sm font-normal opacity-70">
                   {money(item.unit_price, order.currency)} × {item.quantity}
                 </span>
               </span>
@@ -191,7 +191,7 @@ export default function OrderReceipt() {
             <span>{money(order.total, order.currency)}</span>
           </div>
           {order.cancel_fee > 0 && (
-            <div className="flex justify-between pt-1 text-warning">
+            <div className="flex justify-between pt-1 text-caution">
               <span>Late-cancellation fee kept</span>
               <span>{money(order.cancel_fee, order.currency)}</span>
             </div>
@@ -207,7 +207,7 @@ export default function OrderReceipt() {
         {/* Address + payment */}
         <div className="mt-6 grid gap-5 border-t-2 border-dashed border-base-300 pt-5 sm:grid-cols-2">
           <div className="text-sm">
-            <p className="text-xs font-bold tracking-widest uppercase opacity-50">
+            <p className="text-xs font-bold tracking-widest uppercase opacity-65">
               Delivered to
             </p>
             <p className="mt-1.5 font-semibold">{order.recipient}</p>
@@ -221,7 +221,7 @@ export default function OrderReceipt() {
             </p>
           </div>
           <div className="text-sm">
-            <p className="text-xs font-bold tracking-widest uppercase opacity-50">
+            <p className="text-xs font-bold tracking-widest uppercase opacity-65">
               Payment
             </p>
             <p className="mt-1.5 font-semibold">
@@ -237,7 +237,7 @@ export default function OrderReceipt() {
           </p>
         )}
 
-        <p className="mt-6 border-t-2 border-dashed border-base-300 pt-4 text-center text-xs opacity-60">
+        <p className="mt-6 border-t-2 border-dashed border-base-300 pt-4 text-center text-xs opacity-70">
           {closingLine}
           {closingLine && " "}
           Thank you for baking with us.

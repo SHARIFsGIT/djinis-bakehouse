@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { CircleAlert, CircleCheck, FlaskConical, RefreshCw, ShieldAlert, Undo2 } from "lucide-react";
 import client, { apiError } from "../../api/client";
 import {
@@ -109,7 +110,10 @@ function RefundDialog({ order, payments, onClose, onDone }) {
     }
   };
 
-  return (
+  // At the end of <body>, not inside the drawer that opened it — the
+  // drawer's own slide-in would otherwise be the box it is laid out in
+  // (components/ConfirmDialog.jsx says more).
+  return createPortal(
     <div className="modal modal-open" role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <form className="modal-box max-w-sm" onSubmit={submit} noValidate>
         <h3 id={titleId} className="font-display text-lg font-bold">
@@ -147,7 +151,7 @@ function RefundDialog({ order, payments, onClose, onDone }) {
             </button>
           )}
         </div>
-        <p id={`${titleId}-help`} className={`mt-1 text-xs ${problem ? "text-error" : "opacity-60"}`}>
+        <p id={`${titleId}-help`} className={`mt-1 text-xs ${problem ? "text-error" : "opacity-70"}`}>
           {problem ?? (everything ? "All that is still held." : "Part of what is still held.")}
         </p>
 
@@ -164,7 +168,7 @@ function RefundDialog({ order, payments, onClose, onDone }) {
           aria-describedby={`${titleId}-reason-help`}
           disabled={busy}
         />
-        <p id={`${titleId}-reason-help`} className="mt-1 text-xs opacity-60">
+        <p id={`${titleId}-reason-help`} className="mt-1 text-xs opacity-70">
           Kept on the refund&rsquo;s record for the desk — the customer does not see it.
         </p>
 
@@ -173,7 +177,7 @@ function RefundDialog({ order, payments, onClose, onDone }) {
             {refused}
           </p>
         )}
-        <p className="mt-3 text-xs opacity-60">
+        <p className="mt-3 text-xs opacity-70">
           The customer is emailed once {provider} confirms the refund.
         </p>
 
@@ -191,7 +195,8 @@ function RefundDialog({ order, payments, onClose, onDone }) {
         </div>
       </form>
       <div className="modal-backdrop" onClick={() => !busy && onClose()} aria-hidden="true" />
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -215,7 +220,7 @@ function RefundRow({ refund }) {
         <span className="font-semibold">{money(refund.amount, refund.currency)}</span>
         <StateBadge map={REFUND_STATUSES} value={refund.status} />
       </div>
-      <p className="text-xs opacity-60">
+      <p className="text-xs opacity-70">
         {formatDateTime(refund.created_at)} · {refund.initiated_by}
       </p>
       {refund.reason && <p className="text-xs opacity-80">“{refund.reason}”</p>}
@@ -232,7 +237,7 @@ function ProviderId({ label, value }) {
   if (!value) return null;
   return (
     <p className="text-xs">
-      <span className="opacity-60">{label} </span>
+      <span className="opacity-70">{label} </span>
       <code className="break-all select-all text-[11px]">{value}</code>
     </p>
   );
@@ -261,7 +266,7 @@ function TransactionCard({ tx }) {
           <span className="opacity-70"> · {money(tx.refundable_amount, tx.currency)} still held</span>
         )}
       </p>
-      <p className="text-xs opacity-60">
+      <p className="text-xs opacity-70">
         {tx.paid_at ? `Paid ${formatDateTime(tx.paid_at)}` : `Pay page opened ${formatDateTime(tx.created_at)}`}
       </p>
       <div className="mt-1.5 space-y-0.5">
@@ -302,7 +307,7 @@ export function PaymentsPanel({ order, payments, failed, onRetry, onUpdated }) {
   if (failed) return <LoadError message={failed} onRetry={onRetry} />;
   if (!payments) {
     return (
-      <p className="flex items-center gap-2 text-sm opacity-60" role="status">
+      <p className="flex items-center gap-2 text-sm opacity-70" role="status">
         <span className="loading loading-spinner loading-xs" aria-hidden="true" />
         Reading the payment ledger…
       </p>
@@ -361,22 +366,22 @@ export function PaymentsPanel({ order, payments, failed, onRetry, onUpdated }) {
       {payments.paid_amount > 0 && (
         <dl className="grid grid-cols-3 gap-2 text-center text-sm">
           <div className="rounded-box bg-base-200/60 p-2">
-            <dt className="text-xs opacity-60">Paid</dt>
+            <dt className="text-xs opacity-70">Paid</dt>
             <dd className="font-bold">{money(payments.paid_amount, payments.currency)}</dd>
           </div>
           <div className="rounded-box bg-base-200/60 p-2">
-            <dt className="text-xs opacity-60">Refunded</dt>
+            <dt className="text-xs opacity-70">Refunded</dt>
             <dd className="font-bold">{money(payments.refunded_amount, payments.currency)}</dd>
           </div>
           <div className="rounded-box bg-base-200/60 p-2">
-            <dt className="text-xs opacity-60">Still held</dt>
+            <dt className="text-xs opacity-70">Still held</dt>
             <dd className="font-bold">{money(payments.refundable_amount, payments.currency)}</dd>
           </div>
         </dl>
       )}
 
       {newestFirst.length === 0 ? (
-        <p className="text-sm opacity-60">
+        <p className="text-sm opacity-70">
           No {provider} pay page is on record for this order.
         </p>
       ) : (
@@ -403,8 +408,8 @@ export function PaymentsPanel({ order, payments, failed, onRetry, onUpdated }) {
                     {statusLabel(event.to_status)}
                   </span>
                 )}
-                <span className="opacity-60"> · {formatDateTime(event.created_at)}</span>
-                {event.event_id && <span className="opacity-60"> · from {providerLabel(event.provider)}</span>}
+                <span className="opacity-70"> · {formatDateTime(event.created_at)}</span>
+                {event.event_id && <span className="opacity-70"> · from {providerLabel(event.provider)}</span>}
                 {event.detail && <p className="break-words opacity-70">{event.detail}</p>}
               </li>
             ))}
@@ -473,7 +478,7 @@ function ProviderCard({ status }) {
             : "Taking real payments."}
       </p>
       {status.configured && !status.webhook_ready && (
-        <p className="mt-1.5 flex items-start gap-1.5 text-xs font-semibold text-warning">
+        <p className="mt-1.5 flex items-start gap-1.5 text-xs font-semibold text-caution">
           <CircleAlert size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
           No webhook configured — payments are only confirmed when the customer comes back to the
           shop, or by the periodic check. Refunds and disputes made at {name} go unseen.
@@ -490,10 +495,10 @@ function IssueRow({ issue, onOpenOrder }) {
         <p className="font-semibold">
           {ISSUE_TITLES[issue.kind] ?? statusLabel(issue.kind)}
           {issue.order_number && <span className="font-normal opacity-70"> · {issue.order_number}</span>}
-          {issue.provider && <span className="font-normal opacity-50"> · {providerLabel(issue.provider)}</span>}
+          {issue.provider && <span className="font-normal opacity-65"> · {providerLabel(issue.provider)}</span>}
         </p>
         <p className="text-sm opacity-80">{issue.detail}</p>
-        <p className="text-xs opacity-60">{issue.suggestion}</p>
+        <p className="text-xs opacity-70">{issue.suggestion}</p>
       </div>
       {issue.order_id && (
         <button
@@ -547,7 +552,7 @@ export function ReconciliationReport({ onOpenOrder, version = 0 }) {
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs opacity-60">
+        <p className="text-xs opacity-70">
           Checked {formatDateTime(report.checked_at)} —
           reads the shop&rsquo;s own ledger; a provider is only asked when you open an order and check it.
         </p>

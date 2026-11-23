@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
+import { ChevronRight } from "lucide-react";
 import client, { apiError } from "../../api/client";
 import { formatDate, money, ORDER_STATUSES, statusBadge, statusLabel } from "../../lib/format";
 import EmptyState from "../../components/EmptyState";
 import { LoadError, Loading } from "../../components/Loading";
+import Pager from "../../components/Pager";
 
 export default function Orders() {
   const [status, setStatus] = useState("");
@@ -76,41 +78,25 @@ export default function Orders() {
               </span>
               <div className="min-w-40 flex-1">
                 <p className="font-display font-bold">{order.order_number}</p>
-                <p className="text-xs opacity-60">{formatDate(order.created_at)} · {order.item_count} items</p>
+                <p className="text-xs opacity-70">{formatDate(order.created_at)} · {order.item_count} items</p>
               </div>
               <span className={`badge badge-sm ${statusBadge(order.status)} border`}>
                 {statusLabel(order.status)}
               </span>
               <p className="w-20 text-right font-bold">{money(order.total, order.currency)}</p>
-              <span className="text-sm opacity-40" aria-hidden="true">›</span>
+              <ChevronRight size={16} className="shrink-0 opacity-65" aria-hidden="true" />
             </Link>
           ))}
           {data.pagination.total_pages > 1 && (
             <>
-              <div className="flex justify-center pt-2">
-                <div className="join">
-                  <button
-                    type="button"
-                    className="btn join-item btn-sm"
-                    disabled={data.pagination.page <= 1}
-                    onClick={() => setPage(data.pagination.page - 1)}
-                  >
-                    «
-                  </button>
-                  <button className="btn join-item btn-sm pointer-events-none">
-                    Page {data.pagination.page} / {data.pagination.total_pages}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn join-item btn-sm"
-                    disabled={data.pagination.page >= data.pagination.total_pages}
-                    onClick={() => setPage(data.pagination.page + 1)}
-                  >
-                    »
-                  </button>
-                </div>
-              </div>
-              <p className="pt-2 text-center text-xs opacity-60">
+              <Pager
+                className="pt-2"
+                label="Pages of orders"
+                page={data.pagination.page}
+                pages={data.pagination.total_pages}
+                onPage={setPage}
+              />
+              <p className="pt-2 text-center text-xs opacity-70">
                 Showing {data.orders.length} of {data.pagination.total_items} orders
               </p>
             </>

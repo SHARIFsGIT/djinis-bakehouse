@@ -98,7 +98,7 @@ export default function Register() {
           </button>
           {/* What signing up means, where it is decided — with the two
               documents one tap away. */}
-          <p className="text-center text-xs opacity-60">
+          <p className="text-center text-xs opacity-70">
             By creating an account you accept our{" "}
             <Link to="/terms" className="link">terms</Link>. How we handle your details
             is in the <Link to="/privacy" className="link">privacy policy</Link>.

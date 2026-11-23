@@ -1,4 +1,4 @@
-import { Menu, Moon, Search, ShoppingBasket, Sun, X } from "lucide-react";
+import { Menu, Moon, ShoppingBasket, Sun, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import client from "../api/client";
@@ -6,37 +6,19 @@ import useStore from "../hooks/useStore";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
 import AdminBell from "./AdminBell";
+import SearchBox from "./SearchBox";
 
 const NAV_LINK =
   "text-sm font-semibold whitespace-nowrap opacity-80 transition hover:text-secondary hover:opacity-100";
 
-/* The case search — one field, worn in two places (the bar and the mobile
-   sheet), so the markup is written once. */
-function SearchField({ value, onChange }) {
-  return (
-    <label className="input input-bordered input-sm flex w-full min-w-0 items-center gap-2 bg-base-100">
-      <Search size={15} className="opacity-50" />
-      <input
-        type="search"
-        className="grow"
-        placeholder="Search the case…"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-label="Search products"
-      />
-    </label>
-  );
-}
-
 export default function Navbar() {
   const { user, isAdmin, logout } = useAuth();
-  const { count } = useCart();
+  const { count, added } = useCart();
   const navigate = useNavigate();
   const location = useLocation();
   const [categories, setCategories] = useState([]);
   // Shop copy the admin can rewrite (or clear — an empty line hides the bar)
   const announcement = useStore()?.announcement ?? "";
-  const [search, setSearch] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
 
   const [theme, setTheme] = useState(
@@ -67,15 +49,6 @@ export default function Navbar() {
       localStorage.setItem("theme", next);
     } catch {}
     setTheme(next);
-  };
-
-  const submitSearch = (e) => {
-    e.preventDefault();
-    const term = search.trim();
-    navigate(
-      term ? `/products?search=${encodeURIComponent(term)}` : "/products",
-    );
-    setMenuOpen(false);
   };
 
   const doLogout = () => {
@@ -126,33 +99,41 @@ export default function Navbar() {
         </div>
       )}
 
-      {/* Tighter on a phone: the baker's bar carries five controls there
-          (theme, bell, basket, corner, menu), and at the desktop spacing the
-          wordmark ran underneath the first of them. */}
-      <nav className="navbar mx-auto max-w-7xl gap-0.5 px-3 sm:gap-2 sm:px-4">
-        {/* Brand — may give way (min-w-0) but never slide under the icons */}
-        <Link to="/" className="flex min-w-0 items-center gap-2 sm:gap-2.5">
+      {/* Tight on a phone: the baker's bar carries five controls there
+          (theme, bell, basket, corner, menu). */}
+      <nav className="navbar mx-auto max-w-7xl gap-0 px-3 sm:gap-2 sm:px-4">
+        {/* Brand. On a phone the link takes whatever the controls leave. The
+            mark always shows; the name beside it shows when it fits — on one
+            line, or on two — and otherwise wraps onto a second row that the
+            link's fixed height hides (the row gap keeps it out of sight).
+            So there is no breakpoint to keep in step with how many controls
+            a visitor has: a guest's "Log in", the baker's bell. The name
+            simply never runs underneath them, which at 320px it used to.
+            From a tablet up there is always room and it is an ordinary row. */}
+        <Link
+          to="/"
+          aria-label="Djini's Bakehouse — home"
+          className="flex h-[3.25rem] min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 gap-y-6 overflow-hidden pt-1.5 sm:h-auto sm:flex-none sm:flex-nowrap sm:gap-x-2.5 sm:overflow-visible sm:pt-0"
+        >
           <img
             src="/static/site/logo.png"
             alt=""
             className="h-10 w-10 shrink-0 object-contain"
           />
-          <span className="font-display min-w-0 text-lg leading-tight font-bold sm:text-xl">
+          {/* 5.6em: the width of "Bakehouse", the longer of the two words */}
+          <span className="font-display min-w-[5.6em] flex-1 basis-[5.6em] text-lg leading-tight font-bold sm:min-w-0 sm:flex-none sm:basis-auto sm:text-xl">
             Djini&rsquo;s{" "}
             <span className="italic text-secondary">Bakehouse</span>
           </span>
         </Link>
 
-        <div className="flex-1" />
+        <div className="hidden flex-1 sm:block" />
 
         {/* Search (desktop) — the shelves moved to their own line below,
             so the field can keep its full size at every width */}
-        <form
-          onSubmit={submitSearch}
-          className="hidden min-w-0 lg:flex lg:w-44"
-        >
-          <SearchField value={search} onChange={setSearch} />
-        </form>
+        <div className="hidden min-w-0 lg:flex lg:w-52">
+          <SearchBox shortcut />
+        </div>
 
         {/* Theme toggle */}
         <button
@@ -178,7 +159,10 @@ export default function Navbar() {
           className="btn btn-ghost btn-sm btn-square relative"
           aria-label={`Basket, ${count} ${count === 1 ? "item" : "items"}`}
         >
-          <ShoppingBasket size={20} />
+          {/* Re-keyed on every "add", so the nod plays each time. */}
+          <span key={added} className={added > 0 ? "basket-nod inline-flex" : "inline-flex"}>
+            <ShoppingBasket size={20} aria-hidden="true" />
+          </span>
           {count > 0 && (
             <span className="badge badge-secondary badge-xs absolute -top-1.5 -right-1.5 border border-base-100 px-1.5 font-bold shadow">
               {count > 99 ? "99+" : count}
@@ -249,10 +233,14 @@ export default function Navbar() {
       {/* Mobile menu */}
       {menuOpen && (
         <div className="glass border-t border-base-300/60 px-4 py-3 lg:hidden">
-          <form onSubmit={submitSearch} className="mb-3">
-            <SearchField value={search} onChange={setSearch} />
-          </form>
-          <ul className="space-y-0.5">
+          <div className="mb-3">
+            <SearchBox align="start" onNavigate={() => setMenuOpen(false)} />
+          </div>
+          {/* The header is pinned to the top of the screen, so a list longer
+              than a small phone is tall would have no way to be scrolled to
+              its end. The list scrolls inside itself instead (the search
+              stays outside it, so its suggestions are never clipped). */}
+          <ul className="max-h-[calc(100dvh-12rem)] space-y-0.5 overflow-y-auto overscroll-contain">
             {shopLinks.map((link) => (
               <li key={link.label}>
                 <Link
