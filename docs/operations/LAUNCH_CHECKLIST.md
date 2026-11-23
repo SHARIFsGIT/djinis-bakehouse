@@ -1,8 +1,10 @@
 # Launch checklist — opening the shop to real customers
 
 Written 2026-11-22 for the release on the branch
-`payments/unified-ledger-paypal`. **Nothing in this document has been done
-to production** — each step is the owner's to take. Payments have their own
+`payments/unified-ledger-paypal`. Updated 2026-11-23: that release is
+deployed (step 2 below is done); what is still open is listed, with the fix
+for each, in `PENDING.md` in the repository root. Every other step here
+remains the owner's to take. Payments have their own
 detailed runbook, `PAYMENTS_GO_LIVE.md`; this page is the whole launch in
 order, and points there for the payment steps.
 

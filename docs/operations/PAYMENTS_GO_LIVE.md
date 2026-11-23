@@ -1,9 +1,12 @@
 # Payments — Rehearsal and Going Live (Stripe + PayPal)
 
-Status: **prepared 2026-11-22 — nothing in this document has been executed
-against production.** The code it describes lives on the branch
-`payments/unified-ledger-paypal`; production still runs the previous
-release until the owner merges and deploys it (step 1).
+Status: **prepared 2026-11-22.** Updated 2026-11-23: the release this page
+describes was merged and deployed on 2026-11-22 (step 1 is done), and the
+live shop now reports `card_payments: true` with `card_test_mode: false` at
+`/api/store` — **the Stripe key in Render is a live key.** Step 2 (the
+rehearsal on test keys) has not been run from the build machine, which
+holds no Stripe credentials; `PENDING.md` in the repository root, item 1,
+says what that leaves open and the two ways to close it.
 
 What has been verified, and where:
 
@@ -100,8 +103,13 @@ the previous deploy. The new tables and columns stay where they are, unused.
 
 ## Step 2 — Rehearse on Stripe test keys
 
-Production already runs on Stripe **test** keys, so this step is a real
-rehearsal on the real site with no real money.
+This step is a real rehearsal on the real site with no real money — which
+needs Stripe **test** keys in Render. As of 2026-11-23 production runs a
+**live** key, so put the test secret key and the test endpoint's signing
+secret into `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` first (note the
+live values, they go back in step 4), and do it at a quiet hour: while the
+test keys are in place checkout says "test mode" and takes no real money
+from anyone.
 
 1. Stripe dashboard (test mode) → Developers → Webhooks. Make sure exactly
    one endpoint delivers to

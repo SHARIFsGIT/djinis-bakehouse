@@ -284,15 +284,24 @@ validates the type and size (JPEG/PNG/WebP, ≤ 6 MB) and stores it under
 profile photo the same way (512px, ≤ 2 MB) — it shows up in the navbar, on the
 profile page and in the admin user list, and can be removed with one click.
 
-**Accounts** — email login with JWT access/refresh tokens (silent refresh in the
-frontend), profile & password management, an address book with default addresses.
+**Accounts** — one field takes **an email address or a phone number**, at
+sign-up and at log-in, with a password; JWT access/refresh tokens (silent
+refresh in the frontend), profile & password management, an address book with
+default addresses. A number is one account however it is typed — `0176 555 0100`,
+`+49 176 555 0100` and `0049 176…` are the same (a number written the national
+way is read as the shop's own country, `PHONE_DEFAULT_COUNTRY_CODE`). An
+account opened with a phone number alone simply has no email: nothing is
+mailed to it (its orders live on its order page), the customer can add an
+address in their profile at any time, and — since a reset link cannot be
+mailed — the desk can make one on the customer's card and pass it on.
 Two more ways in, each appearing only when it's configured (never a dead button):
 **"Continue with Facebook"** (Facebook Login for the web — set `FACEBOOK_APP_ID` /
-`FACEBOOK_APP_SECRET`), and **phone sign-in** — a six-digit code texted to the
-number on the account (`TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` /
-`TWILIO_FROM_NUMBER`). Phone codes are single-use, valid 10 minutes, capped at
-five wrong tries, and rate-limited; Facebook handshakes never put tokens in a
-URL — the callback issues a one-time code the page exchanges server-side.
+`FACEBOOK_APP_SECRET`), and a **texted sign-in code** — six digits sent to the
+number on the account, no password needed (`TWILIO_ACCOUNT_SID` /
+`TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER`). Codes are single-use, valid 10
+minutes, capped at five wrong tries, and rate-limited; Facebook handshakes never
+put tokens in a URL — the callback issues a one-time code the page exchanges
+server-side.
 Orders keep a snapshot of the delivery address, so editing addresses later never
 changes past orders. Customers can cancel while an order is pending/confirmed/
 baking — stock is restored, orders paid online auto-refund through the provider that took the money, and cancelling after the
@@ -311,10 +320,15 @@ the shop keeps on the signed-in customer as JSON at
 Orders, Products, Reviews, Promotions, Users, Settings) alongside the baker's
 own profile and address book, so nothing needs a second click to reach; on a
 phone the sidebar flattens into a thumb-swipe rail of the same tabs, and the
-Store link leads back to the counter. Dashboard with
-revenue/orders/customers stats, a thirty-day trading chart (one bar per
-day, active currency, kept orders), best sellers, low stock and recent
-orders;
+Store link leads back to the counter. The dashboard opens on the day, in the
+order a shift asks its questions: **what is waiting for you** (orders to
+confirm, catering enquiries to answer, bakes running low — each row opens the
+desk that deals with it), **what is due next** (open orders with a delivery
+date, soonest first, overdue ones leading), then **the last 30 days** — order
+value, orders, average order and new customers, each set against the 30 days
+before — over a thirty-day chart (one column per day, active currency, kept
+orders; readable by pointer, finger, arrow keys or as a table), and the
+latest orders and best sellers;
 order management with a status timeline
 (pending → confirmed → baking → ready → out for delivery → delivered), each
 online order's payment panel (the provider's ids, what is held, full or
@@ -445,7 +459,8 @@ images/              original photography (source of truth for the pipeline)
 | `CLIENT_IP_HEADER`       | empty (first `X-Forwarded-For` hop) | the header your edge sets with the visitor's real address (e.g. `CF-Connecting-IP`) — only ever one the edge overwrites itself; see `.env.example` |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | empty / 587 | the one mail account behind receipts, order updates, password resets, restock notes, desk alerts and campaigns. **Empty host = nothing is sent** (dev logs each message; production logs recipient + subject only and says "Email is OFF" at boot) |
 | `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` | empty | "Continue with Facebook" — the button appears once both are set |
-| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | empty | phone sign-in codes over SMS; all three together switch it on |
+| `PHONE_DEFAULT_COUNTRY_CODE` | `49` | the country a phone number written the national way belongs to ("0176…" is read as "+49 176…"); digits only, no "+" |
+| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | empty | texted sign-in codes; all three together switch them on (logging in with a phone number and a password needs none of them) |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | empty | the card option appears once the key is set (`sk_test_…` rehearses, `sk_live_…` charges); the signing secret of the endpoint delivering to `/api/payments/webhook` — without it Stripe's webhooks are refused |
 | `STRIPE_PAYMENT_METHODS` | `automatic` | Stripe offers what its dashboard has switched on; a comma list (`card`, `link`, `klarna`, `sepa_debit`, `ideal`, `bancontact`, `eps`, `p24`, `revolut_pay`, `amazon_pay`, `paypal`) only narrows that set; unknown entries drop with a warning |
 | `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | empty | PayPal as its own checkout option — appears once both are set |
@@ -457,6 +472,10 @@ images/              original photography (source of truth for the pipeline)
 | `UPLOADS_DIR`            | empty (`static/uploads`)         | absolute path to a persistent disk on ephemeral platforms |
 
 ## Going to production
+
+**What is still open for the owner** — the live shop's unfinished business
+(payments never rehearsed, the legal notice, email, the optional sign-in
+and payment rails), each with its fix: [`PENDING.md`](PENDING.md).
 
 **What a fresh production database gets.** The catalog always seeds — 3
 shelves, 25 products with their photos, and the two vouchers the storefront
@@ -625,10 +644,12 @@ before, so no customer ever sees a button that can't work.
   Facebook id, then by email — an existing customer who clicks it keeps
   their whole order history, and the Facebook button never puts tokens in
   a URL (the callback issues a one-time code the page exchanges).
-- *Phone*: sign up at twilio.com, buy or verify a sender number, and set
+- *Phone*: signing up and logging in with a phone number and a password
+  needs no setup — it is always on. The texted code is the extra: sign up at
+  twilio.com, buy or verify a sender number, and set
   `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM_NUMBER`.
-  Customers then sign in with a six-digit code texted to the number on
-  their account (set at registration or in the profile). Codes are
+  Customers can then also sign in with a six-digit code texted to the number
+  on their account (set at registration or in the profile). Codes are
   single-use, good for ten minutes, capped at five wrong tries, and one
   text per number per minute. In dev, with no Twilio keys, the code comes
   back with the API response so the whole flow stays testable.
