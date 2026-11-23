@@ -97,6 +97,48 @@ The home page also carries two bands the baker curates from the same desk:
 line of copy) and "Word around the neighborhood" (hand-picked testimonials
 with optional star ratings) — both served from the API and hidden when empty.
 
+**Finding your way** — the search box answers while you type: the first five
+matches with photo, shelf and price, walked with the arrow keys, and `/`
+puts the cursor in it from anywhere. A bake's page opens its photo large,
+shares through the phone's own share sheet (the link is copied where there
+is none) and offers the bakes this browser opened last ("Recently viewed" —
+kept in localStorage, never sent anywhere). A wrong address lands on a page
+with the search, the shelves and those same ways back. `/contact` ("Find
+us") shows the address with a map link, phone, email, bake hours and the
+delivery area, all from Settings — the same details feed the home page's
+schema.org `Bakery` data, and the page is in the sitemap. Every page names
+its browser tab (`lib/titles.js`). An open order page looks again every 45
+seconds and whenever its tab comes back into view, so the timeline moves on
+without a reload.
+
+**On a phone** — the catalog opens on bakes: shelves are a row to swipe and
+the filters rise from the bottom edge as a sheet. On a bake's page and in
+the basket, the page's one button ("Add to basket", "Checkout") waits at
+the bottom edge whenever the real one is off screen (`hooks/useDock.js`).
+Every field is 16px on a touch screen so iOS never zooms into one, the
+smallest controls grow to 32px, hover styles are kept for pointers that
+hover, and the layout keeps clear of the notch and the home indicator. A
+web manifest and icons let the shop be added to a home screen; there is
+deliberately no service worker, so nobody is ever served a stale shop. The
+desk's tables (orders, enquiries, products, customers, promotions, the
+dashboard) fold down to what a phone can show, with every row's actions on
+the screen. All of it is laid out down to a 320px-wide screen: the header
+keeps its mark and drops the name beside it only when the name would not
+fit, the home page's two buttons stack, and nothing has to be scrolled
+sideways. Dialogs are drawn at the end of the page body (a portal), so one
+opened from inside a frosted card or a drawer still covers the whole screen.
+
+**Readable by everyone** — a skip link is the first Tab on every page, focus
+is always visible, icon buttons carry names, the search is a proper
+combobox, sheets and dialogs take the keyboard in and hand it back, and
+`prefers-reduced-motion` is honoured. Both themes are tuned against WCAG
+AA: on the two paper tones, the ink at every strength the pages dim text
+to, each label on its own fill and each semantic colour used as text
+compute to 4.5:1 or better. At night the wine has two seats for that
+reason — `--color-secondary` is the one read as text, `--brand-wine` the
+deeper one under cream text (`index.css`). The rating stars keep the honey
+on cream; the number is always beside them.
+
 **Back-in-stock alerts** — a sold-out bake's page takes an email instead of
 an order ("Tell me when it's back", guests included, rate-limited and
 idempotent). The moment the baker refills the shelf from the desk, every
@@ -363,14 +405,20 @@ frontend/
                      time limits, a session that survives blocked storage
     context/         Auth, Cart, Favorites, Toast providers (sign-in and the
                      basket follow across browser tabs)
+    hooks/           useStore, useBasketQuote, useDock (the phone's
+                     bottom-edge bar)
     lib/             format helpers, imageResize (client-side photo shrinking),
                      coupon handoff (basket → checkout), store (the one shared
                      fetch of /api/store), apiError (failed requests in a
                      customer's words), delivery (the area check), navigation
-                     (the safe way back after login)
-    components/      Navbar, Footer, ProductCard, PhotoTile, guards, small UI bits
+                     (the safe way back after login), titles (what each page
+                     calls its browser tab), recent (recently viewed bakes)
+    components/      Navbar, Footer, ProductCard, PhotoTile, SearchBox, Sheet,
+                     Lightbox, DockBar, Pager, guards, small UI bits
     pages/           Home, Products, ProductDetail, Cart, Checkout, BulkOrder,
-                     auth, account/*, admin/*
+                     Contact, auth, account/*, admin/*
+  public/            manifest.json, and the home-screen icons that
+                     scripts/prepare_images.py cuts from the shop mark
 scripts/
   prepare_images.py  resizes/crops originals from images/ into backend/static
 images/              original photography (source of truth for the pipeline)
