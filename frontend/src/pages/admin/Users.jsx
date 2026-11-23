@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { Copy, Crown, Gift, Heart, History, Hourglass, MailCheck, MailX, ScrollText } from "lucide-react";
+import { Copy, Crown, Gift, Heart, History, Hourglass, KeyRound, MailCheck, MailX, ScrollText } from "lucide-react";
 import client, { apiError } from "../../api/client";
 import { formatDateTime, hasNonActiveCurrency, money } from "../../lib/format";
 import { useAuth } from "../../context/AuthContext";
@@ -95,6 +95,30 @@ function CustomerDrawer({ user, onClose, onChanged, onUpdate }) {
   });
   const [proof, setProof] = useState({ source: "", evidence: "" });
   const [busy, setBusy] = useState(false);
+  // A password reset link made here, for the baker to pass on.
+  const [resetLink, setResetLink] = useState(null); // { link, expires_minutes }
+  const [linking, setLinking] = useState(false);
+
+  const makeResetLink = async () => {
+    setLinking(true);
+    try {
+      const { data } = await client.post(`/admin/users/${user.id}/reset-link`);
+      setResetLink(data);
+    } catch (err) {
+      toast.error(apiError(err, "Couldn't make the link"));
+    } finally {
+      setLinking(false);
+    }
+  };
+
+  const copyResetLink = async () => {
+    try {
+      await navigator.clipboard.writeText(resetLink.link);
+      toast.success("Link copied — send it to the customer");
+    } catch {
+      toast.info("Select the link and copy it by hand");
+    }
+  };
 
   useEffect(() => {
     client
@@ -125,7 +149,7 @@ function CustomerDrawer({ user, onClose, onChanged, onUpdate }) {
   return (
     <Drawer
       title={`${user.first_name} ${user.last_name}`}
-      subtitle={user.email}
+      subtitle={user.email ?? `${user.phone ?? "No contact on file"} · signs in by phone, no email`}
       label={`Desk card for ${user.first_name} ${user.last_name}`}
       onClose={onClose}
       busy={busy}
@@ -171,6 +195,14 @@ function CustomerDrawer({ user, onClose, onChanged, onUpdate }) {
                   <MailX size={14} /> Withdraw consent
                 </button>
               </div>
+            ) : !user.email ? (
+              // Consent is to being emailed, and there is no address to
+              // email — the server refuses to record one, so no form is
+              // offered that could only fail.
+              <p className="mt-2 rounded-box border border-base-300 bg-base-200/50 p-4 text-xs opacity-80">
+                This customer signs in by phone and has no email address, so there is nothing marketing
+                could be sent to. Once they add an email in their profile, consent can be recorded here.
+              </p>
             ) : (
               <form
                 className="mt-2 space-y-3 rounded-box border border-base-300 bg-base-200/50 p-4"
@@ -259,7 +291,7 @@ function CustomerDrawer({ user, onClose, onChanged, onUpdate }) {
                   className="select select-bordered select-sm"
                   value={user.role}
                   onChange={(e) => onUpdate(user.id, { role: e.target.value })}
-                  aria-label={`Role for ${user.email}`}
+                  aria-label={`Role for ${user.first_name} ${user.last_name}`}
                 >
                   <option value="customer">customer</option>
                   <option value="admin">admin</option>
@@ -273,7 +305,7 @@ function CustomerDrawer({ user, onClose, onChanged, onUpdate }) {
                   checked={user.is_active}
                   disabled={user.id === me.id}
                   onChange={(e) => onUpdate(user.id, { is_active: e.target.checked })}
-                  aria-label={`Active toggle for ${user.email}`}
+                  aria-label={`Active toggle for ${user.first_name} ${user.last_name}`}
                 />
               </div>
               {user.id === me.id && (
@@ -282,6 +314,57 @@ function CustomerDrawer({ user, onClose, onChanged, onUpdate }) {
                 </p>
               )}
             </div>
+
+            {/* Getting a customer back in when "Forgot password" can't: an
+                account with no email, or mail that never arrives. The link
+                is made here and passed on by the baker. */}
+            {user.role !== "admin" && user.is_active && (
+              <div className="mt-3 rounded-box border border-base-300 bg-base-200/50 p-4">
+                <p className="text-sm font-semibold">Forgotten password</p>
+                <p className="mt-0.5 text-xs opacity-70">
+                  {user.email
+                    ? "They can ask for a link themselves from the log-in page. If the mail doesn't reach them, make one here and send it yourself."
+                    : "This account has no email, so a link can't be mailed. Make one here and send it yourself — by message, or read it out."}
+                </p>
+                {resetLink ? (
+                  <div className="mt-3">
+                    <label className="label text-xs" htmlFor={`reset-link-${user.id}`}>
+                      Reset link — works once, for {resetLink.expires_minutes} minutes
+                    </label>
+                    <div className="join w-full">
+                      <input
+                        id={`reset-link-${user.id}`}
+                        className="input input-bordered input-sm join-item w-full font-mono text-xs"
+                        readOnly
+                        value={resetLink.link}
+                        onFocus={(e) => e.target.select()}
+                      />
+                      <button type="button" className="btn btn-secondary btn-sm join-item text-secondary-content" onClick={copyResetLink}>
+                        <Copy size={14} aria-hidden="true" />
+                        Copy
+                      </button>
+                    </div>
+                    <p className="mt-1.5 text-[11px] opacity-70">
+                      Whoever opens it can set this account&rsquo;s password — send it only to the customer.
+                    </p>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm mt-3 border border-base-300"
+                    onClick={makeResetLink}
+                    disabled={linking}
+                  >
+                    {linking ? (
+                      <span className="loading loading-spinner loading-xs" aria-hidden="true" />
+                    ) : (
+                      <KeyRound size={15} aria-hidden="true" />
+                    )}
+                    Make a reset link
+                  </button>
+                )}
+              </div>
+            )}
           </section>
         </div>
     </Drawer>
@@ -643,8 +726,15 @@ export default function AdminUsers() {
                         {/* If the address has to wrap on a phone, it wraps
                             after the @ — not through "example.co / m". */}
                         <p className="text-xs opacity-70 [overflow-wrap:anywhere]">
-                          {u.email.split("@")[0]}@<wbr />{u.email.split("@").slice(1).join("@")}
-                          {u.phone ? ` · ${u.phone}` : ""}
+                          {u.email ? (
+                            <>
+                              {u.email.split("@")[0]}@<wbr />{u.email.split("@").slice(1).join("@")}
+                              {u.phone ? ` · ${u.phone}` : ""}
+                            </>
+                          ) : (
+                            // Opened with a phone number alone: the number is the contact.
+                            <>{u.phone ?? "No contact on file"} · no email</>
+                          )}
                         </p>
                       </div>
                     </div>
@@ -667,7 +757,7 @@ export default function AdminUsers() {
                         className="select select-bordered select-xs"
                         value={u.classification ?? ""}
                         onChange={(e) => setWord(u, e.target.value)}
-                        aria-label={`Desk's word for ${u.email}`}
+                        aria-label={`Desk's word for ${u.first_name} ${u.last_name}`}
                       >
                         <option value="">— none —</option>
                         {CLASSIFICATIONS.map((c) => (
@@ -711,7 +801,7 @@ export default function AdminUsers() {
                       )}
                       {u.order_count > 0 && (
                         <Link
-                          to={`/admin/orders?search=${encodeURIComponent(u.email)}`}
+                          to={`/admin/orders?search=${encodeURIComponent(u.email ?? u.phone ?? u.first_name)}`}
                           className="btn btn-ghost btn-xs btn-square"
                           aria-label={`Orders for ${u.first_name}`}
                           title="See their orders"

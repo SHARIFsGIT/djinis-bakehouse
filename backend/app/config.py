@@ -139,6 +139,10 @@ class Settings(BaseSettings):
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
     twilio_from_number: str = ""
+    # A phone number typed the national way ("0176 …") is read as this
+    # country's — the shop's own. Digits only, no "+". A number from anywhere
+    # else is typed with its "+" and country code (app/phones.py).
+    phone_default_country_code: str = "49"
 
     # Auth rate limiting (per IP, sliding window)
     login_rate_limit: int = 10  # attempts per minute

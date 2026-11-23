@@ -71,6 +71,15 @@ export default function ForgotPassword() {
             <button type="submit" className="btn btn-primary btn w-full" disabled={busy}>
               {busy ? <span className="loading loading-spinner loading-sm" /> : "Send reset link"}
             </button>
+            {/* An account opened with a phone number has no mailbox for a
+                link to land in — the bakery hands one over instead. */}
+            <p className="rounded-box bg-base-200/60 p-3 text-xs leading-relaxed opacity-80">
+              Signed up with a phone number and no email? Get in touch with the bakery —{" "}
+              <Link to="/contact" className="link link-secondary font-semibold">
+                find us here
+              </Link>{" "}
+              — and we&rsquo;ll send you a reset link.
+            </p>
             <p className="text-center text-sm opacity-70">
               <Link to="/login" className="link link-secondary font-semibold">
                 Back to log in

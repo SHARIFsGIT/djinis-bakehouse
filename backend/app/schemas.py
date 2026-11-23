@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
+from .email import shown_email
 from .models import BulkEnquiryStatus, OrderStatus, PaymentMethod, UserRole
 from .vat import VatCategory
 
@@ -58,8 +59,23 @@ def _label_or_home(value):
 # Auth
 # --------------------------------------------------------------------------
 
+def _sign_in_phone(value: str) -> str:
+    """A phone number that is to be somebody's way in must say which country
+    it belongs to: a "+" and the country code, or the national leading 0
+    (read as the shop's own country). Bare digits could be either."""
+    if not (value.startswith("+") or value.startswith("0")):
+        raise ValueError(
+            "start the phone number with 0, or with + and your country code (like +49 176 555 0100)"
+        )
+    return value
+
+
 class RegisterRequest(BaseModel):
-    email: EmailStr
+    """An account needs one way in: an email address, or a phone number.
+    Both may be given; with a phone number alone the account simply has no
+    mailbox (no emailed receipts or reset links until one is added)."""
+
+    email: EmailStr | None = None
     password: str = Field(min_length=8, max_length=72)
     first_name: str = Field(min_length=1, max_length=100)
     # Optional so the signup form can be one "Your name" field — plenty of
@@ -74,10 +90,32 @@ class RegisterRequest(BaseModel):
     def _normalize(cls, value: str | None) -> str | None:
         return normalize_phone(value)
 
+    @model_validator(mode="after")
+    def _one_way_in(self):
+        if self.email is None:
+            if not self.phone:
+                raise ValueError("give an email address or a phone number")
+            _sign_in_phone(self.phone)
+        return self
+
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    """Email and password, or phone number and password — one or the other."""
+
+    email: EmailStr | None = None
+    phone: str | None = Field(default=None, max_length=30)
     password: str = Field(min_length=1, max_length=72)
+
+    @field_validator("phone")
+    @classmethod
+    def _normalize(cls, value: str | None) -> str | None:
+        return normalize_phone(value) or None
+
+    @model_validator(mode="after")
+    def _one_identifier(self):
+        if (self.email is None) == (self.phone is None):
+            raise ValueError("log in with an email address or a phone number")
+        return self
 
 
 class RefreshRequest(BaseModel):
@@ -136,7 +174,8 @@ class LoginCodeExchange(BaseModel):
 
 class UserOut(ORMModel):
     id: int
-    email: EmailStr
+    # None for an account opened with a phone number alone.
+    email: EmailStr | None = None
     first_name: str
     last_name: str
     phone: str | None
@@ -145,6 +184,11 @@ class UserOut(ORMModel):
     is_active: bool
     created_at: datetime
 
+    @field_validator("email", mode="before")
+    @classmethod
+    def _no_parked_address(cls, value):
+        return shown_email(value)
+
 
 class UserUpdateRequest(BaseModel):
     first_name: str | None = Field(default=None, min_length=1, max_length=100)
@@ -152,6 +196,9 @@ class UserUpdateRequest(BaseModel):
     # name to give, and they must still be able to save their profile.
     last_name: str | None = Field(default=None, max_length=100)
     phone: str | None = Field(default=None, max_length=30)
+    # Only for an account that has none yet (it was opened with a phone
+    # number): adding one. An address already on file is not changed here.
+    email: EmailStr | None = None
 
     _text = _trimmed("first_name", "last_name")
 
@@ -166,6 +213,14 @@ class TokenResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     user: UserOut
+
+
+class ResetLinkOut(BaseModel):
+    """A one-shot password reset link made at the desk, to hand to a customer
+    who cannot be emailed one."""
+
+    link: str
+    expires_minutes: int
 
 
 class AccessTokenResponse(BaseModel):
@@ -925,6 +980,19 @@ class DayRevenueOut(BaseModel):
     orders: int
 
 
+class PeriodStatsOut(BaseModel):
+    """What one stretch of days amounted to — kept orders in the active
+    currency placed inside it, and the customers who signed up in it. The
+    dashboard shows the last stretch beside the one before, so each figure
+    comes with "more or less than before?" already answered."""
+
+    days: int
+    revenue: float
+    orders: int
+    avg_order_value: float
+    new_customers: int
+
+
 class AdminStatsOut(BaseModel):
     """The desk's morning page. The headline money figures describe the
     shop's *active* currency (settings.stripe_currency) only — for an
@@ -949,7 +1017,21 @@ class AdminStatsOut(BaseModel):
     top_products: list[dict]
     recent_orders: list[OrderOut]
     low_stock: list[ProductCard]
+    # low_stock shows the first few; this is how many there are in all.
+    low_stock_count: int = 0
     new_enquiries: int = 0
+    # The last 30 days, and the 30 before them (same measure as the chart).
+    period: PeriodStatsOut | None = None
+    previous_period: PeriodStatsOut | None = None
+    # What is on the bench: open orders that carry a delivery date, soonest
+    # first — a date that has passed leads the list. shop_date is the shop's
+    # own calendar day, so "today" on the desk means what it means on an order.
+    due_orders: list[OrderOut] = []
+    # due_orders shows the soonest few; this is how many there are in all.
+    due_count: int = 0
+    due_today: int = 0
+    overdue_orders: int = 0
+    shop_date: date | None = None
     revenue_by_currency: list[CurrencyStatsOut] = Field(
         default=[],
         description="The complete currency-separated breakdown, one entry per "

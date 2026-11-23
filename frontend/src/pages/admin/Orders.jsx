@@ -222,7 +222,7 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
         <div>
           <h3 className="font-display text-xl font-bold">{order.order_number}</h3>
           <p className="text-xs opacity-70">
-            {order.customer_name} · {order.customer_email} · {formatDateTime(order.created_at)}
+            {[order.customer_name, order.customer_email, formatDateTime(order.created_at)].filter(Boolean).join(" · ")}
           </p>
         </div>
         <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>

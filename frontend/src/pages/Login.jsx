@@ -1,8 +1,9 @@
-import { Mail, MessageSquare, Smartphone } from "lucide-react";
+import { MessageSquare } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router";
 import client, { apiError } from "../api/client";
 import { returnPath } from "../lib/navigation";
+import { identify, looksLikePhone } from "../lib/signin";
 import { fetchStore } from "../lib/store";
 import PasswordInput from "../components/PasswordInput";
 import { useAuth } from "../context/AuthContext";
@@ -29,16 +30,19 @@ export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [email, setEmail] = useState("");
+  // One field for either way in: an email address or a phone number.
+  const [who, setWho] = useState("");
   const [password, setPassword] = useState("");
+  const [unclear, setUnclear] = useState(false);
   const [busy, setBusy] = useState(false);
   const [demoAccounts, setDemoAccounts] = useState(false);
-  // Which sign-in rails this deployment offers — a rail with no keys behind
-  // it never shows a customer a button that can't work.
+  // Which extra sign-in rails this deployment offers — a rail with no keys
+  // behind it never shows a customer a button that can't work.
   const [rails, setRails] = useState({ phone: false, facebook: false });
-  const [tab, setTab] = useState("email"); // "email" | "phone"
 
-  // Phone sign-in: the number, the "code is out" step, the code itself.
+  // The texted-code rail (only where the shop can send texts): the number,
+  // the "code is out" step, the code itself.
+  const [byCode, setByCode] = useState(false);
   const [phone, setPhone] = useState("");
   const [codeSent, setCodeSent] = useState(null); // { message, dev_code? }
   const [code, setCode] = useState("");
@@ -63,9 +67,14 @@ export default function Login() {
 
   const submit = async (e) => {
     e.preventDefault();
+    const id = identify(who);
+    if (!id) {
+      setUnclear(true);
+      return;
+    }
     setBusy(true);
     try {
-      const user = await login(email, password);
+      const user = await login(id, password);
       toast.success(`Welcome back, ${user.first_name}`);
       navigate(from, { replace: true });
     } catch (err) {
@@ -116,6 +125,18 @@ export default function Login() {
     }
   };
 
+  // Over to the texted code, carrying across a number already typed.
+  const useCode = () => {
+    if (looksLikePhone(who)) setPhone(who.trim());
+    setByCode(true);
+  };
+
+  const usePassword = () => {
+    setByCode(false);
+    setCodeSent(null);
+    setCode("");
+  };
+
   return (
     <div className="mx-auto flex max-w-md flex-col px-4 py-16">
       <div className="rise-in rounded-box glass p-8 shadow-lg ring-1 ring-base-300/60">
@@ -123,45 +144,36 @@ export default function Login() {
         <h1 className="font-display mt-4 text-center text-3xl font-semibold">Welcome back</h1>
         <p className="mt-1 text-center text-sm opacity-70">Log in to check out faster.</p>
 
-        {rails.phone && (
-          <div className="mt-6 grid grid-cols-2 gap-1 rounded-full bg-base-200 p-1" role="tablist">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === "email"}
-              onClick={() => setTab("email")}
-              className={`btn btn-sm rounded-full ${tab === "email" ? "btn-secondary" : "btn-ghost"}`}
-            >
-              <Mail size={15} />
-              Email
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab === "phone"}
-              onClick={() => setTab("phone")}
-              className={`btn btn-sm rounded-full ${tab === "phone" ? "btn-secondary" : "btn-ghost"}`}
-            >
-              <Smartphone size={15} />
-              Phone
-            </button>
-          </div>
-        )}
-
-        {tab === "email" ? (
+        {!byCode ? (
           <form onSubmit={submit} className="mt-6 space-y-4">
             <div>
-              <label className="label text-xs" htmlFor="email">Email</label>
+              <label className="label text-xs" htmlFor="email">Email or phone number</label>
+              {/* One field, either way in. The email keyboard has the letters,
+                  the digits, "@" and "+" — enough for both. */}
               <input
                 id="email"
-                type="email"
-                className="input input-bordered w-full"
-                placeholder="you@example.com"
-                autoComplete="email"
+                type="text"
+                inputMode="email"
+                className={`input input-bordered w-full ${unclear ? "input-error" : ""}`}
+                placeholder="you@example.com or 0176 555 0100"
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                aria-invalid={unclear}
+                aria-describedby={unclear ? "login-who-problem" : undefined}
+                value={who}
+                onChange={(e) => {
+                  setWho(e.target.value);
+                  setUnclear(false);
+                }}
               />
+              {unclear && (
+                <p id="login-who-problem" className="mt-1.5 text-xs font-semibold text-error" role="alert">
+                  Enter the email address or the phone number on your account.
+                </p>
+              )}
             </div>
             <div>
               <div className="mb-1 flex items-baseline justify-between gap-4">
@@ -233,45 +245,58 @@ export default function Login() {
                 type="tel"
                 autoComplete="tel"
                 className="input input-bordered w-full"
-                placeholder="+49 176 555 0100"
+                placeholder="0176 555 0100"
                 required
                 maxLength={30}
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
               />
               <p className="mt-1.5 text-xs opacity-70">
-                The number saved on your account — country code included.
+                The number on your account. From outside Germany, start with + and your country code.
               </p>
             </div>
             <button type="submit" className="btn btn-primary w-full" disabled={phoneBusy || !phone}>
               {phoneBusy ? (
                 <span className="loading loading-spinner loading-sm" />
               ) : (
-                <MessageSquare size={16} />
+                <MessageSquare size={16} aria-hidden="true" />
               )}
               {phoneBusy ? "Sending…" : "Text me a sign-in code"}
             </button>
           </form>
         )}
 
-        {rails.facebook && (
-          <>
-            <div className="mt-5 flex items-center gap-3 text-xs opacity-65">
-              <span className="h-px flex-1 bg-base-content/20" />
-              or
-              <span className="h-px flex-1 bg-base-content/20" />
-            </div>
-            <button
-              type="button"
-              onClick={goFacebook}
-              disabled={fbBusy}
-              className="btn btn-sm mt-3 w-full border-none text-white hover:border-none"
-              style={{ backgroundColor: "#1877F2" }}
-            >
-              {fbBusy ? <span className="loading loading-spinner loading-xs" /> : <FacebookMark size={16} />}
-              Continue with Facebook
+        {/* The other ways in. A texted code only where the shop can send
+            texts; Facebook only where its keys are set. */}
+        {(rails.phone || rails.facebook) && (
+          <div className="mt-5 flex items-center gap-3 text-xs opacity-70">
+            <span className="h-px flex-1 bg-base-content/20" />
+            or
+            <span className="h-px flex-1 bg-base-content/20" />
+          </div>
+        )}
+        {rails.phone &&
+          (byCode ? (
+            <button type="button" onClick={usePassword} className="btn btn-ghost btn-sm mt-3 w-full border border-base-300">
+              Log in with a password instead
             </button>
-          </>
+          ) : (
+            <button type="button" onClick={useCode} className="btn btn-ghost btn-sm mt-3 w-full border border-base-300">
+              <MessageSquare size={15} aria-hidden="true" />
+              Text me a sign-in code
+            </button>
+          ))}
+        {rails.facebook && (
+          <button
+            type="button"
+            onClick={goFacebook}
+            disabled={fbBusy}
+            className="btn btn-sm mt-3 w-full border-none text-white hover:border-none"
+            style={{ backgroundColor: "#1877F2" }}
+          >
+            {fbBusy ? <span className="loading loading-spinner loading-xs" /> : <FacebookMark size={16} />}
+            Continue with Facebook
+          </button>
         )}
 
         <p className="mt-4 text-center text-sm opacity-70">
@@ -295,7 +320,8 @@ export default function Login() {
                 type="button"
                 className="btn btn-ghost btn-xs border border-base-300"
                 onClick={() => {
-                  setEmail(acct.email);
+                  usePassword();
+                  setWho(acct.email);
                   setPassword(acct.password);
                 }}
               >

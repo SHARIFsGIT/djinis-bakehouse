@@ -63,8 +63,10 @@ export function AuthProvider({ children }) {
     return data.user;
   }, []);
 
+  // `who` is `{ email }` or `{ phone }` — whichever the customer typed
+  // (lib/signin.js tells them apart); the password goes with either.
   const login = useCallback(
-    async (email, password) => applyTokens((await client.post("/auth/login", { email, password })).data),
+    async (who, password) => applyTokens((await client.post("/auth/login", { ...who, password })).data),
     [applyTokens]
   );
 

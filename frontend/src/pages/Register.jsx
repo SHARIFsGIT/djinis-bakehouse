@@ -5,6 +5,7 @@ import PasswordInput from "../components/PasswordInput";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { returnPath } from "../lib/navigation";
+import { identify, looksLikePhone, saysItsCountry } from "../lib/signin";
 
 export default function Register() {
   const { register, user, ready } = useAuth();
@@ -12,20 +13,23 @@ export default function Register() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [form, setForm] = useState({
-    name: "",
-    email: "",
-    phone: "",
-    password: "",
-  });
+  // Three things to type: a name, one way in (an email address or a phone
+  // number — whichever the customer will remember), a password.
+  const [form, setForm] = useState({ name: "", who: "", password: "" });
+  const [problem, setProblem] = useState("");
   const [busy, setBusy] = useState(false);
 
   const from = returnPath(location);
 
-  const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+  const set = (key) => (e) => {
+    setForm((f) => ({ ...f, [key]: e.target.value }));
+    if (key === "who") setProblem("");
+  };
 
   // Already signed in — nothing to create.
   if (ready && user && !busy) return <Navigate to={from} replace />;
+
+  const byPhone = looksLikePhone(form.who);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -33,16 +37,23 @@ export default function Register() {
     // follows is the last — a single name is fine too.
     const parts = form.name.trim().split(/\s+/);
     if (!parts[0]) return;
+    const id = identify(form.who);
+    if (!id) {
+      setProblem("Enter an email address or a phone number — you'll log in with it.");
+      return;
+    }
+    if (id.phone && !saysItsCountry(id.phone)) {
+      setProblem("Start the number with 0, or with + and your country code (like +49 176 555 0100).");
+      return;
+    }
     setBusy(true);
     try {
-      const payload = {
+      const user = await register({
         first_name: parts[0],
         last_name: parts.slice(1).join(" "),
-        email: form.email,
         password: form.password,
-      };
-      if (form.phone.trim()) payload.phone = form.phone.trim();
-      const user = await register(payload);
+        ...id,
+      });
       toast.success(`Welcome to the bakehouse, ${user.first_name}`);
       navigate(from, { replace: true });
     } catch (err) {
@@ -76,12 +87,37 @@ export default function Register() {
             />
           </div>
           <div>
-            <label className="label text-xs" htmlFor="reg-email">Email</label>
-            <input id="reg-email" type="email" className="input input-bordered w-full" placeholder="you@example.com" autoComplete="email" required value={form.email} onChange={set("email")} />
-          </div>
-          <div>
-            <label className="label text-xs" htmlFor="phone">Phone (optional)</label>
-            <input id="phone" className="input input-bordered w-full" maxLength={30} autoComplete="tel" value={form.phone} onChange={set("phone")} />
+            <label className="label text-xs" htmlFor="reg-email">Email or phone number</label>
+            <input
+              id="reg-email"
+              type="text"
+              inputMode="email"
+              className={`input input-bordered w-full ${problem ? "input-error" : ""}`}
+              placeholder="you@example.com or 0176 555 0100"
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              required
+              maxLength={255}
+              aria-invalid={Boolean(problem)}
+              aria-describedby="reg-who-note"
+              value={form.who}
+              onChange={set("who")}
+            />
+            {/* One line under the field, saying what matters for what was
+                typed: a problem, what a phone number alone means, or simply
+                what the field is for. */}
+            <p
+              id="reg-who-note"
+              className={`mt-1.5 text-xs ${problem ? "font-semibold text-error" : "opacity-70"}`}
+              role={problem ? "alert" : undefined}
+            >
+              {problem ||
+                (byPhone
+                  ? "You'll log in with this number. Receipts and password resets go by email — add one in your profile whenever you like."
+                  : "Whichever you'll remember — it's what you log in with.")}
+            </p>
           </div>
           <PasswordInput
             id="reg-password"

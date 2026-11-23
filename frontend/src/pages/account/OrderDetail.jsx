@@ -283,14 +283,20 @@ export default function OrderDetail() {
             </p>
             {online ? (
               order.payment_status === "paid" ? (
-                <p className="text-sm">Paid — your receipt was emailed to you.</p>
+                <p className="text-sm">
+                  {order.customer_email
+                    ? "Paid — your receipt was emailed to you."
+                    : "Paid — your receipt is here, under “View receipt”."}
+                </p>
               ) : order.payment_status !== "pending" ? (
                 <p className="text-sm">{payment.label}.</p>
               ) : settling ? (
                 <p className="text-sm">
                   {provider} is still confirming your payment — with some ways
                   of paying that takes a while. There is nothing more to do:
-                  your receipt is emailed the moment it clears.
+                  {order.customer_email
+                    ? " your receipt is emailed the moment it clears."
+                    : " this page turns to “Paid” the moment it clears."}
                 </p>
               ) : (
                 <div className="text-sm">
@@ -519,8 +525,11 @@ export default function OrderDetail() {
               <p className="text-sm font-semibold">Payment being confirmed</p>
               <p className="mt-1 text-xs opacity-70">
                 You&rsquo;ve done your part — {provider} is still settling this
-                payment. Your receipt is emailed the moment it clears, and
-                there is nothing to pay again.
+                payment.{" "}
+                {order.customer_email
+                  ? "Your receipt is emailed the moment it clears"
+                  : "This page turns to “Paid” the moment it clears"}
+                , and there is nothing to pay again.
               </p>
               <button
                 type="button"

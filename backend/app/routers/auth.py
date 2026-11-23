@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import secrets
+import threading
 from datetime import timedelta
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile, status
@@ -10,9 +11,15 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
-from .. import facebook_gateway, payment_ops, sms_gateway
+from .. import facebook_gateway, payment_ops, phones, sms_gateway
 from ..config import get_settings
-from ..email import DELETED_ACCOUNT_DOMAIN, reset_password_email, send_email
+from ..email import (
+    DELETED_ACCOUNT_DOMAIN,
+    PHONE_ACCOUNT_DOMAIN,
+    is_parked,
+    reset_password_email,
+    send_email,
+)
 from ..facebook_gateway import FacebookError
 from ..models import (
     Address,
@@ -103,56 +110,97 @@ def _token_response(user: User) -> TokenResponse:
     )
 
 
+def _phone_holders(db, phone: str, *, apart_from: int | None = None) -> list[User]:
+    """The accounts a phone number is on file for — whichever way either
+    side spelled it (app/phones.py). Oldest first; never more than a few."""
+    query = select(User).where(User.phone.in_(phones.spellings(phone)))
+    if apart_from is not None:
+        query = query.where(User.id != apart_from)
+    return list(db.scalars(query.order_by(User.id).limit(3)))
+
+
+# There is no unique index on the phone column (accounts older than phone
+# sign-in may share a number), so "is this number free?" and "take it" are
+# two steps. The lock makes them one for everyone inside this process —
+# which is the whole deployment: one worker, by design (render.yaml).
+_phone_claim = threading.Lock()
+
+# What a login for an account that does not exist is checked against, so it
+# takes as long as one for an account that does — the answer's wording is
+# the same either way, and its timing should not give away what it won't.
+_NOBODY = hash_password(secrets.token_urlsafe(16))
+
+
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, db: DbSession, request: Request, background: BackgroundTasks):
     _check_rate_limit(request, "register")
-    if db.scalar(select(User).where(User.email == payload.email.lower())):
+    email = payload.email.lower() if payload.email else None
+    phone = phones.canonical(payload.phone) if payload.phone else None
+    if is_parked(email):
+        # The shop's own parking domains are its to write, nobody's to claim.
+        raise HTTPException(status_code=400, detail="That email address can't be used for an account")
+    if email and db.scalar(select(User).where(User.email == email)):
         raise HTTPException(status_code=409, detail="An account with this email already exists")
-    # One number, one account — phone sign-in looks the number up, so two
-    # accounts sharing it would sign each other in.
-    if payload.phone and db.scalar(select(User.id).where(User.phone == payload.phone)):
-        raise HTTPException(
-            status_code=409, detail="An account with this phone number already exists — log in instead"
-        )
 
-    user = User(
-        email=payload.email.lower(),
-        password_hash=hash_password(payload.password),
-        first_name=payload.first_name.strip(),
-        last_name=payload.last_name.strip(),
-        phone=payload.phone or None,
-    )
-    db.add(user)
-    try:
-        db.flush()
-    except IntegrityError:
-        # The same sign-up arrived twice at once (a double tap): both passed
-        # the check above, and the other request's insert won the unique
-        # email. Same answer as finding it there — not a 500.
-        db.rollback()
-        raise HTTPException(
-            status_code=409, detail="An account with this email already exists"
-        ) from None
-    # A new regular is news worth hearing at the desk.
-    notify_admin(
-        db,
-        kind="customer",
-        title=f"New customer — {user.full_name}",
-        body=user.email,
-        link="/admin/users",
-        background=background,
-    )
-    db.commit()
+    with _phone_claim:
+        # One number, one account — signing in with a phone number looks the
+        # number up, so two accounts sharing it would open each other.
+        if phone and _phone_holders(db, phone):
+            raise HTTPException(
+                status_code=409, detail="An account with this phone number already exists — log in instead"
+            )
+        user = User(
+            # An account opened with a phone number alone still needs a
+            # unique, well-formed entry in the address column; it gets a
+            # parked one that nobody is shown and nothing is sent to.
+            email=email or f"phone-{secrets.token_hex(8)}@{PHONE_ACCOUNT_DOMAIN}",
+            password_hash=hash_password(payload.password),
+            first_name=payload.first_name.strip(),
+            last_name=payload.last_name.strip(),
+            phone=phone,
+        )
+        db.add(user)
+        try:
+            db.flush()
+        except IntegrityError:
+            # The same sign-up arrived twice at once (a double tap): both
+            # passed the check above, and the other request's insert won the
+            # unique email. Same answer as finding it there — not a 500.
+            db.rollback()
+            raise HTTPException(
+                status_code=409, detail="An account with this email already exists"
+            ) from None
+        # A new regular is news worth hearing at the desk.
+        notify_admin(
+            db,
+            kind="customer",
+            title=f"New customer — {user.full_name}",
+            body=user.mailbox or user.phone,
+            link="/admin/users",
+            background=background,
+        )
+        db.commit()
     db.refresh(user)
     return _token_response(user)
 
 
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, db: DbSession, request: Request):
+    """Email and password, or phone number and password."""
     _check_rate_limit(request, "login")
-    user = db.scalar(select(User).where(User.email == payload.email.lower()))
-    if user is None or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Incorrect email or password")
+    if payload.email:
+        known = list(db.scalars(select(User).where(User.email == payload.email.lower())))
+        wrong = "Incorrect email or password"
+    else:
+        # A number shared by two old accounts is still one way in for each:
+        # the password says whose.
+        known = _phone_holders(db, payload.phone)
+        wrong = "Incorrect phone number or password"
+    user = next((u for u in known if verify_password(payload.password, u.password_hash)), None)
+    if user is None:
+        if not known:
+            verify_password(payload.password, _NOBODY)
+        raise HTTPException(status_code=401, detail=wrong)
     if not user.is_active:
         raise HTTPException(status_code=403, detail="This account has been deactivated")
     return _token_response(user)
@@ -247,11 +295,10 @@ def phone_request(
         "message": f"If that number is with us, a sign-in code is on its way — "
         f"it works for {PHONE_OTP_MINUTES} minutes."
     }
-    user = db.scalar(
-        select(User).where(User.phone == payload.phone, User.is_active.is_(True))
-    )
+    user = next((u for u in _phone_holders(db, payload.phone) if u.is_active), None)
     if user is None:
         return message
+    number = phones.canonical(user.phone)
     now = utcnow()
     if (
         user.phone_otp_created_at is not None
@@ -264,7 +311,7 @@ def phone_request(
     # number itself, not the caller's address, so it holds whoever asks and
     # from wherever — and answered with the same words as everything else,
     # so it tells a prober nothing.
-    if not request.app.state.limiters["otp_number"].allow(payload.phone):
+    if not request.app.state.limiters["otp_number"].allow(number):
         logger.warning("sign-in code ceiling reached for a number — no code sent this hour")
         return message
 
@@ -278,7 +325,7 @@ def phone_request(
 
     background.add_task(
         sms_gateway.send_sms,
-        payload.phone,
+        number,
         f"{settings.bakery_name}: your sign-in code is {code}. "
         f"It works once, for {PHONE_OTP_MINUTES} minutes.",
     )
@@ -301,9 +348,7 @@ def phone_verify(payload: PhoneLoginVerify, db: DbSession, request: Request):
             status_code=400, detail="That code is wrong or has expired — send a fresh one."
         )
 
-    user = db.scalar(
-        select(User).where(User.phone == payload.phone, User.is_active.is_(True))
-    )
+    user = next((u for u in _phone_holders(db, payload.phone) if u.is_active), None)
     if user is None or not user.phone_otp_hash:
         raise refused()
     user.phone_otp_attempts += 1
@@ -460,20 +505,47 @@ def update_me(payload: UserUpdateRequest, user: CurrentUser, db: DbSession):
         user.first_name = payload.first_name.strip()
     if payload.last_name is not None:
         user.last_name = payload.last_name.strip()
-    if payload.phone is not None:
-        phone = payload.phone or None  # an emptied field clears the number
-        if phone and db.scalar(select(User.id).where(User.phone == phone, User.id != user.id)):
+    if payload.email is not None and payload.email.lower() != (user.mailbox or "").lower():
+        # Adding an address to an account opened with a phone number. One
+        # already on file is the account's identity and is not changed here.
+        if user.mailbox:
+            raise HTTPException(status_code=400, detail="Your email address can't be changed here")
+        email = payload.email.lower()
+        if is_parked(email):
+            raise HTTPException(status_code=400, detail="That email address can't be used for an account")
+        if db.scalar(select(User.id).where(User.email == email, User.id != user.id)):
+            raise HTTPException(status_code=400, detail="Another account already uses this email address")
+        user.email = email
+    # "Is the number free?" and "take it" as one step (see _phone_claim).
+    with _phone_claim:
+        if payload.phone is not None:
+            phone = (phones.canonical(payload.phone) if payload.phone else None) or None  # emptied = cleared
+            if phone is None and not user.mailbox:
+                # The number is this account's only way in.
+                raise HTTPException(
+                    status_code=400,
+                    detail="Add an email address first — your phone number is how you sign in",
+                )
+            if phone and _phone_holders(db, phone, apart_from=user.id):
+                raise HTTPException(
+                    status_code=400, detail="Another account already uses this phone number"
+                )
+            if phone != user.phone:
+                # A code texted to the old number must never open the new one.
+                user.phone_otp_hash = None
+                user.phone_otp_expires = None
+                user.phone_otp_created_at = None
+                user.phone_otp_attempts = 0
+            user.phone = phone
+        try:
+            db.commit()
+        except IntegrityError:
+            # Two accounts reached for the same address at the same moment,
+            # and the other one's write won the unique column.
+            db.rollback()
             raise HTTPException(
-                status_code=400, detail="Another account already uses this phone number"
-            )
-        if phone != user.phone:
-            # A code texted to the old number must never open the new one.
-            user.phone_otp_hash = None
-            user.phone_otp_expires = None
-            user.phone_otp_created_at = None
-            user.phone_otp_attempts = 0
-        user.phone = phone
-    db.commit()
+                status_code=400, detail="Another account already uses this email address"
+            ) from None
     db.refresh(user)
     return user
 
@@ -606,7 +678,7 @@ def export_my_data(user: CurrentUser, db: DbSession):
     return {
         "exported_at": utcnow().isoformat(),
         "account": {
-            "email": user.email,
+            "email": user.mailbox,
             "first_name": user.first_name,
             "last_name": user.last_name,
             "phone": user.phone,

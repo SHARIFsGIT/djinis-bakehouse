@@ -11,6 +11,7 @@ from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, Numer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base, utcnow
+from .email import shown_email
 
 
 class UserRole(str, enum.Enum):
@@ -158,6 +159,13 @@ class User(Base):
         # Single-word names register with an empty last name — never show
         # the trailing space that leaves behind.
         return f"{self.first_name} {self.last_name}".strip()
+
+    @property
+    def mailbox(self) -> str | None:
+        """The email this customer gave, or None for an account opened with
+        a phone number alone (its `email` column then holds a parked
+        address nobody is shown and nothing is sent to — app/email.py)."""
+        return shown_email(self.email)
 
     @property
     def is_admin(self) -> bool:

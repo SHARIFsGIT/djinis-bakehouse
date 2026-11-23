@@ -218,6 +218,20 @@ def test_lines_sum_to_the_invoice_and_the_page_is_dressed(monkeypatch) -> None:
     assert 0 < kwargs["expires_at"] - int(time.time()) <= gateway.SESSION_LIFETIME_SECONDS
 
 
+def test_an_account_with_no_email_gets_a_page_that_asks_for_one() -> None:
+    """An account opened with a phone number has only a parked address in its
+    email column. Stripe must never be handed that — it would mail a receipt
+    into the void; left out, Stripe asks the customer on its own page."""
+    stub = StubStripe()
+    gateway = load_real_gateway(stub)
+    order = make_order()
+    order.user = SimpleNamespace(email="phone-0123456789abcdef@phone.djinisbakehouse.com")
+
+    gateway.create_checkout_session(order, BASE_URL)
+
+    assert "customer_email" not in stub.sessions[0]
+
+
 def test_coupon_discount_rides_as_a_real_stripe_discount() -> None:
     stub = StubStripe()
     gateway = load_real_gateway(stub)

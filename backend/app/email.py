@@ -34,15 +34,41 @@ def _one_line(value: str) -> str:
 # rewrites the email to deleted-account-<id>@ this domain). Nobody reads
 # mail there, so nothing is ever sent to it.
 DELETED_ACCOUNT_DOMAIN = "deleted.djinisbakehouse.com"
+# Where an account that signs in with a phone number — and never gave an
+# email — keeps its place in the address column (routers/auth.register).
+# The same idea as a closed account's parked address: the column stays
+# filled and unique, the address is syntactically valid, and nobody reads
+# mail there, so nothing is ever sent to it. Unlike a closed account's, it
+# is never shown to anyone either: to the customer and to the desk such an
+# account simply has no email (`shown_email`).
+PHONE_ACCOUNT_DOMAIN = "phone.djinisbakehouse.com"
+_NO_MAILBOX = ("@" + DELETED_ACCOUNT_DOMAIN, "@" + PHONE_ACCOUNT_DOMAIN)
+
+
+def is_parked(address: str | None) -> bool:
+    """True for an address on one of the shop's own parking domains. Those
+    are written by the shop alone — nobody may sign up with one, or add one
+    to an account: it would be an account whose email the shop then hides
+    (phone) or treats as closed (deleted)."""
+    return bool(address) and str(address).strip().lower().endswith(_NO_MAILBOX)
+
+
+def shown_email(address: str | None) -> str | None:
+    """`address` as a person should see it: None for an account that signs
+    in with its phone number and has no mailbox behind its address."""
+    if address and str(address).strip().lower().endswith("@" + PHONE_ACCOUNT_DOMAIN):
+        return None
+    return address
 
 
 def _deliverable(to: str) -> str:
     """The recipients worth writing to: `to` (one address, or several
-    comma-separated) without any closed account's parked address."""
+    comma-separated) without any parked address — a closed account's, or a
+    phone-only account's."""
     kept = [
         address.strip()
         for address in str(to or "").split(",")
-        if address.strip() and not address.strip().lower().endswith("@" + DELETED_ACCOUNT_DOMAIN)
+        if address.strip() and not address.strip().lower().endswith(_NO_MAILBOX)
     ]
     return ", ".join(kept)
 
@@ -57,11 +83,17 @@ def send_email(to: str, subject: str, html: str, text: str) -> bool:
     delivered (campaigns) read the answer; everyone else may ignore it."""
     settings = get_settings()
     subject = _one_line(subject)
+    asked = str(to or "").lower()
     to = _deliverable(to)
     if not to:
-        # An order update or receipt for an account that has since been
-        # closed — there is no mailbox behind it any more.
-        logger.info("email not sent — the account behind it was closed (%s)", subject)
+        if "@" + PHONE_ACCOUNT_DOMAIN in asked:
+            # An account that signs in with its phone number and never gave
+            # an email: its orders live on its order page, not in a mailbox.
+            logger.info("email not sent — the account has no email on file (%s)", subject)
+        else:
+            # An order update or receipt for an account that has since been
+            # closed — there is no mailbox behind it any more.
+            logger.info("email not sent — the account behind it was closed (%s)", subject)
         return False
     if not settings.smtp_host:
         logger.warning(

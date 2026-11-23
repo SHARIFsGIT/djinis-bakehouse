@@ -6,15 +6,9 @@ import { Loading } from "../../components/Loading";
 export default function AdminLayout() {
   return (
     <div className="mx-auto max-w-7xl px-4 py-10">
-      <div className="mb-6">
-        <p className="text-xs font-bold tracking-[0.25em] text-secondary uppercase">
-          Back of house
-        </p>
-        <h1 className="font-display mt-1 text-4xl font-semibold">
-          Baker&rsquo;s desk
-        </h1>
-        {/* The bell lives in the navbar now — it rings wherever the baker is */}
-      </div>
+      {/* The heading stands on its own — the bell lives in the navbar, and
+          rings wherever the baker is. */}
+      <h1 className="font-display mb-6 text-3xl font-semibold sm:text-4xl">Baker&rsquo;s desk</h1>
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-[240px_1fr]">
         <div className="h-fit lg:sticky lg:top-24">

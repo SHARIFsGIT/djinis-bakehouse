@@ -1,11 +1,14 @@
 """Admin-only endpoints: dashboard stats, product CRUD, orders, coupons and users."""
 
 import csv
+import hashlib
 import io
+import logging
 import re
+import secrets
 import uuid
 from collections import Counter
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
@@ -77,6 +80,7 @@ from ..schemas import (
     OrderListResponse,
     OrderStatusUpdateRequest,
     PaginationOut,
+    PeriodStatsOut,
     PaymentStatusUpdateRequest,
     ProductCostSummaryOut,
     ProductCreateRequest,
@@ -88,13 +92,16 @@ from ..schemas import (
     TestimonialOut,
     TestimonialUpdate,
     UserAdminUpdateRequest,
+    ResetLinkOut,
     UserOut,
     VoucherLinkRequest,
 )
 from .. import delivery, ledger, payment_ops, shoptime
 from ..loyalty import loyalty_tier as _loyalty
 from ..security import CurrentAdmin, DbSession, site_base
+from .auth import RESET_TOKEN_MINUTES as RESET_LINK_MINUTES
 from ..serialize import csv_safe, like_term, product_to_card, review_summary, verified_buyers
+from ..shoptime import shop_today
 from .. import costing
 from ..vat import REVIEW_STATUS_APPROVED, preview_rate, validate_classification
 from ..uploads import MAX_PRODUCT_PHOTO_BYTES, save_photo
@@ -107,6 +114,8 @@ from .orders import (
 )
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+logger = logging.getLogger("bakery.admin")
 
 # A brand colour is exactly "#rrggbb" — six hex digits, nothing else.
 _HEX_COLOR = re.compile(r"^#[0-9a-f]{6}$")
@@ -195,9 +204,13 @@ def stats(admin: CurrentAdmin, db: DbSession):
     )
 
     recent = db.scalars(select(Order).order_by(Order.created_at.desc()).limit(5)).all()
+    running_low = (Product.stock <= 5, Product.is_available.is_(True))
+    # Emptiest shelf first — the list is short, so it must lead with what
+    # runs out soonest; the tally beside it counts them all.
     low_stock_products = db.scalars(
-        select(Product).where(Product.stock <= 5, Product.is_available.is_(True)).limit(8)
+        select(Product).where(*running_low).order_by(Product.stock.asc(), Product.name.asc()).limit(8)
     ).all()
+    low_stock_count = db.scalar(select(func.count(Product.id)).where(*running_low))
     low_ratings = review_summary(db, [p.id for p in low_stock_products])
 
     # The trading chart: the active currency's kept orders, one bar per day,
@@ -222,6 +235,60 @@ def stats(admin: CurrentAdmin, db: DbSession):
         revenue, count = by_day.get(day, (0.0, 0))
         revenue_series.append(DayRevenueOut(date=day, revenue=round(revenue, 2), orders=count))
 
+    # The same 30 days as one figure, beside the 30 before them — so the desk
+    # reads "more or less than last month?" without doing sums. Same measure
+    # as the chart (kept orders, active currency), same UTC days.
+    def stretch(first: date, last: date) -> PeriodStatsOut:
+        value, count = 0.0, 0
+        for o in orders:
+            if str(o.currency or "").strip().lower() != active:
+                continue
+            if first <= o.created_at.date() <= last:
+                value += float(o.total)
+                count += 1
+        after = last + timedelta(days=1)
+        signed_up = db.scalar(
+            select(func.count(User.id)).where(
+                User.role == UserRole.CUSTOMER.value,
+                User.created_at >= datetime(first.year, first.month, first.day),
+                User.created_at < datetime(after.year, after.month, after.day),
+            )
+        )
+        return PeriodStatsOut(
+            days=(last - first).days + 1,
+            revenue=round(value, 2),
+            orders=count,
+            avg_order_value=round(value / count, 2) if count else 0.0,
+            new_customers=signed_up or 0,
+        )
+
+    today = utcnow().date()
+    period = stretch(series_start, today)
+    previous_period = stretch(series_start - timedelta(days=30), series_start - timedelta(days=1))
+
+    # What is on the bench: open orders that carry a date, soonest first. A
+    # date that has passed with the order still open leads the list — that is
+    # the one somebody has to look at. "Today" here is the shop's calendar
+    # day (delivery dates are shop dates), not the server's.
+    shop_day = shop_today()
+    still_open = [
+        s.value for s in OrderStatus if s not in (OrderStatus.DELIVERED, OrderStatus.CANCELLED)
+    ]
+    dated = (Order.status.in_(still_open), Order.delivery_date.is_not(None))
+    due_orders = db.scalars(
+        select(Order)
+        .where(*dated)
+        .order_by(Order.delivery_date.asc(), Order.created_at.asc())
+        .limit(6)
+    ).all()
+    due_count = db.scalar(select(func.count(Order.id)).where(*dated))
+    overdue = db.scalar(
+        select(func.count(Order.id)).where(*dated, Order.delivery_date < shop_day)
+    )
+    due_today = db.scalar(
+        select(func.count(Order.id)).where(*dated, Order.delivery_date == shop_day)
+    )
+
     return AdminStatsOut(
         total_revenue=round(active_bucket["total"], 2),
         paid_revenue=round(buckets.get(active, {}).get("paid", 0.0), 2),
@@ -235,6 +302,7 @@ def stats(admin: CurrentAdmin, db: DbSession):
         top_products=[{"name": name, "quantity": int(qty)} for name, qty in top_rows],
         recent_orders=[_serialize(o) for o in recent],
         low_stock=[product_to_card(p, low_ratings) for p in low_stock_products],
+        low_stock_count=low_stock_count or 0,
         # Fresh catering leads the Orders desk shouldn't miss
         new_enquiries=db.scalar(
             select(func.count(BulkEnquiry.id)).where(
@@ -244,6 +312,13 @@ def stats(admin: CurrentAdmin, db: DbSession):
         or 0,
         revenue_by_currency=by_currency,
         revenue_series=revenue_series,
+        period=period,
+        previous_period=previous_period,
+        due_orders=[_serialize(o) for o in due_orders],
+        due_count=due_count or 0,
+        due_today=due_today or 0,
+        overdue_orders=overdue or 0,
+        shop_date=shop_day,
     )
 
 
@@ -397,6 +472,9 @@ def all_orders(
                 User.email.ilike(term, escape="\\"),
                 User.first_name.ilike(term, escape="\\"),
                 User.last_name.ilike(term, escape="\\"),
+                # A customer who signs in with a phone number has no email
+                # to be found by — the number is what the desk knows.
+                User.phone.ilike(term, escape="\\"),
             )
         )
 
@@ -560,7 +638,7 @@ def export_orders(admin: CurrentAdmin, db: DbSession):
                 shoptime.in_shop_time(order.created_at).strftime("%Y-%m-%d %H:%M"),
                 # Customer-typed text: shown by the spreadsheet, never run.
                 csv_safe(order.user.full_name if order.user else ""),
-                csv_safe(order.user.email if order.user else ""),
+                csv_safe((order.user.mailbox or "") if order.user else ""),
                 order.status,
                 order.payment_method,
                 order.payment_status,
@@ -925,7 +1003,7 @@ def _admin_review(review: Review, verified: bool) -> AdminReviewOut:
         product_slug=review.product.slug,
         product_image=review.product.image_url,
         author_name=review.user.full_name if review.user else None,
-        author_email=review.user.email if review.user else None,
+        author_email=review.user.mailbox if review.user else None,
         rating=review.rating,
         comment=review.comment,
         verified_purchase=verified,
@@ -1579,7 +1657,7 @@ def all_users(
         roll = [
             c
             for c in roll
-            if needle in c.email.lower()
+            if needle in (c.email or "").lower()
             or needle in f"{c.first_name} {c.last_name}".lower()
             or (needle_digits and needle_digits in (c.phone or ""))
         ]
@@ -1631,6 +1709,36 @@ def update_user(user_id: int, payload: UserAdminUpdateRequest, admin: CurrentAdm
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.post("/users/{user_id}/reset-link", response_model=ResetLinkOut)
+def make_reset_link(user_id: int, admin: CurrentAdmin, db: DbSession, request: Request):
+    """A password reset link the desk can hand over itself — read out, or
+    sent in a message — for a customer who cannot be emailed one: an account
+    opened with a phone number, or a mailbox the shop's mail never reaches.
+
+    The same one-shot link "Forgot password" emails (only its digest is
+    stored, it works once, for the same few minutes). It opens a customer's
+    account, so it is made for customers only — a baker changes their own
+    password from their profile — and every one is written to the log."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="This account is deactivated — reactivate it first")
+    if user.role == UserRole.ADMIN.value:
+        raise HTTPException(
+            status_code=400, detail="An admin's password is changed from their own profile page"
+        )
+    token = secrets.token_urlsafe(32)
+    user.reset_token_hash = hashlib.sha256(token.encode()).hexdigest()
+    user.reset_token_expires = utcnow() + timedelta(minutes=RESET_LINK_MINUTES)
+    db.commit()
+    logger.info("password reset link made at the desk for user %s by admin %s", user.id, admin.id)
+    return ResetLinkOut(
+        link=f"{site_base(request)}/reset-password?token={token}",
+        expires_minutes=RESET_LINK_MINUTES,
+    )
 
 
 @router.put("/users/{user_id}/classification", response_model=UserOut)

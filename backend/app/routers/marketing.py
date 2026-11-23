@@ -393,6 +393,11 @@ def update_marketing_consent(
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
+    if payload.granted and not user.mailbox:
+        raise HTTPException(
+            status_code=400,
+            detail="This customer has no email address on file — there is nothing to send marketing to",
+        )
     if payload.granted:
         user.marketing_consent_at = utcnow()
         user.marketing_consent_source = payload.source.strip()
@@ -407,7 +412,8 @@ def update_marketing_consent(
         user.marketing_consent_at = None
         user.marketing_consent_source = None
         user.marketing_consent_evidence = None
-        if db.scalar(select(Suppression.id).where(Suppression.email == user.email)) is None:
+        # (An account with no email has no address to put on the list.)
+        if user.mailbox and db.scalar(select(Suppression.id).where(Suppression.email == user.email)) is None:
             db.add(
                 Suppression(email=user.email, reason="withdrawn",
                             note=f"withdrawn by {admin.full_name} at the desk")
@@ -494,7 +500,9 @@ def _campaign_audience(db: DbSession, campaign: MarketingCampaign):
     sendable, held = [], []
     for user in people:
         email = user.email.lower()
-        if email in suppressed:
+        if not user.mailbox:
+            held.append((user, "no email address on file"))
+        elif email in suppressed:
             held.append((user, "suppressed (unsubscribed or withdrawn)"))
         elif user.marketing_consent_at is None:
             held.append((user, "no marketing consent"))
@@ -839,7 +847,8 @@ def _send_campaign_row(db: DbSession, campaign: MarketingCampaign, background: B
         if not user.marketing_token:
             user.marketing_token = _new_marketing_token(db)
     for user, reason in held:
-        db.add(CampaignDelivery(campaign_id=campaign.id, user_id=user.id, email=user.email,
+        db.add(CampaignDelivery(campaign_id=campaign.id, user_id=user.id,
+                                email=user.mailbox or "(no email on file)",
                                 status="suppressed", reason=reason))
     for user in sendable:
         db.add(CampaignDelivery(campaign_id=campaign.id, user_id=user.id, email=user.email,

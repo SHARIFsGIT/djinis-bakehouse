@@ -100,7 +100,7 @@ function CustomerPicker({ picked, onPick, idPrefix }) {
             )}
             <span className="truncate">
               {picked.first_name} {picked.last_name}
-              <span className="ml-1 font-normal opacity-70">{picked.email}</span>
+              <span className="ml-1 font-normal opacity-70">{picked.email ?? `${picked.phone ?? ""} · no email`}</span>
             </span>
           </span>
           <button
@@ -149,7 +149,7 @@ function CustomerPicker({ picked, onPick, idPrefix }) {
                     )}
                     <span className="min-w-0 truncate">
                       <span className="font-semibold">{u.first_name} {u.last_name}</span>
-                      <span className="ml-1 opacity-70">{u.email}</span>
+                      <span className="ml-1 opacity-70">{u.email ?? `${u.phone ?? ""} · no email`}</span>
                     </span>
                   </button>
                 </li>

@@ -372,7 +372,7 @@ def _serialize(
         ],
         timeline=[e for e in order.timeline],
         customer_name=order.user.full_name if order.user else None,
-        customer_email=order.user.email if order.user else None,
+        customer_email=order.user.mailbox if order.user else None,
         cancellation_fee=round(cancel_fee_preview, 2),
         payment_url=payment_url,
         **_payment_overview(order),

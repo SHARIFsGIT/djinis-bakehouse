@@ -52,7 +52,7 @@ export default function ResetPassword() {
                 <Link to="/forgot-password" className="link link-secondary font-semibold">
                   forgot password
                 </Link>{" "}
-                and use the link exactly as emailed.
+                and use the link exactly as you received it.
               </p>
             </div>
           </div>

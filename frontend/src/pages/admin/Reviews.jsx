@@ -67,7 +67,7 @@ function ReviewRow({ review, highlighted, focusRef, onModerate, onDelete }) {
                 )}
               </p>
               <p className="mt-0.5 text-xs opacity-70">
-                {review.author_name ?? "Someone"} · {review.author_email} ·{" "}
+                {[review.author_name ?? "Someone", review.author_email].filter(Boolean).join(" · ")} ·{" "}
                 <span title={formatDateTime(review.created_at)}>
                   {stampTime(review.created_at)}
                 </span>

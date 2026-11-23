@@ -18,6 +18,8 @@ export default function Profile() {
     last_name: user.last_name,
     phone: user.phone ?? "",
   });
+  // Only for an account opened with a phone number: the address it can add.
+  const [newEmail, setNewEmail] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingAvatar, setSavingAvatar] = useState(false);
 
@@ -61,8 +63,12 @@ export default function Profile() {
     e.preventDefault();
     setSavingProfile(true);
     try {
-      await client.put("/auth/me", form);
+      await client.put("/auth/me", {
+        ...form,
+        ...(!user.email && newEmail.trim() ? { email: newEmail.trim() } : {}),
+      });
       await refreshUser();
+      setNewEmail("");
       toast.success("Profile updated");
     } catch (err) {
       toast.error(apiError(err));
@@ -168,21 +174,49 @@ export default function Profile() {
               />
             </div>
           </div>
+          {user.email ? (
+            <div>
+              <label className="label text-xs" htmlFor="p-email">Email (login)</label>
+              <input id="p-email" className="input input-bordered w-full opacity-70" value={user.email} disabled />
+            </div>
+          ) : (
+            // Opened with a phone number: there is no address yet, and this
+            // is where one is added. Once saved it is the account's, and is
+            // shown above like anyone else's.
+            <div>
+              <label className="label text-xs" htmlFor="p-email">Email (optional)</label>
+              <input
+                id="p-email"
+                type="email"
+                className="input input-bordered w-full"
+                placeholder="you@example.com"
+                autoComplete="email"
+                maxLength={255}
+                value={newEmail}
+                onChange={(e) => setNewEmail(e.target.value)}
+              />
+              <p className="mt-1 text-xs opacity-70">
+                You log in with your phone number. Add an email to get receipts and order updates
+                by mail, and to be able to reset a forgotten password yourself.
+              </p>
+            </div>
+          )}
           <div>
-            <label className="label text-xs" htmlFor="p-email">Email (login)</label>
-            <input id="p-email" className="input input-bordered w-full opacity-70" value={user.email} disabled />
-          </div>
-          <div>
-            <label className="label text-xs" htmlFor="p-phone">Phone</label>
+            <label className="label text-xs" htmlFor="p-phone">
+              {user.email ? "Phone" : "Phone (login)"}
+            </label>
             <input
               id="p-phone"
+              type="tel"
+              autoComplete="tel"
               className="input input-bordered w-full"
               maxLength={30}
+              required={!user.email}
               value={form.phone}
               onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
             />
             <p className="mt-1 text-xs opacity-70">
-              Saves with the country code — “+49 176 …” — so it works for phone sign-in.
+              You can log in with this number too. Start it with 0, or with + and your country code.
             </p>
           </div>
           <button type="submit" className="btn btn-primary btn-sm" disabled={savingProfile}>

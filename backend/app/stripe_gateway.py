@@ -16,6 +16,7 @@ import time
 import stripe
 
 from .config import get_settings
+from .email import shown_email
 
 logger = logging.getLogger("bakery.payments")
 
@@ -320,7 +321,6 @@ def create_checkout_session(order, base_url: str) -> dict:
             "cancel_url": f"{base_url}/account/orders/{order.id}?stripe=cancelled",
             # The order number, visible in Stripe's dashboard and exports
             "client_reference_id": order.order_number,
-            "customer_email": order.user.email,
             "expires_at": int(time.time()) + SESSION_LIFETIME_SECONDS,
             "line_items": _line_items(order, base_url, settings, currency),
             "branding_settings": {
@@ -340,6 +340,12 @@ def create_checkout_session(order, base_url: str) -> dict:
                 "metadata": {"order_id": str(order.id)},
             },
         }
+        # Prefilled on Stripe's page when the shop has it. An account opened
+        # with a phone number alone has no email on file: Stripe then asks
+        # for one on its own page, where the receipt is sent from.
+        address = shown_email(order.user.email)
+        if address:
+            session_kwargs["customer_email"] = address
         # Which methods the page offers is Stripe's to compute (the default);
         # an explicit list only filters that set. The old static
         # "payment_method_types" list is deliberately no longer sent: the

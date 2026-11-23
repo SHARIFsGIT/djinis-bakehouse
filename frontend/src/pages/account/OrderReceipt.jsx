@@ -21,6 +21,9 @@ function paymentWords(order) {
   const cancelled = order.status === "cancelled";
   const refunded = money(order.refunded_amount, order.currency);
   const proof = "This receipt is your proof of purchase — keep it safe.";
+  // An account that signs in with a phone number has no mailbox: nothing is
+  // emailed, and this page never says it was.
+  const mailed = Boolean(order.customer_email);
   switch (order.payment_status) {
     case "paid":
       return cancelled && online
@@ -44,14 +47,21 @@ function paymentWords(order) {
         return order.payment_state === "processing"
           ? [
               "Payment being confirmed by the provider.",
-              "Your receipt is emailed the moment the payment clears.",
+              mailed
+                ? "Your receipt is emailed the moment the payment clears."
+                : "This page becomes your receipt the moment the payment clears.",
             ]
           : [
               "Not paid yet — this page is not a proof of purchase.",
-              "Your receipt is emailed once the payment is confirmed.",
+              mailed
+                ? "Your receipt is emailed once the payment is confirmed."
+                : "This page becomes your receipt once the payment is confirmed.",
             ];
       }
-      return ["Due to the courier at your door.", "An order confirmation was emailed to you."];
+      return [
+        "Due to the courier at your door.",
+        mailed ? "An order confirmation was emailed to you." : "Your order is confirmed on its page in your account.",
+      ];
   }
 }
 

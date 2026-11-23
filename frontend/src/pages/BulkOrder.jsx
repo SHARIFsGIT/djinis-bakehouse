@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import client, { apiError } from "../api/client";
 import { EVENT_TYPES, isoDate } from "../lib/format";
 import { useAuth } from "../context/AuthContext";
@@ -22,9 +22,24 @@ export default function BulkOrder() {
     ...EMPTY_FORM,
     name: user ? `${user.first_name} ${user.last_name}`.trim() : "",
     email: user?.email ?? "",
+    // The number on the account saves typing it again — and it is all an
+    // account opened with a phone number has to offer.
+    phone: user?.phone ?? "",
   });
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
+
+  // A page opened directly meets the account a moment after the form does:
+  // what is still empty is filled once it arrives, never over something typed.
+  useEffect(() => {
+    if (!user) return;
+    setForm((f) => ({
+      ...f,
+      name: f.name || `${user.first_name} ${user.last_name}`.trim(),
+      email: f.email || (user.email ?? ""),
+      phone: f.phone || (user.phone ?? ""),
+    }));
+  }, [user]);
 
   const minDate = useMemo(() => {
     const d = new Date();

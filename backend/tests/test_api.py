@@ -463,15 +463,21 @@ def test_phone_login_flow(monkeypatch, caplog):
         "/api/auth/phone/request", json={"phone": "+491765550144"}
     ).json()
 
-    # A differently-spelled number with the + still finds the account;
-    # without the + it is simply not the same number.
+    # A differently-spelled number still finds the account: with the +, and
+    # (since phone numbers became a way to log in, app/phones.py) written
+    # the national way too — a leading 0 is read as the shop's own country.
+    # The same digits under another country's code are another number.
     monkeypatch.setattr(auth_router, "PHONE_RESEND_SECONDS", 0)  # past the throttle
     code = client.post(
         "/api/auth/phone/request", json={"phone": "+49 (176) 555-0144"}
     ).json()["dev_code"]
     assert code
-    assert "dev_code" not in client.post(
+    code = client.post(
         "/api/auth/phone/request", json={"phone": "01765550144"}
+    ).json()["dev_code"]
+    assert code
+    assert "dev_code" not in client.post(
+        "/api/auth/phone/request", json={"phone": "+441765550144"}
     ).json()
 
     # Wrong codes are refused — the right one signs in, once.
@@ -4706,6 +4712,191 @@ def test_stats_carry_a_thirty_day_trading_chart():
     today = series[-1]
     assert today["orders"] >= 1
     assert today["revenue"] > 0
+
+
+def _fresh_shopper(tag: str) -> dict:
+    """A customer no other test uses — so an order moved about in time here
+    never lands in somebody else's history."""
+    made = client.post(
+        "/api/auth/register",
+        json={
+            "email": f"desk-figures-{tag}@example.com",
+            "password": "Sourdough-42",
+            "first_name": "Desk",
+            "last_name": "Figures",
+        },
+    )
+    assert made.status_code == 201, made.text
+    return made.json()
+
+
+def test_stats_put_the_last_thirty_days_beside_the_thirty_before():
+    """The desk's four figures: the last 30 days, with the 30 before them to
+    measure against — the same orders the chart draws, so the two agree."""
+    from datetime import timedelta as _timedelta
+
+    from app.database import SessionLocal, utcnow
+    from app.models import Order as OrderRow, User as UserRow
+
+    admin = admin_headers()
+
+    def figures() -> dict:
+        return client.get("/api/admin/stats", headers=admin).json()
+
+    before = figures()
+    assert before["period"]["days"] == 30
+    assert before["previous_period"]["days"] == 30
+    # one measure: the figure is the chart, added up
+    assert before["period"]["orders"] == sum(d["orders"] for d in before["revenue_series"])
+    assert before["period"]["revenue"] == pytest.approx(
+        sum(d["revenue"] for d in before["revenue_series"]), abs=0.01
+    )
+
+    shopper = _fresh_shopper("thirty")
+    placed = client.post(
+        "/api/orders",
+        json=checkout_payload(payment_method="cash_on_delivery"),
+        headers=auth_header(shopper["access_token"]),
+    )
+    assert placed.status_code == 201, placed.text
+    order = placed.json()
+
+    now = figures()
+    assert now["period"]["orders"] == before["period"]["orders"] + 1
+    assert now["period"]["revenue"] == pytest.approx(
+        before["period"]["revenue"] + order["total"], abs=0.01
+    )
+    assert now["period"]["new_customers"] == before["period"]["new_customers"] + 1
+    assert now["period"]["avg_order_value"] == pytest.approx(
+        now["period"]["revenue"] / now["period"]["orders"], abs=0.01
+    )
+    assert now["previous_period"] == before["previous_period"]
+
+    def move_back(days: int) -> None:
+        db = SessionLocal()
+        try:
+            db.get(OrderRow, order["id"]).created_at = utcnow() - _timedelta(days=days)
+            db.get(UserRow, shopper["user"]["id"]).created_at = utcnow() - _timedelta(days=days)
+            db.commit()
+        finally:
+            db.close()
+
+    # Forty days on, the same order and the same sign-up belong to the
+    # stretch before.
+    move_back(40)
+    earlier = figures()
+    assert earlier["period"] == before["period"]
+    assert earlier["previous_period"]["orders"] == before["previous_period"]["orders"] + 1
+    assert earlier["previous_period"]["revenue"] == pytest.approx(
+        before["previous_period"]["revenue"] + order["total"], abs=0.01
+    )
+    assert (
+        earlier["previous_period"]["new_customers"]
+        == before["previous_period"]["new_customers"] + 1
+    )
+
+    # Older than both stretches: counted in neither, still in the book.
+    move_back(75)
+    older = figures()
+    assert older["period"] == before["period"]
+    assert older["previous_period"] == before["previous_period"]
+    assert older["order_count"] == before["order_count"] + 1
+
+
+def test_a_quiet_stretch_reads_as_zeros_not_as_an_error():
+    """A shop with nothing in the 30 days before divides by nothing — the
+    average is 0, never a crash."""
+    from app.schemas import PeriodStatsOut
+
+    stats = client.get("/api/admin/stats", headers=admin_headers()).json()
+    for stretch in (stats["period"], stats["previous_period"]):
+        PeriodStatsOut(**stretch)
+        if stretch["orders"] == 0:
+            assert stretch["revenue"] == 0
+            assert stretch["avg_order_value"] == 0
+
+
+def test_stats_list_the_dated_orders_still_open_soonest_first():
+    """What is on the bench: open orders that carry a date, the soonest
+    first — one whose date has passed leads, and a delivered one is gone."""
+    from datetime import timedelta as _timedelta
+
+    from app import shoptime
+    from app.database import SessionLocal
+    from app.models import Order as OrderRow
+
+    admin = admin_headers()
+    today = shoptime.shop_today()
+
+    def figures() -> dict:
+        return client.get("/api/admin/stats", headers=admin).json()
+
+    before = figures()
+    assert before["shop_date"] == today.isoformat()
+
+    shopper = _fresh_shopper("bench")
+
+    def place(day) -> dict:
+        made = client.post(
+            "/api/orders",
+            json=checkout_payload(
+                payment_method="cash_on_delivery", delivery_date=day.isoformat()
+            ),
+            headers=auth_header(shopper["access_token"]),
+        )
+        assert made.status_code == 201, made.text
+        return made.json()
+
+    later = place(today + _timedelta(days=3))
+    for_today = place(today)
+    late = place(today)
+
+    def amend(order_id: int, **changes) -> None:
+        db = SessionLocal()
+        try:
+            row = db.get(OrderRow, order_id)
+            for name, value in changes.items():
+                setattr(row, name, value)
+            db.commit()
+        finally:
+            db.close()
+
+    # Checkout refuses a date in the past, so the calendar is moved instead:
+    # this order's day came and went with the order still open.
+    amend(late["id"], delivery_date=today - _timedelta(days=400))
+
+    now = figures()
+    assert now["due_today"] == before["due_today"] + 1
+    assert now["overdue_orders"] == before["overdue_orders"] + 1
+    due = now["due_orders"]
+    assert 1 <= len(due) <= 6
+    assert now["due_count"] == before["due_count"] + 3
+    assert due[0]["id"] == late["id"]
+    dates = [row["delivery_date"] for row in due]
+    assert all(dates) and dates == sorted(dates)
+    assert all(row["status"] not in ("delivered", "cancelled") for row in due)
+
+    # Delivered, it leaves the bench — and the overdue count with it.
+    amend(late["id"], status="delivered")
+    after = figures()
+    assert after["overdue_orders"] == before["overdue_orders"]
+    assert all(row["id"] != late["id"] for row in after["due_orders"])
+
+    # The shelf tally counts every bake running low, not just those listed,
+    # and the list leads with the emptiest shelf.
+    assert now["low_stock_count"] >= len(now["low_stock"])
+    left = [p["stock"] for p in now["low_stock"]]
+    assert left == sorted(left)
+
+    # A cancelled order is not on the bench either.
+    amend(for_today["id"], status="cancelled")
+    assert figures()["due_today"] == before["due_today"]
+
+    # Leave the bench as it was found.
+    amend(later["id"], status="delivered")
+    tidy = figures()
+    assert tidy["due_orders"] == before["due_orders"]
+    assert tidy["due_count"] == before["due_count"]
 
 
 def test_dashboard_refund_webhook_syncs_the_book():
