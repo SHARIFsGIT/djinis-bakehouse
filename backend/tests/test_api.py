@@ -412,13 +412,12 @@ def test_password_reset_flow():
     assert again.status_code == 400
 
 
-def test_phone_login_flow(monkeypatch, caplog):
-    """Phone sign-in: texted one-shot codes, attempt counting, and numbers
-    that always store the one way they're compared."""
-    import logging
-
-    from app.routers import auth as auth_router
-
+def test_phone_login_flow():
+    """Phone numbers on accounts: stored the one way they're compared, one
+    number per account, a password that works with them — and no text
+    sign-in at all where Bird Verify isn't configured, in dev as anywhere:
+    the shop never holds a code it could hand back. (Texted codes, through a
+    stand-in Bird: test_sms_sign_in.py.)"""
     email, password = "texter@example.com", "Texter123!"
     registered = client.post(
         "/api/auth/register",
@@ -432,6 +431,8 @@ def test_phone_login_flow(monkeypatch, caplog):
     )
     assert registered.status_code == 201
     assert registered.json()["user"]["phone"] == "+491765550144"  # normalized on the way in
+    # ...and not trusted for text sign-in until its owner proves it
+    assert registered.json()["user"]["phone_verified"] is False
 
     # A second account can't claim the same number, however it's spelled.
     clash = client.post(
@@ -445,69 +446,23 @@ def test_phone_login_flow(monkeypatch, caplog):
     )
     assert clash.status_code == 409
 
-    # The dev store shows the phone rail (codes come back with the response).
-    assert client.get("/api/store").json()["phone_login"] is True
-
-    # Unknown and known numbers get the same answer — no account probing.
-    with caplog.at_level(logging.INFO, logger="bakery.sms"):
-        unknown = client.post("/api/auth/phone/request", json={"phone": "+49 176 555 0999"})
-        known = client.post("/api/auth/phone/request", json={"phone": "+491765550144"})
-    assert unknown.status_code == known.status_code == 200
-    assert unknown.json()["message"] == known.json()["message"]
-    assert "dev_code" not in unknown.json()
-    code = known.json().get("dev_code")
-    assert code and "sms to +491765550144" in " ".join(caplog.messages)
-
-    # An immediate repeat is quietly throttled — one text a minute per number.
-    assert "dev_code" not in client.post(
-        "/api/auth/phone/request", json={"phone": "+491765550144"}
-    ).json()
-
-    # A differently-spelled number still finds the account: with the +, and
-    # (since phone numbers became a way to log in, app/phones.py) written
-    # the national way too — a leading 0 is read as the shop's own country.
-    # The same digits under another country's code are another number.
-    monkeypatch.setattr(auth_router, "PHONE_RESEND_SECONDS", 0)  # past the throttle
-    code = client.post(
-        "/api/auth/phone/request", json={"phone": "+49 (176) 555-0144"}
-    ).json()["dev_code"]
-    assert code
-    code = client.post(
-        "/api/auth/phone/request", json={"phone": "01765550144"}
-    ).json()["dev_code"]
-    assert code
-    assert "dev_code" not in client.post(
-        "/api/auth/phone/request", json={"phone": "+441765550144"}
-    ).json()
-
-    # Wrong codes are refused — the right one signs in, once.
+    # No Bird Verify, no text sign-in: hidden in the store, the doors shut.
+    assert client.get("/api/store").json()["phone_login"] is False
+    assert client.post("/api/auth/phone/request", json={"phone": "+491765550144"}).status_code == 404
     assert client.post(
-        "/api/auth/phone/verify", json={"phone": "+491765550144", "code": "000000"}
-    ).status_code == 400
-    verified = client.post("/api/auth/phone/verify", json={"phone": "+491765550144", "code": code})
-    assert verified.status_code == 200
-    assert client.get("/api/auth/me", headers=auth_header(verified.json()["access_token"])).status_code == 200
-    assert client.post(
-        "/api/auth/phone/verify", json={"phone": "+491765550144", "code": code}
-    ).status_code == 400  # the code spent itself
+        "/api/auth/phone/verify", json={"phone": "+491765550144", "code": "123456"}
+    ).status_code == 404
 
-    # The password still works — a texted code is not a password change.
+    # The password works with the email, and with the number however it is
+    # typed — a leading 0 is read as the shop's own country. The same digits
+    # under another country's code are another number.
     assert client.post("/api/auth/login", json={"email": email, "password": password}).status_code == 200
-
-    # Five wrong tries burn a code; a fresh one signs straight back in.
-    second = client.post("/api/auth/phone/request", json={"phone": "+491765550144"}).json()
-    for guess in ("111111", "222222", "333333", "444444", "555555"):
-        refused = client.post(
-            "/api/auth/phone/verify", json={"phone": "+491765550144", "code": guess}
-        )
-        assert refused.status_code == 400
+    for typed in ("+49 (176) 555-0144", "01765550144", "+49 (0)176 555 0144"):
+        signed_in = client.post("/api/auth/login", json={"phone": typed, "password": password})
+        assert signed_in.status_code == 200, typed
     assert client.post(
-        "/api/auth/phone/verify", json={"phone": "+491765550144", "code": second["dev_code"]}
-    ).status_code == 400  # burned — even the right code no longer works
-    third = client.post("/api/auth/phone/request", json={"phone": "+491765550144"}).json()
-    assert client.post(
-        "/api/auth/phone/verify", json={"phone": "+491765550144", "code": third["dev_code"]}
-    ).status_code == 200
+        "/api/auth/login", json={"phone": "+441765550144", "password": password}
+    ).status_code == 401
 
     # Taking a number that belongs to another account is refused in the profile.
     other_token = register_and_login("other@example.com", "Other123!")

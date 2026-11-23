@@ -18,7 +18,15 @@ country code (PHONE_DEFAULT_COUNTRY_CODE) is assumed for a number written
 the national way, and a number from anywhere else needs its "+".
 """
 
+import re
+
 from .config import get_settings
+
+# Where a text code may go: a German mobile number in E.164 — +49, then 15x,
+# 16x or 17x. Germany is the one destination switched on in the shop's Bird
+# Verify workspace, and a landline can't take a text: a code sent there
+# would be billed and never read.
+_SMS_NUMBER = re.compile(r"\+491[5-7]\d{8,9}")
 
 
 def _digits(value: str) -> tuple[bool, str]:
@@ -29,18 +37,27 @@ def _digits(value: str) -> tuple[bool, str]:
 def canonical(value: str, country_code: str | None = None) -> str:
     """`value` as it is stored: "+<country><number>" whenever that can be
     told ("+49…", "0049…", or the national "0176…"); otherwise the bare
-    digits, exactly as normalize_phone has always kept them."""
+    digits, exactly as normalize_phone has always kept them.
+
+    The national trunk 0 written behind the shop's own country code —
+    "+49 (0)176 …", "+49 0176 …" — is dropped: it is never dialled from
+    abroad, and kept, it makes a number nothing can be texted to (E.164 has
+    no "+490…")."""
     cc = country_code or get_settings().phone_default_country_code
     plus, digits = _digits(value)
     if not digits:
         return ""
     if plus:
-        return "+" + digits
-    if digits.startswith("00") and len(digits) > 4:
-        return "+" + digits[2:]
-    if digits.startswith("0") and cc:
-        return "+" + cc + digits.lstrip("0")
-    return digits
+        number = "+" + digits
+    elif digits.startswith("00") and len(digits) > 4:
+        number = "+" + digits[2:]
+    elif digits.startswith("0") and cc:
+        number = "+" + cc + digits.lstrip("0")
+    else:
+        return digits
+    if cc and number.startswith("+" + cc + "0"):
+        number = "+" + cc + number[len(cc) + 1 :].lstrip("0")
+    return number
 
 
 def spellings(value: str, country_code: str | None = None) -> list[str]:
@@ -68,4 +85,26 @@ def spellings(value: str, country_code: str | None = None) -> list[str]:
             national = bare[len(cc):]
             found.add("0" + national)
             found.add(national)
+            # How canonical() stored "+49 (0)176 …" before the trunk 0 was
+            # dropped (2026-11-23): such an account is still found.
+            found.add("+" + cc + "0" + national)
     return sorted(s for s in found if s.strip("+"))
+
+
+def sms_number(value: str | None) -> str | None:
+    """The number in `value` as a text code would be sent to it — E.164, a
+    German mobile — or None when no text should go there (a landline, a
+    number from abroad, bare digits that don't say their country)."""
+    if not value:
+        return None
+    number = canonical(value)
+    return number if _SMS_NUMBER.fullmatch(number) else None
+
+
+def masked(number: str | None) -> str:
+    """A number as a log line may show it: the country and network prefix
+    and the last two digits ("+49176*****00") — never the whole of it."""
+    text = str(number or "")
+    if len(text) < 9:
+        return "*" * len(text)
+    return text[:6] + "*" * (len(text) - 8) + text[-2:]

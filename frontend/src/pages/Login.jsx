@@ -44,7 +44,7 @@ export default function Login() {
   // the "code is out" step, the code itself.
   const [byCode, setByCode] = useState(false);
   const [phone, setPhone] = useState("");
-  const [codeSent, setCodeSent] = useState(null); // { message, dev_code? }
+  const [codeSent, setCodeSent] = useState(null); // { message } — never the code itself
   const [code, setCode] = useState("");
   const [phoneBusy, setPhoneBusy] = useState(false);
   const [fbBusy, setFbBusy] = useState(false);
@@ -197,11 +197,6 @@ export default function Login() {
           <div className="mt-6 space-y-4">
             <div className="rounded-box border border-success/40 bg-success/10 p-4 text-sm">
               <p className="font-semibold">{codeSent.message}</p>
-              {codeSent.dev_code && (
-                <p className="mt-2 font-mono">
-                  Dev shortcut (not sent in production): code {codeSent.dev_code}
-                </p>
-              )}
             </div>
             <form onSubmit={verifyCode} className="space-y-4">
               <div>
@@ -252,7 +247,8 @@ export default function Login() {
                 onChange={(e) => setPhone(e.target.value)}
               />
               <p className="mt-1.5 text-xs opacity-70">
-                The number on your account. From outside Germany, start with + and your country code.
+                The mobile number on your account. Text sign-in works once you&rsquo;ve
+                confirmed the number in your profile.
               </p>
             </div>
             <button type="submit" className="btn btn-primary w-full" disabled={phoneBusy || !phone}>

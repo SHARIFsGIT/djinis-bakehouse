@@ -45,7 +45,7 @@ ones below. Every value goes into Render → the service **djinis-bakehouse**
 | --- | --- | --- |
 | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_ENVIRONMENT=live`, `PAYPAL_WEBHOOK_ID` | PayPal as its own option at checkout | developer.paypal.com → Apps & Credentials → a **Live** REST app (needs a PayPal Business account). `PAYMENTS_GO_LIVE.md`, steps 3 and 5. |
 | `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET` | "Continue with Facebook" | developers.facebook.com — README, "Turning on Facebook and phone sign-in" |
-| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` | sign-in codes by SMS | twilio.com — same README section |
+| `BIRD_API_KEY` (a secret) | sign-in codes by SMS through Bird Verify — customers confirm their number first; admins never sign in by text | bird.com dashboard → API keys (EU workspace, Verify read/write) — same README section. Deleting it switches text sign-in off again |
 | `SHOP_TIMEZONE` | the bakery's clock, if it is not `Europe/Berlin` | an IANA zone name |
 | `CLIENT_IP_HEADER` | rate limits keyed on the address your edge reports | only after confirming which header the edge sets itself — see `backend/.env.example` |
 | `TAX_MODE=inclusive` | VAT-inclusive shelf prices | not before every product carries an approved VAT classification — README, "Turning on VAT-inclusive pricing" |

@@ -39,11 +39,11 @@ from ..security import CurrentAdmin, DbSession, OptionalUser, client_key, site_b
 from ..serialize import csv_safe
 from ..delivery import parse_area
 from .. import (
+    bird_verify,
     facebook_gateway,
     payment_ops,
     paypal_gateway,
     shoptime,
-    sms_gateway,
     stripe_gateway,
 )
 
@@ -90,9 +90,9 @@ def storefront(db: DbSession):
         paypal_test_mode=payment_ops.test_modes()["paypal"],
         payments_test_mode=payment_ops.test_mode(),
         facebook_login=facebook_gateway.configured(),
-        # Phone codes only need Twilio in production — in dev the code comes
-        # back with the response (dev_code), so the rail genuinely works.
-        phone_login=sms_gateway.configured() or not get_settings().is_production,
+        # Text sign-in codes exist only where Bird Verify is configured —
+        # every environment alike, since the shop never holds a code itself.
+        phone_login=bird_verify.configured(),
         contact_address=settings.contact_address,
         contact_phone=settings.contact_phone,
         contact_email=settings.contact_email,

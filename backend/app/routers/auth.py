@@ -11,7 +11,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
-from .. import facebook_gateway, payment_ops, phones, sms_gateway
+from .. import bird_verify, facebook_gateway, payment_ops, phones
 from ..config import get_settings
 from ..email import (
     DELETED_ACCOUNT_DOMAIN,
@@ -48,6 +48,7 @@ from ..schemas import (
     LoginCodeExchange,
     LoginRequest,
     PasswordChangeRequest,
+    PhoneCodeCheck,
     PhoneLoginRequest,
     PhoneLoginVerify,
     RefreshRequest,
@@ -80,17 +81,22 @@ settings = get_settings()
 
 # How long an emailed reset link stays usable.
 RESET_TOKEN_MINUTES = 30
-# A texted sign-in code: ten minutes of life, five wrong tries, and a
-# minute before the same number can ask for another (the texts cost money).
+# Texted sign-in codes, generated, sent and checked by Bird Verify — the
+# shop never sees one (app/bird_verify.py). What the shop keeps is its own
+# brake in front of Bird's, set to the workspace's Verify settings: ten
+# minutes of life, five wrong tries, and a minute before the same number
+# can be sent another (the texts cost money).
 PHONE_OTP_MINUTES = 10
 PHONE_OTP_MAX_ATTEMPTS = 5
 PHONE_RESEND_SECONDS = 60
-# ...and how many codes one number may be sent in an hour. Each code allows
-# five guesses, so without this ceiling a patient script gets five guesses
-# a minute at an account for as long as it likes (and, with Twilio on, bills
-# the shop a text a minute while it does). Enforced by the "otp_number"
-# limiter in the app factory.
+# ...and how many codes one number may be sent in an hour and in a day.
+# Each code allows five guesses, so without these ceilings a patient script
+# gets five guesses a minute at an account for as long as it likes, and
+# bills the shop a text each time. Enforced by the "otp_number" and
+# "otp_number_day" limiters in the app factory; Bird's own platform cap
+# (five sends an hour per number) stands behind the first.
 PHONE_CODES_PER_HOUR = 5
+PHONE_CODES_PER_DAY = 10
 # The one-time code a social callback hands the browser — a short window,
 # because the SPA redeems it the instant the page loads.
 LOGIN_CODE_SECONDS = 60
@@ -268,107 +274,263 @@ def reset_password(payload: ResetPasswordRequest, db: DbSession, request: Reques
 
 
 def _require_phone_rail() -> None:
-    """Phone sign-in answers only where its texts can actually be sent.
+    """Text sign-in answers only where Bird Verify is configured — every
+    environment alike. Without it nothing can text a code, and the shop
+    never holds one to hand back (codes live at Bird alone), so the door is
+    simply not there: the storefront hides it (/api/store → phone_login)
+    and these endpoints answer 404."""
+    if not bird_verify.configured():
+        raise HTTPException(status_code=404, detail="Text sign-in is not available")
 
-    On a production deployment without Twilio a code would reach nothing
-    but the server log — the customer could never receive it, yet anyone
-    could keep guessing at it. The storefront already hides the rail there
-    (/api/store → phone_login); the API must not leave the same door ajar.
-    Dev keeps working without Twilio: the code rides back in the response."""
-    if settings.is_production and not sms_gateway.configured():
-        raise HTTPException(status_code=404, detail="Phone sign-in is not configured")
+
+# The answers a check can share with the shop's own brakes — word for word,
+# so a caller can't tell which of them stopped it.
+_TOO_MANY_TRIES = "Too many attempts. Try again in a minute."
+_CANT_CHECK = "We couldn't check the code right now — please try again in a moment."
+_ONLY_MOBILES = (
+    "Text codes go to German mobile numbers (+49 15…, 16… or 17…). "
+    "Check the number in your profile."
+)
+
+
+def _texts_for_customers_only(user: User) -> None:
+    if user.role != UserRole.CUSTOMER.value:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin accounts sign in with their password — text codes aren't used for them.",
+        )
+
+
+def _window_open(user: User, now) -> bool:
+    return user.phone_otp_expires is not None and user.phone_otp_expires > now
+
+
+def _open_window(user: User, now) -> bool:
+    """Note that a code is (about to be) on its way. A verification already
+    open at Bird is reused there — its expiry and its wrong-try budget carry
+    on — so the shop's mirror of it carries on too; only a fresh one starts
+    the clock and the count. True when the window is fresh."""
+    fresh = not _window_open(user, now)
+    if fresh:
+        user.phone_otp_expires = now + timedelta(minutes=PHONE_OTP_MINUTES)
+        user.phone_otp_attempts = 0
+    user.phone_otp_created_at = now  # the latest send, for the cooldown
+    user.phone_otp_hash = None  # codes never reach the shop: nothing to keep
+    return fresh
+
+
+def _close_window(user: User) -> None:
+    user.phone_otp_hash = None
+    user.phone_otp_expires = None
+    user.phone_otp_created_at = None
+    user.phone_otp_attempts = 0
+
+
+def _cooling_down(user: User, now) -> bool:
+    return (
+        _window_open(user, now)
+        and user.phone_otp_created_at is not None
+        and (now - user.phone_otp_created_at).total_seconds() < PHONE_RESEND_SECONDS
+    )
+
+
+def _texts_allowed(request: Request, number: str) -> bool:
+    """The shop's ceilings on texting `number`: per hour and per day for the
+    number itself, whoever is asking, and per day for the whole shop. Each
+    one that answers counts the send, so a refusal only makes the next
+    attempt stricter, never looser."""
+    limiters = request.app.state.limiters
+    if not limiters["otp_number"].allow(number):
+        logger.warning("text codes: hourly ceiling reached for %s", phones.masked(number))
+        return False
+    if not limiters["otp_number_day"].allow(number):
+        logger.warning("text codes: daily ceiling reached for %s", phones.masked(number))
+        return False
+    if not limiters["otp_shop_day"].allow("shop"):
+        logger.error(
+            "text codes: the shop's daily ceiling (SMS_DAILY_LIMIT=%s) is reached — none more today",
+            settings.sms_daily_limit,
+        )
+        return False
+    return True
+
+
+def _sign_in_number(user: User) -> str | None:
+    """Where a sign-in code may go for this account: an active customer's
+    own number, proven by an earlier Bird code, exactly as it is on file
+    now. Never for an admin, never for an unconfirmed or changed number."""
+    if not user.is_active or user.role != UserRole.CUSTOMER.value:
+        return None
+    number = phones.sms_number(user.phone)
+    if number is None or user.phone_verified_number != number:
+        return None
+    return number
+
+
+def _check_code(db, user: User, number: str, code: str) -> bird_verify.Checked:
+    """Put a typed code to Bird — inside the shop's own window and five tries
+    only. The try is counted before Bird is asked. Bird holding back (429)
+    or an answer that can't be trusted signs nobody in."""
+    now = utcnow()
+    if not _window_open(user, now):
+        _close_window(user)
+        db.commit()
+        return bird_verify.Checked(bird_verify.GONE)
+    user.phone_otp_attempts += 1
+    if user.phone_otp_attempts > PHONE_OTP_MAX_ATTEMPTS:
+        _close_window(user)
+        db.commit()
+        return bird_verify.Checked(bird_verify.EXHAUSTED)
+    db.commit()
+    try:
+        result = bird_verify.check(number, code)
+    except bird_verify.TooMany:
+        raise HTTPException(status_code=429, detail=_TOO_MANY_TRIES) from None
+    except bird_verify.Unavailable:
+        raise HTTPException(status_code=503, detail=_CANT_CHECK) from None
+    if result.outcome != bird_verify.WRONG:
+        _close_window(user)  # confirmed, or over for good: either way, done
+        db.commit()
+    return result
 
 
 @router.post("/phone/request")
 def phone_request(
     payload: PhoneLoginRequest, db: DbSession, request: Request, background: BackgroundTasks
 ):
-    """Text the account a one-shot sign-in code.
+    """Text a one-shot sign-in code. Bird generates it, sends it and later
+    checks it; the shop never sees it.
 
-    The same anti-probe shape as forgot-password: the answer never reveals
-    whether the number belongs to an account, and a code that went out
-    seconds ago is never sent twice in a row.
-    """
+    The same anti-probe shape as forgot-password: one answer whether the
+    number belongs to nobody, to an admin, to a customer who never confirmed
+    it, or to one who did — and only that last case sends anything. The
+    send runs after the answer has gone (a background task), so the answer
+    takes the same time either way."""
     _require_phone_rail()
     _check_rate_limit(request, "otp")
     message = {
-        "message": f"If that number is with us, a sign-in code is on its way — "
-        f"it works for {PHONE_OTP_MINUTES} minutes."
+        "message": "If that number belongs to an account and has been confirmed for text "
+        f"sign-in, a code is on its way — it works for {PHONE_OTP_MINUTES} minutes."
     }
-    user = next((u for u in _phone_holders(db, payload.phone) if u.is_active), None)
-    if user is None:
+    holders = [u for u in _phone_holders(db, payload.phone) if u.is_active]
+    if len(holders) != 1:
+        return message  # nobody — or a number two older accounts share
+    user = holders[0]
+    number = _sign_in_number(user)
+    if number is None:
         return message
-    number = phones.canonical(user.phone)
     now = utcnow()
-    if (
-        user.phone_otp_created_at is not None
-        and user.phone_otp_expires is not None
-        and user.phone_otp_expires > now
-        and (now - user.phone_otp_created_at).total_seconds() < PHONE_RESEND_SECONDS
-    ):
-        return message  # a fresh code is still out — don't text twice in a minute
-    # The hourly ceiling per number (PHONE_CODES_PER_HOUR). Keyed on the
-    # number itself, not the caller's address, so it holds whoever asks and
-    # from wherever — and answered with the same words as everything else,
-    # so it tells a prober nothing.
-    if not request.app.state.limiters["otp_number"].allow(number):
-        logger.warning("sign-in code ceiling reached for a number — no code sent this hour")
+    if _cooling_down(user, now):
+        return message  # a code went out under a minute ago
+    if not _texts_allowed(request, number):
         return message
-
-    code = f"{secrets.randbelow(1_000_000):06d}"
-    # Only the digest is stored; the secret lives in the text message alone.
-    user.phone_otp_hash = hashlib.sha256(code.encode()).hexdigest()
-    user.phone_otp_expires = now + timedelta(minutes=PHONE_OTP_MINUTES)
-    user.phone_otp_created_at = now
-    user.phone_otp_attempts = 0
+    _open_window(user, now)
     db.commit()
-
-    background.add_task(
-        sms_gateway.send_sms,
-        number,
-        f"{settings.bakery_name}: your sign-in code is {code}. "
-        f"It works once, for {PHONE_OTP_MINUTES} minutes.",
-    )
-    # Dev convenience: without a Twilio number the code lands in the server
-    # log, so hand it straight back for local testing. Never in production.
-    if not settings.is_production:
-        message["dev_code"] = code
+    background.add_task(bird_verify.send_quietly, number)
     return message
 
 
 @router.post("/phone/verify", response_model=TokenResponse)
 def phone_verify(payload: PhoneLoginVerify, db: DbSession, request: Request):
-    """Turn a texted code into a session. Wrong tries are counted — five
-    and the code burns, so guessing six digits is never worth it."""
+    """Trade a texted code for a session — only once Bird confirms it, and
+    only for the confirmed number of an active customer. Every refusal reads
+    the same, whatever its reason. The shop's own window and five tries come
+    first; Bird's own limits stand behind them."""
     _require_phone_rail()
     _check_rate_limit(request, "login")
-
-    def refused() -> HTTPException:
-        return HTTPException(
-            status_code=400, detail="That code is wrong or has expired — send a fresh one."
-        )
-
-    user = next((u for u in _phone_holders(db, payload.phone) if u.is_active), None)
-    if user is None or not user.phone_otp_hash:
-        raise refused()
-    user.phone_otp_attempts += 1
-    if (
-        user.phone_otp_expires is None
-        or user.phone_otp_expires <= utcnow()
-        or user.phone_otp_attempts > PHONE_OTP_MAX_ATTEMPTS
-    ):
-        user.phone_otp_hash = None  # burned — the next try needs a fresh code
-        db.commit()
-        raise refused()
-    if hashlib.sha256(payload.code.encode()).hexdigest() != user.phone_otp_hash:
-        db.commit()
-        raise refused()
-
-    user.phone_otp_hash = None
-    user.phone_otp_expires = None
-    user.phone_otp_created_at = None
-    db.commit()
+    refused = HTTPException(
+        status_code=400,
+        detail="That code is wrong or has expired — check it, or ask for a new one.",
+    )
+    holders = [u for u in _phone_holders(db, payload.phone) if u.is_active]
+    if len(holders) != 1:
+        raise refused
+    user = holders[0]
+    number = _sign_in_number(user)
+    if number is None:
+        raise refused
+    result = _check_code(db, user, number, payload.code)
+    if result.outcome != bird_verify.VERIFIED:
+        raise refused
+    db.refresh(user)
     return _token_response(user)
+
+
+@router.post("/me/phone/confirm")
+def confirm_phone_start(user: CurrentUser, db: DbSession, request: Request):
+    """Text a code to the signed-in customer's own number, to prove it is
+    theirs. Until that is done the number is not trusted for text sign-in —
+    however it got onto the account."""
+    _require_phone_rail()
+    _texts_for_customers_only(user)
+    number = phones.sms_number(user.phone)
+    if number is None:
+        raise HTTPException(status_code=400, detail=_ONLY_MOBILES)
+    if user.phone_verified:
+        return {"message": "Your number is already confirmed.", "phone_verified": True}
+    now = utcnow()
+    if _cooling_down(user, now):
+        raise HTTPException(
+            status_code=429,
+            detail="A code went out less than a minute ago — give it a moment before asking again.",
+        )
+    if not _texts_allowed(request, number):
+        raise HTTPException(
+            status_code=429, detail="That number has had a lot of codes already — try again later."
+        )
+    fresh = _open_window(user, now)
+    db.commit()
+    try:
+        bird_verify.start(number)
+    except (bird_verify.Refused, bird_verify.TooMany, bird_verify.Unavailable) as exc:
+        if fresh:
+            _close_window(user)  # nothing went out: there is no window to keep
+            db.commit()
+        if isinstance(exc, bird_verify.Refused):
+            detail, code = "That number can't receive a text code — check it in your profile.", 400
+        elif isinstance(exc, bird_verify.TooMany):
+            detail, code = "That number has had a lot of codes already — try again later.", 429
+        else:
+            detail, code = "We couldn't send a code right now — please try again in a moment.", 503
+        raise HTTPException(status_code=code, detail=detail) from None
+    return {
+        "message": f"A code is on its way to your number ending in {number[-2:]} — "
+        f"it works for {PHONE_OTP_MINUTES} minutes.",
+        "phone_verified": False,
+    }
+
+
+@router.post("/me/phone/confirm/check", response_model=UserOut)
+def confirm_phone_check(payload: PhoneCodeCheck, user: CurrentUser, db: DbSession, request: Request):
+    """Prove the number with the code Bird texted to it. Only Bird's yes
+    marks the number confirmed — and only the number as it is on file right
+    now."""
+    _require_phone_rail()
+    _check_rate_limit(request, "login")
+    _texts_for_customers_only(user)
+    number = phones.sms_number(user.phone)
+    if number is None:
+        raise HTTPException(status_code=400, detail=_ONLY_MOBILES)
+    if user.phone_verified:
+        return user
+    result = _check_code(db, user, number, payload.code)
+    if result.outcome == bird_verify.VERIFIED:
+        user.phone_verified_number = number
+        user.phone_verified_at = utcnow()
+        db.commit()
+        db.refresh(user)
+        return user
+    if result.outcome == bird_verify.WRONG:
+        left = result.attempts_remaining
+        if left is None:
+            left = max(0, PHONE_OTP_MAX_ATTEMPTS - user.phone_otp_attempts)
+        raise HTTPException(
+            status_code=400,
+            detail=f"That code isn't right — {left} {'try' if left == 1 else 'tries'} left.",
+        )
+    if result.outcome == bird_verify.EXPIRED:
+        raise HTTPException(status_code=400, detail="That code has expired — send a new one.")
+    raise HTTPException(status_code=400, detail="That code can't be used any more — send a new one.")
 
 
 # --------------------------------------------------------------------------
@@ -530,12 +692,14 @@ def update_me(payload: UserUpdateRequest, user: CurrentUser, db: DbSession):
                 raise HTTPException(
                     status_code=400, detail="Another account already uses this phone number"
                 )
-            if phone != user.phone:
-                # A code texted to the old number must never open the new one.
-                user.phone_otp_hash = None
-                user.phone_otp_expires = None
-                user.phone_otp_created_at = None
-                user.phone_otp_attempts = 0
+            if phone != (phones.canonical(user.phone) if user.phone else None):
+                # A new number is a new number: no code texted to the old one,
+                # and no proof that the old one was the customer's, carries
+                # over to it. (The same number spelled differently is not a
+                # change.)
+                _close_window(user)
+                user.phone_verified_number = None
+                user.phone_verified_at = None
             user.phone = phone
         try:
             db.commit()
@@ -682,6 +846,12 @@ def export_my_data(user: CurrentUser, db: DbSession):
             "first_name": user.first_name,
             "last_name": user.last_name,
             "phone": user.phone,
+            # When the number was proven by a texted code (None: never).
+            "phone_verified_at": (
+                user.phone_verified_at.isoformat()
+                if user.phone_verified and user.phone_verified_at
+                else None
+            ),
             "avatar_url": user.avatar_url,
             "facebook_linked": user.facebook_id is not None,
             "member_since": user.created_at.isoformat(),
@@ -803,6 +973,8 @@ def delete_my_account(
     user.phone_otp_hash = None
     user.phone_otp_expires = None
     user.phone_otp_created_at = None
+    user.phone_verified_number = None
+    user.phone_verified_at = None
     user.login_code_hash = None
     user.login_code_expires = None
     user.classification = None

@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { Camera, ShieldAlert, Trash2 } from "lucide-react";
+import { Camera, CircleCheck, MessageSquare, ShieldAlert, Trash2 } from "lucide-react";
 import client, { apiError, tokens } from "../../api/client";
 import PasswordInput from "../../components/PasswordInput";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { formatDate } from "../../lib/format";
 import { shrinkImage } from "../../lib/imageResize";
+import { fetchStore } from "../../lib/store";
 
 export default function Profile() {
   const { user, refreshUser, logout } = useAuth();
@@ -29,6 +30,29 @@ export default function Profile() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmPassword, setConfirmPassword] = useState("");
   const [deleting, setDeleting] = useState(false);
+
+  // Text sign-in: offered only where the shop can send texts, and a number
+  // is trusted for it only once a code texted to it has come back.
+  const [textSignIn, setTextSignIn] = useState(false);
+  const [codeOut, setCodeOut] = useState(null); // what the shop said when it sent one
+  const [smsCode, setSmsCode] = useState("");
+  const [confirming, setConfirming] = useState(false);
+  const [codeProblem, setCodeProblem] = useState("");
+
+  useEffect(() => {
+    fetchStore()
+      .then((data) => setTextSignIn(Boolean(data.phone_login)))
+      .catch(() => {});
+  }, []);
+
+  // A saved number is shown the way it is stored; a new number starts with
+  // no code out.
+  useEffect(() => {
+    setForm((f) => ({ ...f, phone: user.phone ?? "" }));
+    setCodeOut(null);
+    setSmsCode("");
+    setCodeProblem("");
+  }, [user.phone]);
 
   const pickAvatar = async (e) => {
     const file = e.target.files?.[0];
@@ -76,6 +100,45 @@ export default function Profile() {
       setSavingProfile(false);
     }
   };
+
+  const sendCode = async () => {
+    setConfirming(true);
+    setCodeProblem("");
+    try {
+      const { data } = await client.post("/auth/me/phone/confirm");
+      if (data.phone_verified) {
+        await refreshUser();
+        toast.info(data.message);
+        return;
+      }
+      setCodeOut(data.message);
+      setSmsCode("");
+    } catch (err) {
+      toast.error(apiError(err, "Couldn't send a code"));
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  const checkCode = async (e) => {
+    e.preventDefault();
+    if (smsCode.length !== 6) return;
+    setConfirming(true);
+    setCodeProblem("");
+    try {
+      await client.post("/auth/me/phone/confirm/check", { code: smsCode });
+      await refreshUser();
+      setCodeOut(null);
+      setSmsCode("");
+      toast.success("Number confirmed — you can sign in with a texted code now");
+    } catch (err) {
+      setCodeProblem(apiError(err, "Couldn't confirm the code"));
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  const phoneSaved = form.phone === (user.phone ?? "");
 
   const changePassword = async (e) => {
     e.preventDefault();
@@ -223,6 +286,90 @@ export default function Profile() {
             {savingProfile ? "Saving…" : "Save changes"}
           </button>
         </form>
+
+        {/* Text sign-in: customers only (admins keep their password), and
+            only for a number proven by a code texted to it. Its own form,
+            so Enter in the code field never saves the profile. */}
+        {textSignIn && user.role !== "admin" && user.phone && (
+          <div className="mt-6 border-t border-base-300/70 pt-5">
+            <h3 className="text-sm font-semibold">Text sign-in</h3>
+            {!phoneSaved ? (
+              <p className="mt-1.5 text-xs opacity-70">
+                Save your new number first, then confirm it with a texted code.
+              </p>
+            ) : user.phone_verified ? (
+              <p className="mt-1.5 flex items-start gap-2 text-sm">
+                <CircleCheck size={16} className="mt-0.5 shrink-0 text-success" aria-hidden="true" />
+                <span>Your number is confirmed — you can sign in with a code texted to it.</span>
+              </p>
+            ) : codeOut ? (
+              <form onSubmit={checkCode} className="mt-2 space-y-3">
+                <p className="text-sm">{codeOut}</p>
+                <div>
+                  <label className="label text-xs" htmlFor="p-sms-code">Code from the text</label>
+                  <div className="flex flex-wrap gap-2">
+                    <input
+                      id="p-sms-code"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      className="input input-bordered w-40 text-center font-mono tracking-[0.3em]"
+                      placeholder="······"
+                      maxLength={6}
+                      required
+                      value={smsCode}
+                      onChange={(e) => {
+                        setSmsCode(e.target.value.replace(/\D/g, ""));
+                        setCodeProblem("");
+                      }}
+                      aria-invalid={Boolean(codeProblem)}
+                      aria-describedby={codeProblem ? "p-sms-problem" : undefined}
+                    />
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={confirming || smsCode.length !== 6}
+                    >
+                      {confirming ? <span className="loading loading-spinner loading-sm" /> : "Confirm number"}
+                    </button>
+                  </div>
+                  {codeProblem && (
+                    <p id="p-sms-problem" role="alert" className="mt-1.5 text-xs font-semibold text-error">
+                      {codeProblem}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="link link-secondary text-xs"
+                  onClick={sendCode}
+                  disabled={confirming}
+                >
+                  Send a new code
+                </button>
+              </form>
+            ) : (
+              <div className="mt-1.5">
+                <p className="text-xs opacity-70">
+                  Not confirmed yet. Confirm your number to sign in with a code texted to it,
+                  instead of your password.
+                </p>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm mt-3 border border-base-300"
+                  onClick={sendCode}
+                  disabled={confirming}
+                >
+                  {confirming ? (
+                    <span className="loading loading-spinner loading-xs" aria-hidden="true" />
+                  ) : (
+                    <MessageSquare size={15} aria-hidden="true" />
+                  )}
+                  Text me a code
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       {/* Right column: your sign-in, then your data directly below it */}

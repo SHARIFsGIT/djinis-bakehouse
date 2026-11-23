@@ -134,11 +134,20 @@ class Settings(BaseSettings):
     facebook_app_secret: str = ""
     facebook_api_version: str = "v23.0"  # Graph pin — bump when Facebook retires it
 
-    # Phone sign-in codes over SMS, sent through Twilio. All three together
-    # switch it on; empty means log-only (dev never fails to send).
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
-    twilio_from_number: str = ""
+    # Text sign-in codes through Bird Verify (app/bird_verify.py). Bird
+    # generates, texts and checks every code; the shop never sees one.
+    # BIRD_API_KEY is a workspace key with Verify read/write (bk_eu1_…) — a
+    # secret, set in Render's dashboard only. Empty = text sign-in is off
+    # everywhere: the button is hidden, the endpoints answer 404, and
+    # password sign-in carries on exactly as before.
+    bird_api_key: str = ""
+    # The regional host the key belongs to: a bk_eu1_ key answers only at
+    # eu1, and a mismatch keeps text sign-in off rather than failing calls.
+    bird_api_base: str = "https://eu1.platform.bird.com"
+    # The most text codes the shop asks Bird to send in a day, all numbers
+    # together — a ceiling on the bill if someone tries to run up SMS
+    # traffic. Counted in memory, so a restart starts the count afresh.
+    sms_daily_limit: int = 100
     # A phone number typed the national way ("0176 …") is read as this
     # country's — the shop's own. Digits only, no "+". A number from anywhere
     # else is typed with its "+" and country code (app/phones.py).

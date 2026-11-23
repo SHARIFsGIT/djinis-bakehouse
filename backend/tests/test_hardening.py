@@ -24,6 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import bird_fake
 import test_api as api
 from test_api import admin_headers, auth_header, checkout_payload, client
 
@@ -252,22 +253,24 @@ def test_production_never_logs_an_email_body(monkeypatch, caplog):
 # Phone sign-in: no rail without a way to text, and a ceiling per number
 # --------------------------------------------------------------------------
 
-def test_phone_rail_is_shut_in_production_without_twilio(monkeypatch):
-    """A code nobody can receive is only a six-digit door for guessing."""
+def test_phone_rail_is_shut_without_bird(monkeypatch):
+    """A code nobody can receive is only a six-digit door for guessing — and
+    without Bird Verify the shop has no code at all. Shut everywhere."""
     api.register_and_login("phone-shut@hardening.example.com", "PhoneShut1!")
-    monkeypatch.setattr(get_settings(), "app_env", "production")
-
-    asked = client.post("/api/auth/phone/request", json={"phone": "+491765550301"})
-    assert asked.status_code == 404
-    guessed = client.post(
-        "/api/auth/phone/verify", json={"phone": "+491765550301", "code": "123456"}
-    )
-    assert guessed.status_code == 404
-    # ...and the storefront was already not offering it
-    assert client.get("/api/store").json()["phone_login"] is False
+    for env in ("production", "dev"):
+        monkeypatch.setattr(get_settings(), "app_env", env)
+        asked = client.post("/api/auth/phone/request", json={"phone": "+491765550301"})
+        assert asked.status_code == 404
+        guessed = client.post(
+            "/api/auth/phone/verify", json={"phone": "+491765550301", "code": "123456"}
+        )
+        assert guessed.status_code == 404
+        # ...and the storefront was already not offering it
+        assert client.get("/api/store").json()["phone_login"] is False
 
 
 def test_a_number_gets_only_so_many_codes_an_hour(monkeypatch):
+    bird = bird_fake.enable(monkeypatch, client)
     phone = "+491765550302"
     registered = client.post(
         "/api/auth/register",
@@ -279,18 +282,23 @@ def test_a_number_gets_only_so_many_codes_an_hour(monkeypatch):
         },
     )
     assert registered.status_code == 201
+    bird_fake.confirm(client, registered.json()["access_token"])  # the hour's first code
     monkeypatch.setattr(auth_router, "PHONE_RESEND_SECONDS", 0)  # past the one-a-minute throttle
 
-    codes = []
     for _ in range(auth_router.PHONE_CODES_PER_HOUR):
-        answer = client.post("/api/auth/phone/request", json={"phone": phone}).json()
-        codes.append(answer["dev_code"])
+        answer = client.post("/api/auth/phone/request", json={"phone": phone})
+        assert answer.status_code == 200
+    # the confirmation's code and four more — then the ceiling
+    assert bird.sent.count(phone) == auth_router.PHONE_CODES_PER_HOUR
 
     over = client.post("/api/auth/phone/request", json={"phone": phone})
     assert over.status_code == 200  # the same calm answer as ever — nothing to probe
-    assert "dev_code" not in over.json()
-    # no new code was minted: the last one issued is still the live one
-    signed_in = client.post("/api/auth/phone/verify", json={"phone": phone, "code": codes[-1]})
+    assert over.json() == answer.json()
+    assert bird.sent.count(phone) == auth_router.PHONE_CODES_PER_HOUR  # nothing more went out
+    # the code already out still signs in
+    signed_in = client.post(
+        "/api/auth/phone/verify", json={"phone": phone, "code": bird_fake.CODE}
+    )
     assert signed_in.status_code == 200
 
 

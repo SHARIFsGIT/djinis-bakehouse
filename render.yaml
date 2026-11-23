@@ -69,12 +69,8 @@ services:
         sync: false # from developers.facebook.com — set with the secret and "Continue with Facebook" appears on the login page
       - key: FACEBOOK_APP_SECRET
         sync: false
-      - key: TWILIO_ACCOUNT_SID
-        sync: false # all three together switch on phone sign-in codes (SMS via Twilio)
-      - key: TWILIO_AUTH_TOKEN
-        sync: false
-      - key: TWILIO_FROM_NUMBER
-        sync: false # the Twilio number the texts come from, e.g. +15005550100
+      - key: BIRD_API_KEY
+        sync: false # SECRET — Bird Verify workspace key (bk_eu1_…), Verify read/write. Set it and texted sign-in codes appear; delete it and they are off again (password sign-in is unaffected)
       # Outgoing email. Without SMTP_HOST the shop sends NOTHING — no
       # receipts, order updates, password resets or desk alerts (boot logs
       # "Email is OFF"). Set these in the dashboard from your mail provider's

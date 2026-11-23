@@ -296,12 +296,17 @@ address in their profile at any time, and — since a reset link cannot be
 mailed — the desk can make one on the customer's card and pass it on.
 Two more ways in, each appearing only when it's configured (never a dead button):
 **"Continue with Facebook"** (Facebook Login for the web — set `FACEBOOK_APP_ID` /
-`FACEBOOK_APP_SECRET`), and a **texted sign-in code** — six digits sent to the
-number on the account, no password needed (`TWILIO_ACCOUNT_SID` /
-`TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER`). Codes are single-use, valid 10
-minutes, capped at five wrong tries, and rate-limited; Facebook handshakes never
-put tokens in a URL — the callback issues a one-time code the page exchanges
-server-side.
+`FACEBOOK_APP_SECRET`), and a **texted sign-in code** through Bird Verify
+(`BIRD_API_KEY`): Bird generates the six digits, texts them by SMS only and
+checks them — the shop never sees, stores or logs a code. A customer first
+confirms their own number from their profile with a texted code; only a
+confirmed number signs in by text, exactly as it is on file (a changed number
+must be confirmed again), and admin accounts never sign in by text. Codes are
+single-use, valid 10 minutes, capped at five wrong tries, one a minute and
+five an hour per number (ten a day), under a shop-wide daily ceiling
+(`SMS_DAILY_LIMIT`), and only German mobile numbers are texted. Facebook
+handshakes never put tokens in a URL — the callback issues a one-time code
+the page exchanges server-side.
 Orders keep a snapshot of the delivery address, so editing addresses later never
 changes past orders. Customers can cancel while an order is pending/confirmed/
 baking — stock is restored, orders paid online auto-refund through the provider that took the money, and cancelling after the
@@ -460,7 +465,9 @@ images/              original photography (source of truth for the pipeline)
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | empty / 587 | the one mail account behind receipts, order updates, password resets, restock notes, desk alerts and campaigns. **Empty host = nothing is sent** (dev logs each message; production logs recipient + subject only and says "Email is OFF" at boot) |
 | `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` | empty | "Continue with Facebook" — the button appears once both are set |
 | `PHONE_DEFAULT_COUNTRY_CODE` | `49` | the country a phone number written the national way belongs to ("0176…" is read as "+49 176…"); digits only, no "+" |
-| `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_FROM_NUMBER` | empty | texted sign-in codes; all three together switch them on (logging in with a phone number and a password needs none of them) |
+| `BIRD_API_KEY` | empty | texted sign-in codes through Bird Verify — a workspace key (`bk_eu1_…`) with Verify read/write. A **secret**: set it in Render's dashboard only. Set, the option appears; empty, it is off everywhere and password sign-in carries on (logging in with a phone number and a password needs no key) |
+| `BIRD_API_BASE` | `https://eu1.platform.bird.com` | Bird's regional host; it must match the key's region (a mismatch keeps text sign-in off and says why at boot) |
+| `SMS_DAILY_LIMIT` | `100` | the most text codes the shop sends in a day, all numbers together — a ceiling on the SMS bill (counted in memory: a restart starts the count afresh) |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | empty | the card option appears once the key is set (`sk_test_…` rehearses, `sk_live_…` charges); the signing secret of the endpoint delivering to `/api/payments/webhook` — without it Stripe's webhooks are refused |
 | `STRIPE_PAYMENT_METHODS` | `automatic` | Stripe offers what its dashboard has switched on; a comma list (`card`, `link`, `klarna`, `sepa_debit`, `ideal`, `bancontact`, `eps`, `p24`, `revolut_pay`, `amazon_pay`, `paypal`) only narrows that set; unknown entries drop with a warning |
 | `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | empty | PayPal as its own checkout option — appears once both are set |
@@ -545,8 +552,9 @@ path traversal is blocked.
   (e.g. Redis) if you scale horizontally. Password changes revoke every
   outstanding token for that account, on every device. The per-address
   brakes are only as honest as the address: set `CLIENT_IP_HEADER` once you
-  have confirmed which header your edge sets itself. Phone sign-in codes
-  carry their own ceiling per number (five an hour), whoever asks.
+  have confirmed which header your edge sets itself. Texted sign-in codes
+  carry their own ceilings per number (five an hour, ten a day), whoever
+  asks, and one for the whole shop (`SMS_DAILY_LIMIT` a day).
 - The app shell is served with a Content-Security-Policy: scripts only
   from the shop's own origin, plus the exact inline snippet the build
   carries (admitted by hash, read from `frontend/dist/index.html` at
@@ -645,14 +653,21 @@ before, so no customer ever sees a button that can't work.
   their whole order history, and the Facebook button never puts tokens in
   a URL (the callback issues a one-time code the page exchanges).
 - *Phone*: signing up and logging in with a phone number and a password
-  needs no setup — it is always on. The texted code is the extra: sign up at
-  twilio.com, buy or verify a sender number, and set
-  `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM_NUMBER`.
-  Customers can then also sign in with a six-digit code texted to the number
-  on their account (set at registration or in the profile). Codes are
-  single-use, good for ten minutes, capped at five wrong tries, and one
-  text per number per minute. In dev, with no Twilio keys, the code comes
-  back with the API response so the whole flow stays testable.
+  needs no setup — it is always on. The texted code is the extra, through
+  **Bird Verify (EU)**. In the Bird dashboard: create a workspace API key with
+  Verify read/write (it starts `bk_eu1_`); under Verify → Destinations enable
+  Germany (+49) with the SMS channel; under Verify → Configure keep Duration
+  10 minutes, Maximum Retries 5, Retry Delay 60 seconds, and set the Website
+  to `https://djinisbakehouse.com` (it lets phones offer the code from the
+  text). Then add `BIRD_API_KEY` in Render → Environment, as a secret — never
+  in a file. The boot log then says `Text sign-in codes: Bird Verify at
+  https://eu1.platform.bird.com`. Customers confirm their number once from
+  their profile; only confirmed German mobile numbers sign in by text, and
+  admins never do. There is no code in development either: the shop never
+  holds one, so without a key the option is simply off (the test suite uses
+  a stand-in Bird and never reaches the real one).
+  **Rollback:** delete `BIRD_API_KEY` in Render. The text option disappears,
+  its endpoints answer 404, and password sign-in carries on unchanged.
 
 **Opening for real customers**
 
@@ -668,6 +683,6 @@ the owner's alone. In short:
   works without either.
 - A legal notice, contact details and (if you deliver locally) a delivery
   area — all under Settings at the desk.
-- Facebook app + Twilio number, only if you want those sign-in rails.
+- A Facebook app and a Bird Verify key, only if you want those sign-in rails.
 - To refresh photography: drop new shots into `images/` and re-run
   `python scripts/prepare_images.py` (requires Pillow).

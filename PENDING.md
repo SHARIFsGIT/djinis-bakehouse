@@ -29,7 +29,7 @@ a test, and no secret belongs in this repository: keys go into Render only.
 | 8 | The FRESHBAKE15 minimum needs re-saving | When you use the code | 2 min |
 | 9 | VAT classes for every product (only for VAT-inclusive prices) | Your decision | 1–2 h |
 | 10 | Phone sign-in: what to know, what to try | Today, once | 10 min |
-| 11 | Texted sign-in codes (SMS) — built, switched off | Optional | 30 min + cost |
+| 11 | Texted sign-in codes through Bird Verify — built, switched off | Optional | 20 min + cost |
 | 12 | "Continue with Facebook" — built, switched off | Optional | 30 min |
 | 13 | PayPal — built, switched off | Optional | 45 min |
 | 14 | A walk through the site on a real phone | Soon | 15 min |
@@ -278,9 +278,11 @@ with just a name, a phone number and a password.
   updates by mail (its orders are on its order page), and "Forgot password"
   cannot mail it a link — the customer contacts you, and you make the link
   (step 4).
-- **Numbers are not verified**, exactly like email addresses at sign-up:
-  the shop does not send a text to prove the number is theirs. Verifying by
-  text needs a paid SMS account (item 11).
+- **A number is trusted for text sign-in only once its owner confirms it.**
+  With text sign-in on (item 11), a customer confirms their number once from
+  their profile with a texted code. Only a confirmed number signs in by text,
+  a changed number has to be confirmed again, and admins never sign in by
+  text. Signing up with a number and a password needs no confirmation.
 - **One number, one account.** If a customer says "it tells me my number is
   already used" and it is not their account, tell me — there is no desk
   button yet to free a number.
@@ -292,26 +294,41 @@ with just a name, a phone number and a password.
 
 ---
 
-## 11. Texted sign-in codes (SMS) — built, switched off
+## 11. Texted sign-in codes through Bird Verify — built, switched off
 
-**What it adds.** A "Text me a sign-in code" button on the log-in page: the
-customer gets six digits by SMS and needs no password.
+**What it adds.** A "Text me a sign-in code" button on the log-in page, and a
+"Text sign-in" panel on each customer's profile. A customer confirms their
+number once with a texted code; after that they can sign in with six digits
+by SMS instead of their password. Bird generates, sends and checks every
+code — the shop never sees one. Admins never sign in by text.
 
-**Why it is off.** Sending texts costs money per message and needs an
-account with an SMS provider (Twilio). The button appears by itself once
-the keys exist — never before.
+**Why it is off.** Texts cost money per message, and the shop's code needs
+the Bird key, which is not set yet. The button appears by itself once the
+key exists — never before.
 
-**How to switch it on.**
+**How to switch it on** (your Bird workspace is already set up: EU region,
+Germany enabled, SMS, 10 minutes, 5 tries, 60-second retry delay).
 
-1. Create an account at [twilio.com](https://www.twilio.com) and get a
-   sender number. (In a trial account, texts only reach numbers you have
-   verified there — upgrade before real customers use it.)
-2. Render → Environment → set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and
-   `TWILIO_FROM_NUMBER` (all three).
+1. Make sure Bird's Verify settings also name the website
+   `https://djinisbakehouse.com` (Verify → Configure), so phones offer the
+   code from the text.
+2. Render → the service → **Environment** → add `BIRD_API_KEY` with your
+   `bk_eu1_…` key, **as a secret**. Never put the key in a file or in git.
+3. Save. Render restarts the shop.
+4. If `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` or `TWILIO_FROM_NUMBER` are
+   still in Render, delete them — nothing reads them any more.
 
-**How to see it worked.** The log-in page shows "Text me a sign-in code";
-ask for one with your own number and the text arrives. Codes work once, for
-10 minutes, and each number gets at most five an hour.
+**How to see it worked.** The start-up log says `Text sign-in codes: Bird
+Verify at https://eu1.platform.bird.com`. Sign in to your own **customer**
+account, open *Profile* → *Text sign-in* → **Text me a code**, and type the
+code from the SMS. Log out, then *Log in* → *Text me a sign-in code* with the
+same number. Codes work once, for 10 minutes; each number gets at most one a
+minute, five an hour and ten a day, and the whole shop at most 100 a day
+(`SMS_DAILY_LIMIT` changes that).
+
+**How to switch it off again.** Delete `BIRD_API_KEY` in Render. The button
+and the profile panel disappear, the text endpoints answer 404, and password
+sign-in carries on exactly as before.
 
 ---
 
@@ -407,7 +424,7 @@ So that nothing is taken for proven that was not:
 | --- | --- | --- |
 | A real Stripe payment, refund or dispute | no Stripe credentials on the build machine | item 1 |
 | A real PayPal payment | no credentials; PayPal is off | item 13 |
-| A real text message | no SMS account; the option is off | item 11 |
+| A real text message through Bird | no live Bird call was made: the tests use a stand-in Bird, and the key is not set | item 11 |
 | Emails arriving in an inbox | the mail settings live in Render | item 4 |
 | How the site feels on a real phone | checked only in an imitated phone | item 14 |
 | Anything inside your Stripe or Render accounts | only you can open them | items 1, 2, 4, 7 |

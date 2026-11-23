@@ -20,6 +20,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import bird_fake
 from test_api import admin_headers, auth_header, checkout_payload, client
 
 from app import email as email_module, phones
@@ -373,11 +374,17 @@ def test_reset_links_are_for_customers_and_made_by_the_desk_only():
     assert client.post(f"/api/admin/users/{body['user']['id']}/reset-link").status_code == 401
 
 
-def test_a_texted_code_finds_the_account_however_the_number_is_typed():
-    open_with_phone("+49 176 5550 217", name="Coder")
+def test_a_texted_code_finds_the_account_however_the_number_is_typed(monkeypatch):
+    bird = bird_fake.enable(monkeypatch, client)
+    body = open_with_phone("+49 176 5550 217", name="Coder")
+    bird_fake.confirm(client, body["access_token"])
     asked = client.post("/api/auth/phone/request", json={"phone": "0176 5550217"})
     assert asked.status_code == 200
-    code = asked.json()["dev_code"]  # dev only: with no SMS account the code rides back
-    signed_in = client.post("/api/auth/phone/verify", json={"phone": "0049 1765550217", "code": code})
+    assert "dev_code" not in asked.json()  # the shop never holds a code
+    assert bird.sent[-1] == "+491765550217"
+    signed_in = client.post(
+        "/api/auth/phone/verify", json={"phone": "0049 1765550217", "code": bird_fake.CODE}
+    )
     assert signed_in.status_code == 200
     assert signed_in.json()["user"]["first_name"] == "Coder"
+    assert bird.checked[-1] == "+491765550217"  # the same E.164 number, both ways

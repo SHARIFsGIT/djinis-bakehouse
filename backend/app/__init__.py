@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
+from . import bird_verify
 from . import paypal_gateway, stripe_gateway
 from .config import get_settings
 from .database import Base, engine
@@ -69,6 +70,11 @@ _ADDITIVE_COLUMNS = {
         "marketing_consent_source": "ALTER TABLE users ADD COLUMN marketing_consent_source VARCHAR(50)",
         "marketing_consent_evidence": "ALTER TABLE users ADD COLUMN marketing_consent_evidence TEXT",
         "marketing_token": "ALTER TABLE users ADD COLUMN marketing_token VARCHAR(64)",
+        # Text sign-in: the number a Bird Verify code proved, and when. Both
+        # nullable with no default — NULL on arrival, so no number already
+        # on file is trusted until its owner confirms it.
+        "phone_verified_number": "ALTER TABLE users ADD COLUMN phone_verified_number VARCHAR(30)",
+        "phone_verified_at": "ALTER TABLE users ADD COLUMN phone_verified_at TIMESTAMP",
     },
     # A database that booted an earlier build of the payment ledger has the
     # table without this column; a fresh one gets it from create_all.
@@ -245,6 +251,10 @@ def create_limiters(settings) -> dict[str, SlidingWindowLimiter]:
         # the per-address brake above is no brake at all against a caller
         # that changes address, and every code is five more guesses.
         "otp_number": SlidingWindowLimiter(auth.PHONE_CODES_PER_HOUR, window=3600.0),
+        # ...per phone number, per day; and for the whole shop, per day — a
+        # ceiling on the SMS bill whoever asks and for whichever numbers.
+        "otp_number_day": SlidingWindowLimiter(auth.PHONE_CODES_PER_DAY, window=86400.0),
+        "otp_shop_day": SlidingWindowLimiter(settings.sms_daily_limit, window=86400.0),
         # Public write endpoints — tighter than auth because one blast of
         # signups or catering leads is plenty for anyone.
         "newsletter": SlidingWindowLimiter(5),
@@ -440,6 +450,14 @@ async def lifespan(app: FastAPI):
             "STRIPE_WEBHOOK_SECRET is not set — Stripe's webhooks are refused; payments "
             "land only when the customer returns or the reconciliation sweep runs."
         )
+
+    # Text sign-in, said once at boot like the tills above.
+    logger.info(
+        "Text sign-in codes: %s",
+        f"Bird Verify at {bird_verify.api_base()}" if bird_verify.configured() else "off",
+    )
+    if bird_verify.misconfigured():
+        logger.error(bird_verify.misconfigured())
 
     logger.info("%s API ready (%s)", settings.bakery_name, settings.app_env)
     yield

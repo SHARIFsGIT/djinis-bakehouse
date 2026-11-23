@@ -166,6 +166,13 @@ class PhoneLoginVerify(BaseModel):
         return normalize_phone(value, required=True)
 
 
+class PhoneCodeCheck(BaseModel):
+    """The six-digit code texted to a signed-in customer's own number, to
+    confirm it is theirs."""
+
+    code: str = Field(pattern=r"^\d{6}$")
+
+
 class LoginCodeExchange(BaseModel):
     """The one-time code a social callback handed the browser."""
 
@@ -179,6 +186,9 @@ class UserOut(ORMModel):
     first_name: str
     last_name: str
     phone: str | None
+    # The number on file was proven by a texted code (app/bird_verify.py),
+    # so it may be used for text sign-in. Never sent the other way round.
+    phone_verified: bool = False
     avatar_url: str | None = None
     role: UserRole
     is_active: bool

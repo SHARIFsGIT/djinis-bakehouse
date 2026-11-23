@@ -11,6 +11,7 @@ from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, Numer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base, utcnow
+from . import phones
 from .email import shown_email
 
 
@@ -115,12 +116,20 @@ class User(Base):
     # so a stolen database can't reset anyone's password.
     reset_token_hash: Mapped[str | None] = mapped_column(String(64))
     reset_token_expires: Mapped[datetime | None] = mapped_column(DateTime)
-    # Phone sign-in: a one-shot texted code (digest only, so a stolen
-    # database can't sign anyone in) plus its attempt ledger.
+    # A texted code in flight — temporary bookkeeping only. Bird Verify
+    # generates, sends and checks the code itself (app/bird_verify.py); the
+    # shop keeps its own window around it: when it closes, when the latest
+    # code went out (the resend cooldown) and the wrong tries. The code
+    # never reaches the shop, so phone_otp_hash is no longer written.
     phone_otp_hash: Mapped[str | None] = mapped_column(String(64))
     phone_otp_expires: Mapped[datetime | None] = mapped_column(DateTime)
     phone_otp_created_at: Mapped[datetime | None] = mapped_column(DateTime)
     phone_otp_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Text sign-in: the number a Bird Verify code proved for this account
+    # (E.164), and when. Empty until the customer confirms it — no number on
+    # file is trusted by default — and cleared when the number changes.
+    phone_verified_number: Mapped[str | None] = mapped_column(String(30))
+    phone_verified_at: Mapped[datetime | None] = mapped_column(DateTime)
     # "Continue with Facebook": Facebook's user id for an account linked
     # through the Login dialog. None = the customer signs in another way.
     facebook_id: Mapped[str | None] = mapped_column(String(64), index=True)
@@ -159,6 +168,14 @@ class User(Base):
         # Single-word names register with an empty last name — never show
         # the trailing space that leaves behind.
         return f"{self.first_name} {self.last_name}".strip()
+
+    @property
+    def phone_verified(self) -> bool:
+        """True when the number on file is the very number a Bird code
+        proved — compared exactly, as E.164, so a proof never covers any
+        number but the one it was made for."""
+        number = phones.sms_number(self.phone)
+        return number is not None and self.phone_verified_number == number
 
     @property
     def mailbox(self) -> str | None:
