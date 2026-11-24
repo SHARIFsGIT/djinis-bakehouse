@@ -437,6 +437,7 @@ export default function Products() {
             <ProductGridSkeleton className="grid-cols-2 md:grid-cols-3" count={6} />
           ) : problem === "missing-shelf" ? (
             <EmptyState
+              as="h2"
               title="That shelf isn't here"
               hint="The link points at a shelf the bakery no longer keeps — everything else is still on the counter."
             >
@@ -461,6 +462,7 @@ export default function Products() {
             </div>
           ) : (
             <EmptyState
+              as="h2"
               title="The shelf is bare"
               hint="Nothing matches those filters — try loosening them a little."
             >

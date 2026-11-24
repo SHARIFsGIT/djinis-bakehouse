@@ -1011,7 +1011,7 @@ function OrdersTab() {
                       {o.delivery_date ? (
                         <span className="font-semibold">{formatDate(o.delivery_date)}</span>
                       ) : (
-                        <span className="text-xs opacity-60">Next delivery run</span>
+                        <span className="text-xs opacity-65">Next delivery run</span>
                       )}
                     </td>
                     <td className="text-right whitespace-nowrap">

@@ -76,7 +76,7 @@ export default function ProductCard({ product }) {
         </button>
       </figure>
 
-      <div className="card-body flex-1 gap-2 p-4">
+      <div className="card-body @container flex-1 gap-2 p-4">
         <Link
           to={`/products/${product.slug}`}
           className="font-display text-lg leading-tight font-semibold text-pretty hover:text-secondary"
@@ -87,7 +87,11 @@ export default function ProductCard({ product }) {
           rating={product.average_rating}
           count={product.review_count}
         />
-        <div className="mt-auto flex flex-col items-stretch gap-2 pt-1 sm:flex-row sm:items-center sm:justify-between">
+        {/* Price and button share a line only when the card itself has the
+            room — four cards across a tablet are as narrow as two on a
+            phone, and there the button ran out of the card. A price too long
+            for the line puts the button under it rather than past the edge. */}
+        <div className="mt-auto flex flex-col items-stretch gap-2 pt-1 sm:@min-[10rem]:flex-row sm:@min-[10rem]:flex-wrap sm:@min-[10rem]:items-center sm:@min-[10rem]:justify-between">
           <PriceTag product={product} />
           <button
             type="button"

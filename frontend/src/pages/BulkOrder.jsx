@@ -70,6 +70,7 @@ export default function BulkOrder() {
     return (
       <div className="mx-auto max-w-2xl px-4 py-12">
         <EmptyState
+          as="h1"
           title="Enquiry received"
           hint="A confirmation is on its way to your inbox. Djini will call or write back within one working day with a quote, portions and delivery timing — nothing is charged until you say yes."
         >

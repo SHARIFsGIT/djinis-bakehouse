@@ -1,5 +1,5 @@
 import { Menu, Moon, ShoppingBasket, Sun, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import client from "../api/client";
 import useStore from "../hooks/useStore";
@@ -20,6 +20,8 @@ export default function Navbar() {
   // Shop copy the admin can rewrite (or clear — an empty line hides the bar)
   const announcement = useStore()?.announcement ?? "";
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuButton = useRef(null);
+  const menuPanel = useRef(null);
 
   const [theme, setTheme] = useState(
     () =>
@@ -41,6 +43,24 @@ export default function Navbar() {
   useEffect(() => {
     setMenuOpen(false);
   }, [location.pathname, location.search]);
+
+  // Escape puts the phone menu away — unless something took the key first:
+  // the search box closing its suggestions, or a dialog open over the page.
+  // Focus that was in the menu goes back to its button instead of falling
+  // to the top of the page with the links it was on.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (document.querySelector("dialog[open], [aria-modal='true']")) return;
+      const active = document.activeElement;
+      const inMenu = active === menuButton.current || menuPanel.current?.contains(active);
+      setMenuOpen(false);
+      if (inMenu) menuButton.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menuOpen]);
 
   const toggleTheme = () => {
     const next = theme === "bakery" ? "midnight" : "bakery";
@@ -203,11 +223,13 @@ export default function Navbar() {
         {/* Mobile menu button */}
         <div className="lg:hidden">
           <button
+            ref={menuButton}
             type="button"
             className="btn btn-ghost btn-sm btn-square"
             onClick={() => setMenuOpen((o) => !o)}
             aria-label="Toggle menu"
             aria-expanded={menuOpen}
+            aria-controls={menuOpen ? "site-menu" : undefined}
           >
             {menuOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
@@ -232,7 +254,7 @@ export default function Navbar() {
 
       {/* Mobile menu */}
       {menuOpen && (
-        <div className="glass border-t border-base-300/60 px-4 py-3 lg:hidden">
+        <div ref={menuPanel} id="site-menu" className="glass border-t border-base-300/60 px-4 py-3 lg:hidden">
           <div className="mb-3">
             <SearchBox align="start" onNavigate={() => setMenuOpen(false)} />
           </div>

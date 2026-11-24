@@ -62,7 +62,7 @@ export default function Orders() {
       ) : data === null ? (
         <Loading label="Checking the order book…" />
       ) : data.orders.length === 0 ? (
-        <EmptyState title="No orders here yet" hint="Once you order, every box gets tracked on this shelf.">
+        <EmptyState as="h2" title="No orders here yet" hint="Once you order, every box gets tracked on this shelf.">
           <Link to="/products" className="btn btn-primary btn-sm">Start an order</Link>
         </EmptyState>
       ) : (
@@ -78,7 +78,9 @@ export default function Orders() {
               </span>
               <div className="min-w-40 flex-1">
                 <p className="font-display font-bold">{order.order_number}</p>
-                <p className="text-xs opacity-70">{formatDate(order.created_at)} · {order.item_count} items</p>
+                <p className="text-xs opacity-70">
+                  {formatDate(order.created_at)} · {order.item_count} {order.item_count === 1 ? "item" : "items"}
+                </p>
               </div>
               <span className={`badge badge-sm ${statusBadge(order.status)} border`}>
                 {statusLabel(order.status)}

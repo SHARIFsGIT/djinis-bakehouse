@@ -248,12 +248,17 @@ function ComingSoonManager() {
             {/* A floor under the words: on a phone the controls drop to a
                 row of their own rather than squeezing the title to nothing. */}
             <div className="min-w-40 flex-1">
-              <p className="truncate text-sm font-semibold">
-                {item.title}
+              {/* The badge sits beside the title, not inside it: inside, the
+                  title's ellipsis cut it off on a phone. When the row is
+                  narrow it drops under the title, whole. */}
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <p className="min-w-0 truncate text-sm font-semibold">{item.title}</p>
                 {item.eta_label && (
-                  <span className="badge badge-secondary badge-xs ml-2 text-secondary-content">{item.eta_label}</span>
+                  <span className="badge badge-secondary badge-sm h-auto min-h-5 max-w-full text-secondary-content">
+                    {item.eta_label}
+                  </span>
                 )}
-              </p>
+              </div>
               {item.description && (
                 <p className="truncate text-xs opacity-70">{item.description}</p>
               )}

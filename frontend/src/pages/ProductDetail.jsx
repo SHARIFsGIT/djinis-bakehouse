@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router";
 import { BadgeCheck, Bell, Heart, Share2, Star, Truck, Wheat } from "lucide-react";
 import client, { apiError } from "../api/client";
@@ -131,6 +131,43 @@ function StarPicker({ value, onChange }) {
           )}
         </button>
       ))}
+    </div>
+  );
+}
+
+/** Ingredients and Allergens: a heading whose button shows or hides the text
+ *  beneath it, so a screen reader meets "Allergens, heading" and "button,
+ *  collapsed" where it used to find an unnamed checkbox. The look is
+ *  daisyUI's collapse, opened by state instead of a hidden input. */
+function InfoSection({ title, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const id = useId();
+  return (
+    <div
+      className={`collapse collapse-arrow bg-base-200/60 has-focus-visible:outline-2 has-focus-visible:outline-offset-2 ${
+        open ? "collapse-open" : ""
+      }`}
+    >
+      <h2 className="collapse-title p-0 text-sm font-semibold">
+        <button
+          type="button"
+          id={`${id}-button`}
+          aria-expanded={open}
+          aria-controls={`${id}-panel`}
+          onClick={() => setOpen((o) => !o)}
+          className="w-full cursor-pointer p-4 pe-12 text-left outline-none"
+        >
+          {title}
+        </button>
+      </h2>
+      <div
+        id={`${id}-panel`}
+        role="region"
+        aria-labelledby={`${id}-button`}
+        className="collapse-content text-sm opacity-80"
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -600,26 +637,14 @@ export default function ProductDetail() {
           {(product.ingredients || product.allergens) && (
             <div className="mt-6 space-y-3">
               {product.ingredients && (
-                <div className="collapse collapse-arrow bg-base-200/60">
-                  <input type="checkbox" defaultChecked />
-                  <div className="collapse-title text-sm font-semibold">
-                    Ingredients
-                  </div>
-                  <div className="collapse-content text-sm opacity-80">
-                    {product.ingredients}
-                  </div>
-                </div>
+                <InfoSection title="Ingredients" defaultOpen>
+                  {product.ingredients}
+                </InfoSection>
               )}
               {product.allergens && (
-                <div className="collapse collapse-arrow bg-base-200/60">
-                  <input type="checkbox" />
-                  <div className="collapse-title text-sm font-semibold">
-                    Allergens
-                  </div>
-                  <div className="collapse-content text-sm opacity-80">
-                    Contains: {product.allergens}
-                  </div>
-                </div>
+                <InfoSection title="Allergens">
+                  Contains: {product.allergens}
+                </InfoSection>
               )}
             </div>
           )}

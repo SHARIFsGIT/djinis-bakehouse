@@ -171,6 +171,7 @@ export default function Cart() {
     return (
       <div className="mx-auto max-w-3xl px-4 py-8">
         <EmptyState
+          as="h1"
           title="Your basket is empty"
           hint="The oven is full and waiting — go pick something warm."
         >
@@ -301,13 +302,18 @@ export default function Cart() {
 
           {picks.length > 0 && (
             <div className="pt-6">
-              <div className="rounded-box glass p-5 shadow-sm ring-1 ring-base-300/60">
+              <div className="@container rounded-box glass p-5 shadow-sm ring-1 ring-base-300/60">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <h2 className="font-display text-lg font-semibold">
                     Complete the box
                   </h2>
                 </div>
-                <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                {/* Three across only when the panel itself has the room —
+                    beside the tally on a laptop it is no wider than a phone.
+                    Otherwise one column of its own: a grid left to size itself
+                    grew to the longest name and pushed the "+" buttons past
+                    the edge. Names wrap rather than cut off. */}
+                <div className="mt-4 grid grid-cols-1 gap-4 @min-[42rem]:grid-cols-3">
                   {picks.map((p) => (
                     <div key={p.id} className="flex items-center gap-3">
                       <Link
@@ -324,7 +330,7 @@ export default function Cart() {
                       <div className="min-w-0 flex-1">
                         <Link
                           to={`/products/${p.slug}`}
-                          className="block truncate text-sm font-semibold hover:text-secondary"
+                          className="block text-sm font-semibold break-words hover:text-secondary"
                         >
                           {p.name}
                         </Link>

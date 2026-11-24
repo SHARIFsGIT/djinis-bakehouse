@@ -255,7 +255,7 @@ export default function Checkout() {
   if (items.length === 0) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-8">
-        <EmptyState title="Nothing to check out" hint="Your basket is empty — fill it with something warm first.">
+        <EmptyState as="h1" title="Nothing to check out" hint="Your basket is empty — fill it with something warm first.">
           <Link to="/products" className="btn btn-primary">Explore Our Bakes</Link>
         </EmptyState>
       </div>

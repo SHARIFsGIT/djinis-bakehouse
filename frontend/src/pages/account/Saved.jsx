@@ -26,6 +26,7 @@ export default function Saved() {
   if (products.length === 0) {
     return (
       <EmptyState
+        as="h2"
         title="Nothing saved yet"
         hint="Tap the heart on any bake and it will wait for you here — perfect for planning the weekend box."
       >

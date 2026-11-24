@@ -263,7 +263,10 @@ export default function Home() {
                       <p className="text-[0.65rem] font-bold tracking-[0.22em] uppercase opacity-70">
                         Today
                       </p>
-                      <p className="font-display truncate font-semibold">
+                      {/* The whole note, on as many lines as it needs — cut
+                          to one line on a phone it lost its end, often the
+                          point of it. */}
+                      <p className="font-display font-semibold text-pretty break-words">
                         {todayNote}
                       </p>
                     </div>
