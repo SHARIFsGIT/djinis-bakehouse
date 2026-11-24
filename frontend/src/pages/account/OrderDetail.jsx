@@ -1,15 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import {
-  Bike,
-  CheckCheck,
-  CircleCheck,
-  CircleX,
-  Flame,
-  Printer,
-  ReceiptText,
-  ShoppingBasket,
-} from "lucide-react";
+import { Printer, ReceiptText } from "lucide-react";
 import client, { apiError } from "../../api/client";
 import {
   formatDate,
@@ -20,24 +11,13 @@ import {
   PAYMENT_STATUSES,
   paysOnline,
   providerLabel,
-  statusBadge,
   statusLabel,
   statusStep,
 } from "../../lib/format";
 import { useCart } from "../../context/CartContext";
 import { useToast } from "../../context/ToastContext";
 import { Loading } from "../../components/Loading";
-
-// Little pictogram per stop on the order's journey through the shop.
-const STATUS_ICONS = {
-  pending: ReceiptText,
-  confirmed: CircleCheck,
-  baking: Flame,
-  ready: ShoppingBasket,
-  out_for_delivery: Bike,
-  delivered: CheckCheck,
-  cancelled: CircleX,
-};
+import OrderStatusBadge, { STATUS_ICONS } from "../../components/OrderStatusBadge";
 
 export default function OrderDetail() {
   const { id } = useParams();
@@ -355,9 +335,7 @@ export default function OrderDetail() {
           <p className="text-sm opacity-70">Placed {formatDateTime(order.created_at)}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className={`badge badge-lg ${statusBadge(order.status)} border`}>
-            {statusLabel(order.status)}
-          </span>
+          <OrderStatusBadge status={order.status} className="badge-lg" />
           <span className={`badge badge-lg ${payment.badge} border`}>{payment.label}</span>
           <Link
             to={`/account/orders/${order.id}/receipt`}

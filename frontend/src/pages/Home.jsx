@@ -187,7 +187,7 @@ export default function Home() {
             screen the whole hero ran off the right edge. */}
         <div className="mx-auto grid max-w-7xl grid-cols-1 items-center gap-12 px-4 py-14 md:grid-cols-2 md:py-20">
           <div className="rise-in">
-            <p className="badge badge-outline badge-secondary px-3 py-3 text-xs font-bold tracking-widest text-white uppercase">
+            <p className="badge badge-primary px-3 py-3 text-xs font-bold tracking-widest text-primary-content uppercase">
               Home kitchen · Small size bakery
             </p>
             <h1 className="font-display mt-5 text-5xl leading-[1.05] font-semibold md:text-6xl">

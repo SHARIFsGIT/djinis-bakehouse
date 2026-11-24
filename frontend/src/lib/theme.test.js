@@ -42,11 +42,11 @@ test("hexToOklch matches the published sRGB anchors", () => {
   close(white.l, 1.0, 0.005, "white L");
   close(white.c, 0, 0.002, "white C");
 
-  // The logo's own burgundy: a red-wine hue with the chroma the shipped
-  // theme's seats carry (the designer rounded the hue to 12; the pick's own
-  // hue measures ≈16.5).
+  // The logo's own burgundy: a red-wine hue with the chroma the theme's
+  // seats carry (index.css writes it as oklch(41% 0.14 15); the hex
+  // measures ≈14.8).
   const burgundy = hexToOklch(DEFAULT_BRAND_COLOR);
-  close(burgundy.h, 16.5, 4, "burgundy H");
+  close(burgundy.h, 15, 4, "burgundy H");
   assert.ok(burgundy.c > 0.1 && burgundy.c < 0.17, `burgundy C: ${burgundy.c}`);
 });
 
@@ -74,16 +74,18 @@ test("brandCss re-seats both themes and caps chroma at the shipped seats", () =>
   assert.ok(css.includes(":root{"), "light block");
   assert.ok(css.includes('[data-theme="midnight"]{'), "midnight block");
   assert.ok(css.includes("@media (prefers-color-scheme: dark)"), "dark fallback");
-  // Every seat keeps its lightness scaffold — the contrast contract. By day
-  // one wine does both jobs; at night the wine read as text and the wine
-  // under cream text are two seats (index.css says why).
-  assert.ok(css.includes("--color-primary:oklch(45% "), "primary lightness");
-  assert.match(css, /^:root\{[^}]*--color-secondary:oklch\(54% /, "day wine");
+  // Every seat keeps its lightness scaffold — the contrast contract, the
+  // same seats index.css gives the logo's burgundy. By day one wine does
+  // both jobs; at night the wine read as text and the wine under cream text
+  // are two seats (index.css says why).
+  assert.match(css, /^:root\{[^}]*--color-primary:oklch\(41% /, "day primary");
+  assert.match(css, /^:root\{[^}]*--color-secondary:oklch\(47% /, "day wine");
   assert.ok(!/^:root\{[^}]*--brand-wine/.test(css), "by day the fill follows the wine");
   const night = [...css.matchAll(/(?:\[data-theme="midnight"\]|:root:not\(\[data-theme\]\))\{([^}]*)\}/g)].map((m) => m[1]);
   assert.equal(night.length, 2, "both night blocks");
   for (const block of night) {
-    assert.match(block, /--color-secondary:oklch\(66% /, "night wine as text");
+    assert.match(block, /--color-primary:oklch\(52% /, "night primary");
+    assert.match(block, /--color-secondary:oklch\(73% /, "night wine as text");
     assert.match(block, /--brand-wine:oklch\(56% /, "night wine under cream text");
   }
 

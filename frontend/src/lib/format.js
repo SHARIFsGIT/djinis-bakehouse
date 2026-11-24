@@ -201,18 +201,21 @@ export const EVENT_TYPES = [
 /* Order domain                                                        */
 /* ------------------------------------------------------------------ */
 
-/* The badge each stage wears tells the story on its own — a box's journey
-   reads amber (waiting) → blue (taken in) → gold (in the oven) → burgundy
-   (boxed) → wine (on the bike) → green (on your table), red only for the
-   one that never left the shop. */
+/* A box's journey, and the group each stop belongs to — the group is what
+   its badge says at a glance (components/OrderStatusBadge.jsx draws it):
+     action      waiting on the shop: Pending
+     kitchen     in the kitchen: Confirmed, Baking, Ready
+     on-its-way  Out for delivery
+     done        Delivered
+     stopped     Cancelled — the one that never left the shop */
 export const ORDER_STATUSES = [
-  { value: "pending", label: "Pending", badge: "badge-warning" },
-  { value: "confirmed", label: "Confirmed", badge: "badge-info" },
-  { value: "baking", label: "Baking", badge: "badge-accent" },
-  { value: "ready", label: "Ready", badge: "badge-primary" },
-  { value: "out_for_delivery", label: "Out for delivery", badge: "badge-secondary" },
-  { value: "delivered", label: "Delivered", badge: "badge-success" },
-  { value: "cancelled", label: "Cancelled", badge: "badge-error" },
+  { value: "pending", label: "Pending", group: "action" },
+  { value: "confirmed", label: "Confirmed", group: "kitchen" },
+  { value: "baking", label: "Baking", group: "kitchen" },
+  { value: "ready", label: "Ready", group: "kitchen" },
+  { value: "out_for_delivery", label: "Out for delivery", group: "on-its-way" },
+  { value: "delivered", label: "Delivered", group: "done" },
+  { value: "cancelled", label: "Cancelled", group: "stopped" },
 ];
 
 const STATUS_MAP = Object.fromEntries(ORDER_STATUSES.map((s) => [s.value, s]));
@@ -224,7 +227,9 @@ export const statusLabel = (value) =>
   String(value ?? "")
     .replace(/_/g, " ")
     .replace(/^./, (c) => c.toUpperCase());
-export const statusBadge = (value) => STATUS_MAP[value]?.badge ?? "badge-ghost";
+
+/** The group a status belongs to, or null for a value this map doesn't know. */
+export const statusGroup = (value) => STATUS_MAP[value]?.group ?? null;
 
 /** Index in the happy-path progression (cancelled breaks out of it). */
 export const statusStep = (value) => ORDER_STATUSES.findIndex((s) => s.value === value);

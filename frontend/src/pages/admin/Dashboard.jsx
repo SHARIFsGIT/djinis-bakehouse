@@ -10,9 +10,10 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import client, { apiError } from "../../api/client";
-import { formatDate, hasNonActiveCurrency, money, statusBadge, statusLabel } from "../../lib/format";
+import { formatDate, hasNonActiveCurrency, money } from "../../lib/format";
 import TradingChart from "../../components/TradingChart";
 import { LoadError } from "../../components/Loading";
+import OrderStatusBadge from "../../components/OrderStatusBadge";
 
 /* The desk's first page, in the order a shift asks its questions:
    what is waiting for me, what is due when, how is the month going — and
@@ -167,9 +168,7 @@ function DueNext({ stats }) {
                       {count(order.item_count, "item")} · {money(order.total, order.currency)}
                     </span>
                   </span>
-                  <span className={`badge badge-sm ${statusBadge(order.status)} border whitespace-nowrap`}>
-                    {statusLabel(order.status)}
-                  </span>
+                  <OrderStatusBadge status={order.status} className="badge-sm" />
                 </Link>
               </li>
             );
@@ -328,9 +327,7 @@ function LatestOrders({ orders }) {
                   </td>
                   <td className="hidden max-w-32 truncate sm:table-cell">{o.recipient}</td>
                   <td>
-                    <span className={`badge badge-sm ${statusBadge(o.status)} border whitespace-nowrap`}>
-                      {statusLabel(o.status)}
-                    </span>
+                    <OrderStatusBadge status={o.status} className="badge-sm" />
                     <span className="figures mt-1 block text-xs font-bold sm:hidden">{money(o.total, o.currency)}</span>
                   </td>
                   <td className="figures hidden text-right font-bold whitespace-nowrap sm:table-cell">

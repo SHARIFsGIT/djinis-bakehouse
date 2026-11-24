@@ -5,7 +5,7 @@ export default function RatingStars({ rating = 0, count, size = "text-sm" }) {
   const rounded = Math.round(rating * 2) / 2;
   return (
     <span className={`inline-flex items-center gap-1.5 ${size}`}>
-      <span className="inline-flex text-warning" aria-hidden="true">
+      <span className="inline-flex text-accent" aria-hidden="true">
         {[1, 2, 3, 4, 5].map((i) => {
           if (rounded >= i) return <Star key={i} size="1.15em" className="fill-current" />;
           if (rounded >= i - 0.5) return <StarHalf key={i} size="1.15em" className="fill-current" />;

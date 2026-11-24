@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { ChevronRight } from "lucide-react";
 import client, { apiError } from "../../api/client";
-import { formatDate, money, ORDER_STATUSES, statusBadge, statusLabel } from "../../lib/format";
+import { formatDate, money, ORDER_STATUSES } from "../../lib/format";
 import EmptyState from "../../components/EmptyState";
 import { LoadError, Loading } from "../../components/Loading";
+import OrderStatusBadge from "../../components/OrderStatusBadge";
 import Pager from "../../components/Pager";
 
 export default function Orders() {
@@ -82,9 +83,7 @@ export default function Orders() {
                   {formatDate(order.created_at)} · {order.item_count} {order.item_count === 1 ? "item" : "items"}
                 </p>
               </div>
-              <span className={`badge badge-sm ${statusBadge(order.status)} border`}>
-                {statusLabel(order.status)}
-              </span>
+              <OrderStatusBadge status={order.status} className="badge-sm" />
               <p className="w-20 text-right font-bold">{money(order.total, order.currency)}</p>
               <ChevronRight size={16} className="shrink-0 opacity-65" aria-hidden="true" />
             </Link>

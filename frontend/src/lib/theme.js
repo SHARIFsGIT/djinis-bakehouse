@@ -8,8 +8,9 @@ const BRAND_KEY = "bakehouse.brand-color";
 const HERO_KEY = "bakehouse.hero-image";
 const STYLE_ID = "brand-colour-override";
 
-/** The burgundy the logo wears — the browser-chrome tint when no pick exists. */
-export const DEFAULT_BRAND_COLOR = "#7f2230";
+/** The burgundy the logo wears (the theme's own primary, index.css) — the
+ *  browser-chrome tint when no pick exists. */
+export const DEFAULT_BRAND_COLOR = "#851b31";
 
 /** The hero photo shipped with the site, as the backend names it. */
 export const DEFAULT_HERO_IMAGE = "/static/site/baker.jpg";
@@ -70,17 +71,19 @@ export function hexToOklch(hex) {
 /* The theme keeps its own lightness/chroma scaffolding — the seats' L values
    are what keep cream text readable on every button and wine links readable
    on every background — so a pick re-seats the hue (and a tamed share of the
-   picked chroma) rather than swapping the colour wholesale. Caps mirror the
-   shipped burgundy relationship (primary 0.16, secondary ~0.14 of that).
+   picked chroma) rather than swapping the colour wholesale. The seats and
+   the caps are index.css's own: a pick sits exactly where the logo's
+   burgundy sits (day primary 41% / 0.14, wine 47% / 0.13).
 
-   At night the wine has two seats, as in index.css: --color-secondary (66%)
+   At night the wine has two seats, as in index.css: --color-secondary (73%)
    is the one read as text and links on the dark paper, --brand-wine (56%)
-   the one that sits under cream text at the far end of the gradient. By day
-   one seat (54%) does both, and --brand-wine simply follows it. */
-const LIGHT_PRIMARY_C = 0.16;
-const LIGHT_SECONDARY_C = 0.14;
+   the one that sits under cream text on a filled button or badge. By day
+   one seat (47%) does both, and --brand-wine simply follows it. */
+const LIGHT_PRIMARY_C = 0.14;
+const LIGHT_SECONDARY_C = 0.13;
 const NIGHT_PRIMARY_C = 0.15;
-const NIGHT_SECONDARY_C = 0.135;
+const NIGHT_TEXT_WINE_C = 0.11;
+const NIGHT_FILL_WINE_C = 0.135;
 
 const seat = (lightness, chroma, hue) =>
   `oklch(${lightness}% ${chroma.toFixed(3)} ${hue.toFixed(1)})`;
@@ -95,12 +98,12 @@ export function brandCss(hex) {
   if (!isValidHexColor(hex)) return "";
   const { c, h } = hexToOklch(hex);
   const light =
-    `--color-primary:${seat(45, Math.min(c, LIGHT_PRIMARY_C), h)};` +
-    `--color-secondary:${seat(54, Math.min(c * 0.875, LIGHT_SECONDARY_C), h)}`;
+    `--color-primary:${seat(41, Math.min(c, LIGHT_PRIMARY_C), h)};` +
+    `--color-secondary:${seat(47, Math.min(c * 0.875, LIGHT_SECONDARY_C), h)}`;
   const night =
-    `--color-primary:${seat(45, Math.min(c, NIGHT_PRIMARY_C), h)};` +
-    `--color-secondary:${seat(66, Math.min(c * 0.9, NIGHT_SECONDARY_C), h)};` +
-    `--brand-wine:${seat(56, Math.min(c * 0.9, NIGHT_SECONDARY_C), h)}`;
+    `--color-primary:${seat(52, Math.min(c, NIGHT_PRIMARY_C), h)};` +
+    `--color-secondary:${seat(73, Math.min(c * 0.9, NIGHT_TEXT_WINE_C), h)};` +
+    `--brand-wine:${seat(56, Math.min(c * 0.9, NIGHT_FILL_WINE_C), h)}`;
   return (
     `:root{${light}}` +
     `[data-theme="midnight"]{${night}}` +

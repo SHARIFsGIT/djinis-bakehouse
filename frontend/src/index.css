@@ -5,40 +5,46 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* "bakery" — pulled from the mark itself: cream paper, deep burgundy, */
-/* a lighter wine, honey gold                                          */
+/* "bakery" — pulled from the mark itself: the logo's own burgundy     */
+/* (#851b31) and saffron (#eca13a) on flour-cream paper, with a warm   */
+/* crust-brown ink so the words never compete with the brand colour.   */
+/* The feedback colours keep out of the brand's way: a slate blue for  */
+/* information, the logo's sage for success, an orange for caution and */
+/* an orange-red for errors — none of them a burgundy.                 */
 /* ------------------------------------------------------------------ */
 @plugin "daisyui/theme" {
   name: "bakery";
   default: true;
   color-scheme: light;
 
-  --color-base-100: oklch(97.5% 0.012 72);
-  --color-base-200: oklch(94.5% 0.018 73);
-  --color-base-300: oklch(89.5% 0.03 76);
-  --color-base-content: oklch(26% 0.05 12);
+  /* flour, oat, rye */
+  --color-base-100: oklch(97.8% 0.009 82);
+  --color-base-200: oklch(95.2% 0.014 80);
+  --color-base-300: oklch(90.5% 0.02 75);
+  --color-base-content: oklch(24% 0.03 35);
 
-  --color-primary: oklch(45% 0.16 12);
-  --color-primary-content: oklch(98% 0.01 80);
-  --color-secondary: oklch(54% 0.14 14);
-  --color-secondary-content: oklch(98% 0.01 80);
-  --color-accent: oklch(80% 0.11 70);
-  --color-accent-content: oklch(28% 0.05 55);
-  --color-neutral: oklch(30% 0.03 15);
-  --color-neutral-content: oklch(96% 0.012 80);
+  --color-primary: oklch(41% 0.14 15);
+  --color-primary-content: oklch(98% 0.008 82);
+  --color-secondary: oklch(47% 0.13 16);
+  --color-secondary-content: oklch(98% 0.008 82);
+  --color-accent: oklch(76.6% 0.144 70.5);
+  --color-accent-content: oklch(26% 0.04 50);
+  --color-neutral: oklch(32% 0.025 45);
+  --color-neutral-content: oklch(96% 0.01 82);
 
-  --color-info: oklch(46% 0.06 71);
-  --color-info-content: oklch(97% 0.012 80);
-  /* The logo's sage, a shade deeper than it first shipped (57%): at 50%
-     it reads at 4.5:1 or better both ways round - as small green text on
-     the cream paper ("FREE", "saves ...") and as the fill under a badge's
-     cream label ("Paid", "Delivered"). */
-  --color-success: oklch(50% 0.075 155);
-  --color-success-content: oklch(97% 0.012 80);
-  --color-warning: oklch(78% 0.14 75);
-  --color-warning-content: oklch(28% 0.05 60);
-  --color-error: oklch(50% 0.18 20);
-  --color-error-content: oklch(97% 0.015 92);
+  --color-info: oklch(46% 0.035 250);
+  --color-info-content: oklch(98% 0.008 82);
+  /* The logo's sage: 5.9:1 both ways round - as small green text on the
+     paper ("FREE", "saves ...") and as the fill under a badge's cream
+     label ("Paid", "Delivered"). */
+  --color-success: oklch(48% 0.07 150);
+  --color-success-content: oklch(98% 0.008 82);
+  /* An orange, kept clear of the saffron: the two used to be one honey,
+     so a caution and a highlight looked alike. */
+  --color-warning: oklch(70% 0.17 48);
+  --color-warning-content: oklch(24% 0.04 50);
+  --color-error: oklch(50% 0.18 30);
+  --color-error-content: oklch(98% 0.008 82);
 
   --radius-selector: 0.75rem;
   --radius-field: 0.75rem;
@@ -51,8 +57,9 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* "midnight" — espresso night. Brand surfaces keep the same           */
-/* burgundy→wine gradient; the gold moves to the accent seat. The wine */
+/* "midnight" — espresso night. The burgundy steps up to #ae3b4c, so a */
+/* button still stands off the dark paper (3.2:1) under its cream      */
+/* label (5.5:1); the saffron is the logo's own, as by day. The wine   */
 /* has two seats here: --color-secondary is lifted far enough to be    */
 /* read as text and links on the dark paper, and --brand-wine (set     */
 /* below the themes) is the deeper wine that sits under cream text.    */
@@ -62,29 +69,31 @@
   prefersdark: true;
   color-scheme: dark;
 
-  --color-base-100: oklch(19.5% 0.021 30);
-  --color-base-200: oklch(23.5% 0.026 30);
-  --color-base-300: oklch(30% 0.032 32);
-  --color-base-content: oklch(91% 0.012 80);
+  --color-base-100: oklch(17.5% 0.016 45);
+  --color-base-200: oklch(21.5% 0.019 45);
+  --color-base-300: oklch(27.5% 0.022 45);
+  --color-base-content: oklch(92% 0.01 82);
 
-  --color-primary: oklch(45% 0.15 14);
-  --color-primary-content: oklch(97% 0.012 80);
-  --color-secondary: oklch(66% 0.135 14);
-  --color-secondary-content: oklch(97% 0.012 80);
-  --color-accent: oklch(83% 0.125 78);
-  --color-accent-content: oklch(25% 0.05 60);
-  --color-neutral: oklch(25% 0.028 30);
-  --color-neutral-content: oklch(91% 0.012 80);
+  --color-primary: oklch(52% 0.15 15);
+  --color-primary-content: oklch(97% 0.01 82);
+  --color-secondary: oklch(73% 0.11 16);
+  --color-secondary-content: oklch(97% 0.01 82);
+  --color-accent: oklch(76.6% 0.144 70.5);
+  --color-accent-content: oklch(22% 0.04 50);
+  --color-neutral: oklch(24% 0.02 45);
+  --color-neutral-content: oklch(92% 0.01 82);
 
-  --color-info: oklch(72% 0.07 72);
-  --color-info-content: oklch(20% 0.03 45);
-  --color-success: oklch(72% 0.09 155);
-  --color-success-content: oklch(18% 0.04 150);
-  --color-warning: oklch(82% 0.13 78);
-  --color-warning-content: oklch(25% 0.05 60);
-  --color-error: oklch(66% 0.17 25);
-  /* Dark, like the night's other label colours: cream on this coral was
-     3.1:1 ("Cancelled", "out"); the dark label is 5.6:1. */
+  --color-info: oklch(74% 0.035 250);
+  --color-info-content: oklch(18% 0.02 250);
+  --color-success: oklch(73% 0.08 150);
+  --color-success-content: oklch(18% 0.03 150);
+  --color-warning: oklch(70% 0.17 48);
+  --color-warning-content: oklch(22% 0.04 55);
+  /* Redder and a step darker than the orange, so the error, the caution
+     and the saffron stay three colours on the dark paper — and still light
+     enough to read as words on the darkest panel (4.6:1). Dark labels, like
+     the night's other fills: cream on a coral reads at about 3:1. */
+  --color-error: oklch(67% 0.17 22);
   --color-error-content: oklch(18% 0.04 25);
 
   --radius-selector: 0.75rem;
@@ -98,24 +107,38 @@
 }
 
 /* The wine has two jobs: to be read as text and links, and to sit under
-   cream text at the far end of the brand gradient. By day one colour does
-   both (cream on it 5.1:1, it on the paper 5.1:1). At night no single
-   colour can: light enough to read on the dark paper is too light for
-   cream text on top of it. It used to be one compromise that passed
-   neither (3.9:1 and 4.3:1); now the fill has a seat of its own (4.6:1)
-   and the text seat is lifted (5.5:1). The selectors mirror the themes'
-   own; lib/theme.js re-seats both for a brand colour the baker picks. */
+   cream text on a filled button or badge. By day one colour does both
+   (cream on it 6.9:1, it on the paper 6.8:1). At night no single colour
+   can: light enough to read on the dark paper is too light for cream text
+   on top of it. So the fill has a seat of its own (cream on it 4.6:1) and
+   the text seat is lifted (7.5:1 on the paper). The selectors mirror the
+   themes' own; lib/theme.js re-seats both for a brand colour the baker
+   picks.
+
+   The order statuses' own colours sit beside it (see "Order statuses"
+   below). They are written out rather than borrowed from the brand seats
+   on purpose: a brand colour the baker picks re-tints the shop, never the
+   order code — a teal pick would otherwise turn "Ready" into "Confirmed". */
 :where(:root),
 [data-theme="bakery"] {
   --brand-wine: var(--color-secondary);
+  --status-confirmed: oklch(53.5% 0.086 185.5);
+  --status-ready: oklch(41% 0.14 15);
+  --status-out: oklch(41% 0.14 15);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     --brand-wine: oklch(56% 0.135 14);
+    --status-confirmed: oklch(66% 0.09 185.5);
+    --status-ready: oklch(73% 0.11 16);
+    --status-out: oklch(52% 0.15 15);
   }
 }
 [data-theme="midnight"] {
   --brand-wine: oklch(56% 0.135 14);
+  --status-confirmed: oklch(66% 0.09 185.5);
+  --status-ready: oklch(73% 0.11 16);
+  --status-out: oklch(52% 0.15 15);
 }
 
 /* ------------------------------------------------------------------ */
@@ -126,12 +149,13 @@
   --font-display: "Fraunces Variable", "Iowan Old Style", Georgia, serif;
 }
 
-/* Fraunces' soft, slightly wonky letterforms — used for display text */
+/* Fraunces for display text, in two faces: upright and its own italic
+   (main.jsx loads both, weight axis only). "Bakehouse" in the name, the
+   hero's accent word and the 404 line are drawn in the real italic, not
+   slanted by the browser. The soft and wonky axes are not loaded — a
+   setting for them would do nothing — so there is none. */
 .font-display {
   font-family: var(--font-display);
-  font-variation-settings:
-    "SOFT" 55,
-    "WONK" 1;
 }
 
 @layer base {
@@ -341,20 +365,13 @@ label.label:not(:has(input, select, textarea), .input > *, .select > *) {
   }
 }
 
-/* The shop's signature finish — burgundy easing into wine across every
-   brand surface, buttons and badges included. Buttons deepen a touch on
-   hover so the fill still reads as interactive; disabled ones drop the
-   image so their muted colour shows through. */
-.brand-gradient,
-.btn-primary,
-.btn-secondary,
-.badge-primary,
-.badge-secondary {
-  background-image: linear-gradient(
-    120deg,
-    var(--color-primary),
-    var(--brand-wine)
-  );
+/* The shop's brand fill — the logo's burgundy, flat, the way a printed
+   label is: the announcement bar, the Today strip, the scrolling strip, the
+   numbered and lettered roundels. (The class keeps the name of the gradient
+   it used to draw.) Filled buttons and badges are flat in the same colour;
+   the component library paints those from the theme's seats. */
+.brand-gradient {
+  background-color: var(--color-primary);
 }
 /* The rim and the shadow the component library draws around a filled wine
    button or badge follow the fill, not the (lighter, at night) text wine. */
@@ -364,36 +381,92 @@ label.label:not(:has(input, select, textarea), .input > *, .select > *) {
 .badge-secondary:not(.badge-soft, .badge-dash, .badge-ghost) {
   --badge-color: var(--brand-wine);
 }
+/* The same for the progress steps on an order's page: a passed stop is
+   filled with the wine and numbered in cream, so it takes the fill seat.
+   (By day the two seats are one colour; at night cream numbers on the
+   text seat would read at about 2.3:1.) */
+.steps .step-secondary + .step-secondary::before,
+.steps .step-secondary::after,
+.steps .step-secondary > .step-icon {
+  --step-bg: var(--brand-wine);
+}
 
-/* Hover is for pointers that can hover: on a touch screen a tapped button
-   would otherwise keep its hover fill until something else is tapped. */
+/* A filled brand button deepens by a shade on hover, so the flat fill still
+   reads as interactive — firmer than the library's own 7%. Hover is for
+   pointers that can hover: on a touch screen a tapped button would
+   otherwise keep its hover fill until something else is tapped. Disabled
+   buttons are the library's own muted grey, untouched. */
 @media (hover: hover) and (pointer: fine) {
-  .btn-primary:hover,
-  .btn-secondary:hover {
-    background-image: linear-gradient(
-      120deg,
-      color-mix(in oklab, var(--color-primary) 85%, black),
-      color-mix(in oklab, var(--brand-wine) 85%, black)
-    );
+  .btn-primary:not(.btn-outline, .btn-soft, .btn-dash, .btn-ghost, .btn-link):hover,
+  .btn-secondary:not(.btn-outline, .btn-soft, .btn-dash, .btn-ghost, .btn-link):hover {
+    --btn-bg: color-mix(in oklab, var(--btn-color) 86%, black);
   }
 }
 /* A finger gets its answer on the way down, not on the way up. */
-.btn-primary:active:not(:disabled),
-.btn-secondary:active:not(:disabled) {
-  background-image: linear-gradient(
-    120deg,
-    color-mix(in oklab, var(--color-primary) 80%, black),
-    color-mix(in oklab, var(--brand-wine) 80%, black)
-  );
+.btn-primary:not(.btn-outline, .btn-soft, .btn-dash, .btn-ghost, .btn-link):active:not(:disabled),
+.btn-secondary:not(.btn-outline, .btn-soft, .btn-dash, .btn-ghost, .btn-link):active:not(:disabled) {
+  --btn-bg: color-mix(in oklab, var(--btn-color) 80%, black);
 }
 
-.btn-primary:disabled,
-.btn-secondary:disabled,
-.btn-primary[disabled],
-.btn-secondary[disabled],
-.btn-primary.btn-disabled,
-.btn-secondary.btn-disabled {
-  background-image: none;
+/* A caution drawn as an outlined badge ("Only 2 left") takes its words
+   from the caution text below, not from the orange itself — as words on the
+   paper the orange alone is under 3:1. The outline stays orange. */
+.badge-outline.badge-warning {
+  color: color-mix(in oklab, var(--color-warning) 50%, var(--color-base-content));
+  border-color: var(--color-warning);
+}
+
+/* ------------------------------------------------------------------ */
+/* Order statuses                                                      */
+/* ------------------------------------------------------------------ */
+/* An order's status reads at a glance by the group it is in, and is told
+   apart inside its group by its own colour, its pictogram and its word —
+   never by colour alone (components/OrderStatusBadge.jsx draws them;
+   lib/format.js keeps the groups):
+     needs action    Pending                    solid orange
+     in the kitchen  Confirmed, Baking, Ready   soft tints: teal, saffron,
+                                                burgundy
+     on its way      Out for delivery           solid burgundy
+     done            Delivered                  solid sage
+     stopped         Cancelled                  a neutral outline
+   The soft tints carry their words in the tint's colour mixed half-and-half
+   with the ink: 5:1 or better on the tint in both themes, the saffron
+   included. Outside the layers, so they hold over the library's badge. */
+.order-status {
+  gap: 0.3em;
+  border-width: 1px;
+  white-space: nowrap;
+}
+.order-status[data-group="kitchen"] {
+  background-color: color-mix(in oklab, var(--status) 18%, var(--color-base-100));
+  border-color: color-mix(in oklab, var(--status) 45%, var(--color-base-100));
+  color: color-mix(in oklab, var(--status) 50%, var(--color-base-content));
+}
+.order-status[data-status="confirmed"] {
+  --status: var(--status-confirmed);
+}
+.order-status[data-status="baking"] {
+  --status: var(--color-accent);
+}
+.order-status[data-status="ready"] {
+  --status: var(--status-ready);
+}
+.order-status[data-status="pending"] {
+  --badge-color: var(--color-warning);
+  --badge-fg: var(--color-warning-content);
+}
+.order-status[data-status="out_for_delivery"] {
+  --badge-color: var(--status-out);
+  --badge-fg: var(--color-primary-content);
+}
+.order-status[data-status="delivered"] {
+  --badge-color: var(--color-success);
+  --badge-fg: var(--color-success-content);
+}
+.order-status[data-group="stopped"] {
+  background-color: transparent;
+  border-color: color-mix(in oklab, var(--color-base-content) 45%, transparent);
+  color: color-mix(in oklab, var(--color-base-content) 80%, transparent);
 }
 
 /* Subtle flour-dust grain over the whole page */
@@ -571,15 +644,16 @@ label.label:not(:has(input, select, textarea), .input > *, .select > *) {
 
   /* The receipt's frame: a deep-burgundy outer rule with a fine inner one
      inset from it — the letterpress look of a proper certificate, so what
-     prints (or saves as PDF) reads as a keepsake, not a screen dump. */
+     prints (or saves as PDF) reads as a keepsake, not a screen dump. The
+     logo's burgundy, written out: a print never wears a brand-colour pick. */
   .receipt-sheet {
-    border: 2.5px solid #7f2230 !important;
+    border: 2.5px solid #851b31 !important;
     border-radius: 10px;
     padding: 6mm !important;
     box-shadow: none !important;
   }
   .receipt-frame {
-    border: 1px solid #7f2230 !important;
+    border: 1px solid #851b31 !important;
     border-radius: 6px;
     padding: 7mm !important;
   }

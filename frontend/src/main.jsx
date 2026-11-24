@@ -2,6 +2,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import "@fontsource-variable/fraunces";
+// Fraunces' own italic (weight axis only, like the upright): the name's
+// "Bakehouse" and every italic display line, drawn rather than slanted.
+import "@fontsource-variable/fraunces/wght-italic.css";
 import "@fontsource-variable/karla";
 import "./index.css";
 import App from "./App.jsx";

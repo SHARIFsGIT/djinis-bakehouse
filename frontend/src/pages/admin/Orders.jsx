@@ -28,12 +28,12 @@ import {
   PAYMENT_STATUSES,
   paysOnline,
   providerLabel,
-  statusBadge,
   statusLabel,
 } from "../../lib/format";
 import { useToast } from "../../context/ToastContext";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import { LoadError, Loading } from "../../components/Loading";
+import OrderStatusBadge from "../../components/OrderStatusBadge";
 import Pager from "../../components/Pager";
 import { useEscape, useFocusHandoff, useScrollLock } from "../../components/Drawer";
 import { PaymentsPanel, providerHoldsMoney, ReconciliationReport } from "./OrderPayments";
@@ -246,9 +246,7 @@ function OrderDrawer({ orderId, onClose, onChanged }) {
       <div className="flex-1 space-y-5 overflow-y-auto p-5">
         {/* Badges */}
         <div className="flex flex-wrap gap-2">
-          <span className={`badge badge-lg ${statusBadge(order.status)} border`}>
-            {statusLabel(order.status)}
-          </span>
+          <OrderStatusBadge status={order.status} className="badge-lg" />
           <span className={`badge badge-lg ${payment.badge} border`}>{payment.label}</span>
           <span className="badge badge-lg badge-ghost border">{PAYMENT_METHODS[order.payment_method]}</span>
         </div>
@@ -929,9 +927,7 @@ function OrdersTab() {
                   <span id={`order-card-${o.id}`} className="min-w-0 flex-1">
                     <span className="flex items-start justify-between gap-3">
                       <span className="figures truncate font-bold">{o.order_number}</span>
-                      <span className={`badge badge-sm ${statusBadge(o.status)} shrink-0 border whitespace-nowrap`}>
-                        {statusLabel(o.status)}
-                      </span>
+                      <OrderStatusBadge status={o.status} className="badge-sm shrink-0" />
                     </span>
                     <span className="mt-1 flex items-baseline justify-between gap-3 text-sm">
                       <span className="truncate">{o.recipient}</span>
@@ -992,9 +988,7 @@ function OrdersTab() {
                       <span className="block truncate text-xs opacity-65">{o.city}</span>
                     </td>
                     <td>
-                      <span className={`badge badge-sm ${statusBadge(o.status)} border whitespace-nowrap`}>
-                        {statusLabel(o.status)}
-                      </span>
+                      <OrderStatusBadge status={o.status} className="badge-sm" />
                       <span className="mt-1 block text-xs opacity-75 xl:hidden">
                         <PaymentState order={o} />
                       </span>

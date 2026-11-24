@@ -111,7 +111,7 @@ function StarPicker({ value, onChange }) {
   const shown = hover || value;
   return (
     <div
-      className="flex gap-1 text-3xl text-warning"
+      className="flex gap-1 text-3xl text-accent"
       onMouseLeave={() => setHover(0)}
     >
       {[1, 2, 3, 4, 5].map((star) => (
@@ -191,7 +191,7 @@ function InteractiveRating({ average, count, onPick, canReview }) {
           onPick(star);
         }
       }}
-      className={`text-warning ${canReview ? "cursor-pointer transition hover:scale-110" : ""}`}
+      className={`text-accent ${canReview ? "cursor-pointer transition hover:scale-110" : ""}`}
       aria-label={`${star} star${star > 1 ? "s" : ""}`}
     >
       {star <= shown ? (
@@ -680,7 +680,7 @@ export default function ProductDetail() {
                   <li key={stars} className="flex items-center gap-2 text-xs">
                     <span className="flex w-8 items-center gap-0.5 font-semibold">
                       {stars}
-                      <Star size={12} className="fill-current text-warning" />
+                      <Star size={12} className="fill-current text-accent" />
                     </span>
                     <div className="h-2 flex-1 overflow-hidden rounded-full bg-base-200">
                       <div

@@ -135,8 +135,10 @@ export default function Navbar() {
           aria-label="Djini's Bakehouse — home"
           className="flex h-[3.25rem] min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 gap-y-6 overflow-hidden pt-1.5 sm:h-auto sm:flex-none sm:flex-nowrap sm:gap-x-2.5 sm:overflow-visible sm:pt-0"
         >
+          {/* The 128px copy of the mark: sharp up to a 3x screen at this
+              size, a quarter of the full-size file's weight. */}
           <img
-            src="/static/site/logo.png"
+            src="/static/site/logo-128.webp"
             alt=""
             className="h-10 w-10 shrink-0 object-contain"
           />

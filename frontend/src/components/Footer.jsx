@@ -57,7 +57,7 @@ export default function Footer() {
       >
         <div>
           <div className="flex items-center gap-2.5">
-            <img src="/static/site/logo.png" alt="Djini's Bakehouse" className="h-9 w-9 object-contain" />
+            <img src="/static/site/logo-128.webp" alt="Djini's Bakehouse" className="h-9 w-9 object-contain" />
             <p className="font-display text-xl font-bold">
               Djini&rsquo;s <span className="italic text-secondary">Bakehouse</span>
             </p>

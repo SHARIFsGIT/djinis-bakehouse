@@ -9,6 +9,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  ORDER_STATUSES,
   apiTime,
   applyShopConfig,
   couponSaving,
@@ -18,6 +19,8 @@ import {
   paysOnline,
   providerLabel,
   shopConfig,
+  statusGroup,
+  statusLabel,
   taxLabel,
 } from "./format.js";
 
@@ -159,4 +162,29 @@ test("only the provider rails pay online, and each provider has its name", () =>
   assert.equal(providerLabel("stripe"), "Stripe");
   assert.equal(providerLabel("paypal"), "PayPal");
   assert.equal(providerLabel(null), "the payment provider");
+});
+
+test("order statuses keep the API's values and fall into their badge groups", () => {
+  // The wire values are the backend's OrderStatus, in the order a box moves.
+  assert.deepEqual(
+    ORDER_STATUSES.map((s) => s.value),
+    ["pending", "confirmed", "baking", "ready", "out_for_delivery", "delivered", "cancelled"],
+  );
+  // Waiting on the shop; three in the kitchen; on its way; done; stopped.
+  assert.deepEqual(
+    Object.fromEntries(ORDER_STATUSES.map((s) => [s.value, statusGroup(s.value)])),
+    {
+      pending: "action",
+      confirmed: "kitchen",
+      baking: "kitchen",
+      ready: "kitchen",
+      out_for_delivery: "on-its-way",
+      delivered: "done",
+      cancelled: "stopped",
+    },
+  );
+  assert.equal(statusGroup("unheard_of"), null);
+  assert.equal(statusGroup(undefined), null);
+  assert.equal(statusLabel("out_for_delivery"), "Out for delivery");
+  assert.equal(statusLabel("unheard_of"), "Unheard of");
 });
