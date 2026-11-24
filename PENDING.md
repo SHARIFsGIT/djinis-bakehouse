@@ -9,6 +9,10 @@ back the logo's own burgundy and shortens the shop's wording: items **17**
 and **18** are new. Since the first writing, the live shop also reports text
 sign-in (item 11) and "Continue with Facebook" (item 12) as switched on.
 
+Updated 2026-11-25, with the release that puts **Email | Phone tabs** on the
+log-in and sign-up pages and rebuilds the desk's **Users** page: items 10,
+11 and 14 now describe the tabs. Nothing new to do.
+
 Everything below is yours to do or to decide — none of it can be done from
 the code. Each item says **what is open**, **why it matters**, **how to fix
 it**, and **how to see that it worked**. No step asks for a real payment as
@@ -261,23 +265,24 @@ broken — the shop simply keeps adding 7 % at the till.
 
 ## 10. Phone sign-in — what to know, and what to try once
 
-**What is new.** The sign-up and log-in pages now have one field,
-**"Email or phone number"**, and a password. A customer can open an account
-with just a name, a phone number and a password.
+**What is new.** The sign-up and log-in pages have two tabs, **Email** and
+**Phone**, and a password. A customer can open an account with just a name,
+a phone number and a password. The pages open on the tab that browser last
+signed in with.
 
 **Try it once on the live site (10 minutes).**
 
-1. Open `/register` in a private window. Sign up with a name, **your own
-   mobile number** (`0176…` or `+49 176…`) and a password.
-2. Log out, then log in with the same number written differently (with
-   spaces, or with `+49`). It must be the same account.
+1. Open `/register` in a private window, choose the **Phone** tab, and sign
+   up with a name, **your own mobile number** (`0176…` or `+49 176…`) and a
+   password.
+2. Log out, then on *Log in* → **Phone**, log in with the same number written
+   differently (with spaces, or with `+49`). It must be the same account.
 3. Open *Profile*: there is an "Email (optional)" field — add an address
    and save. From then on the account also gets receipts by email.
-4. As admin: *Baker's desk → Users* → find the account by its number →
-   the first small button at the end of its row opens its desk card →
-   **Make a reset link**. That is how a customer without an
-   email gets a new password: you send them the link (WhatsApp, SMS, or read
-   it out). It works once, for 30 minutes.
+4. As admin: *Baker's desk → Users* → find the account by its number → tap
+   its row to open its card → *Account* → **Make a reset link**. That is how
+   a customer without an email gets a new password: you send them the link
+   (WhatsApp, SMS, or read it out). It works once, for 30 minutes.
 
 **Things to know.**
 
@@ -303,7 +308,8 @@ with just a name, a phone number and a password.
 
 ## 11. Texted sign-in codes through Bird Verify — built, switched off
 
-**What it adds.** A "Text me a sign-in code" button on the log-in page, and a
+**What it adds.** A "Text me a sign-in code instead" button under the log-in
+page's **Phone** tab, and a
 "Text sign-in" panel on each customer's profile. A customer confirms their
 number once with a texted code; after that they can sign in with six digits
 by SMS instead of their password. Bird generates, sends and checks every
@@ -328,8 +334,8 @@ Germany enabled, SMS, 10 minutes, 5 tries, 60-second retry delay).
 **How to see it worked.** The start-up log says `Text sign-in codes: Bird
 Verify at https://eu1.platform.bird.com`. Sign in to your own **customer**
 account, open *Profile* → *Text sign-in* → **Text me a code**, and type the
-code from the SMS. Log out, then *Log in* → *Text me a sign-in code* with the
-same number. Codes work once, for 10 minutes; each number gets at most one a
+code from the SMS. Log out, then *Log in* → **Phone** → *Text me a sign-in
+code instead* with the same number. Codes work once, for 10 minutes; each number gets at most one a
 minute, five an hour and ten a day, and the whole shop at most 100 a day
 (`SMS_DAILY_LIMIT` changes that).
 
@@ -377,14 +383,16 @@ Everything was checked in a desktop browser that imitates a phone
 how it feels in the hand. Please try these once on a real iPhone and a real
 Android phone and tell me what looks or feels wrong:
 
-- [ ] Log-in and sign-up: tapping "Email or phone number" must **not** zoom
-      the page; the keyboard has `@` and digits within reach.
-- [ ] Sign up with a phone number, then log in again.
+- [ ] Log-in and sign-up: tapping a field must **not** zoom the page; under
+      **Email** the keyboard has `@` within reach, under **Phone** it shows
+      digits. The Email | Phone switch slides smoothly under your thumb.
+- [ ] Sign up with a phone number (the **Phone** tab), then log in again.
 - [ ] Home → a product → add to basket → basket → checkout (stop before
       paying, or pay by cash on delivery and cancel the order afterwards).
 - [ ] The dashboard as admin: the four figures, the chart (tap a day — its
       amount appears), the "Table" button, the lists.
-- [ ] Orders and Users at the desk: nothing runs off the side of the screen.
+- [ ] Orders and Users at the desk: nothing runs off the side of the screen;
+      on Users, a customer's card opens with one tap and scrolls to the end.
 - [ ] Dark mode (the moon in the header).
 
 ---

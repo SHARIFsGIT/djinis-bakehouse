@@ -292,8 +292,9 @@ validates the type and size (JPEG/PNG/WebP, ≤ 6 MB) and stores it under
 profile photo the same way (512px, ≤ 2 MB) — it shows up in the navbar, on the
 profile page and in the admin user list, and can be removed with one click.
 
-**Accounts** — one field takes **an email address or a phone number**, at
-sign-up and at log-in, with a password; JWT access/refresh tokens (silent
+**Accounts** — two tabs, **Email** and **Phone**, at sign-up and at log-in,
+each with a password (the pages open on the tab that browser last signed in
+with, or on `?with=email|phone`); JWT access/refresh tokens (silent
 refresh in the frontend), profile & password management, an address book with
 default addresses. A number is one account however it is typed — `0176 555 0100`,
 `+49 176 555 0100` and `0049 176…` are the same (a number written the national
@@ -358,9 +359,17 @@ coupon management on a redesigned Promotions desk (summary strip with live
 counts and honest redemptions, search and status filters, and a drawer
 editor for create/edit that floats over the page so nothing beneath it
 ever jumps);
-user management as the regulars' roll — measured loyalty tiers, tier chips,
-search, sorting and shelves of ten, with a gift button per VIP/loyal regular
-that copies the coupon code their tier earns; the Marketing desk (consent,
+user management as the regulars' roll — the whole roll at a glance
+(customers and new ones, who ordered and who came back, lifetime and average
+spend, who may be emailed), measured loyalty tiers with tier chips, filters
+for the desk's word, phone-only accounts, consent, deactivated accounts and
+role, search, sorting (name A–Z included) and shelves of fifteen, all kept in
+the address bar; a CSV export of exactly the view on screen (every page of
+it, logged, spreadsheet formulas defused); and a card per customer with their
+contact details, order figures, their latest orders (by account, exactly),
+the desk's word and its ledger, marketing consent, role and active switches,
+and the reset link — the loyalty codes VIP and loyal regulars earn are one
+copy away; the Marketing desk (consent,
 campaigns, personal vouchers, the suppression list and the newsletter
 sign-ups with CSV export); and Settings, ordered the way the day runs — the
 home page photo on top (swappable from the desk, resettable to the shipped
