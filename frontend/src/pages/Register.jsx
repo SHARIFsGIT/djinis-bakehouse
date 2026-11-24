@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router";
 import { apiError } from "../api/client";
-import AuthLayout from "../components/AuthLayout";
 import PasswordInput from "../components/PasswordInput";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
@@ -65,65 +64,68 @@ export default function Register() {
   };
 
   return (
-    <AuthLayout>
-      <h1 className="font-display text-4xl leading-[1.05] font-semibold text-balance sm:text-5xl">
-        Join the <em className="text-secondary italic">bakehouse</em>
-      </h1>
-      <p className="mt-3 text-lg leading-relaxed text-pretty opacity-80">
-        Faster checkout, order history, first dibs on seasonal bakes.
-      </p>
+    <div className="mx-auto max-w-md px-4 py-16">
+      {/* As on the log-in page: under 390px the card gives its sides 20px
+          instead of 32 so the email field has room to show its whole hint. */}
+      <div className="rise-in rounded-box glass px-5 py-8 shadow-lg ring-1 ring-base-300/60 min-[390px]:px-8">
+        <img src="/static/site/logo.png" alt="" className="mx-auto h-14 w-14 object-contain" />
+        <h1 className="font-display mt-4 text-center text-3xl font-semibold">Join the bakehouse</h1>
+        <p className="mt-1 text-center text-sm opacity-70">
+          Faster checkout, order history, first dibs on seasonal bakes.
+        </p>
 
-      <form onSubmit={submit} className="mt-8 space-y-5">
-        <div>
-          <label className="label text-sm" htmlFor="name">Your name</label>
-          <input
-            id="name"
-            className="input input-bordered w-full"
-            placeholder="Jamie Oliver"
-            autoComplete="name"
-            required
-            maxLength={200}
-            value={form.name}
-            onChange={set("name")}
-          />
-        </div>
-        <div>
-          <label className="label text-sm" htmlFor="reg-email">Email or phone number</label>
-          <input
-            id="reg-email"
-            type="text"
-            inputMode="email"
-            className={`input input-bordered w-full ${problem ? "input-error" : ""}`}
-            placeholder="you@example.com or 0176 555 0100"
-            autoComplete="username"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            required
-            maxLength={255}
-            aria-invalid={Boolean(problem)}
-            aria-describedby="reg-who-note"
-            value={form.who}
-            onChange={set("who")}
-          />
-          {/* One line under the field, saying what matters for what was
-              typed: a problem, what a phone number alone means, or simply
-              what the field is for. */}
-          <p
-            id="reg-who-note"
-            className={`mt-1.5 text-sm ${problem ? "font-semibold text-error" : "opacity-75"}`}
-            role={problem ? "alert" : undefined}
-          >
-            {problem ||
-              (byPhone
-                ? "You'll log in with this number. Receipts and password resets go by email — add one in your profile whenever you like."
-                : "Whichever you'll remember — it's what you log in with.")}
-          </p>
-        </div>
-        <div>
-          <label className="label text-sm" htmlFor="reg-password">Password</label>
+        <form onSubmit={submit} className="mt-6 space-y-4">
+          <div>
+            <label className="label text-xs" htmlFor="name">Your name</label>
+            <input
+              id="name"
+              className="input input-bordered w-full"
+              placeholder="Jamie Oliver"
+              autoComplete="name"
+              required
+              maxLength={200}
+              value={form.name}
+              onChange={set("name")}
+            />
+          </div>
+          <div>
+            <label className="label text-xs" htmlFor="reg-email">Email or phone number</label>
+            <input
+              id="reg-email"
+              type="text"
+              inputMode="email"
+              // The hint alone steps down on a narrow phone (15px, then 13px
+              // under 360px), as on the log-in page; typed text stays 16px.
+              className={`input input-bordered w-full max-[389px]:placeholder:text-[15px] max-[359px]:placeholder:text-[13px] ${problem ? "input-error" : ""}`}
+              placeholder="you@example.com or 0176 555 0100"
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              required
+              maxLength={255}
+              aria-invalid={Boolean(problem)}
+              aria-describedby="reg-who-note"
+              value={form.who}
+              onChange={set("who")}
+            />
+            {/* One line under the field, saying what matters for what was
+                typed: a problem, what a phone number alone means, or simply
+                what the field is for. */}
+            <p
+              id="reg-who-note"
+              className={`mt-1.5 text-xs ${problem ? "font-semibold text-error" : "opacity-70"}`}
+              role={problem ? "alert" : undefined}
+            >
+              {problem ||
+                (byPhone
+                  ? "You'll log in with this number. Receipts and password resets go by email — add one in your profile whenever you like."
+                  : "Whichever you'll remember — it's what you log in with.")}
+            </p>
+          </div>
           <PasswordInput
             id="reg-password"
+            label="Password"
             placeholder="At least 8 characters"
             autoComplete="new-password"
             required
@@ -131,25 +133,25 @@ export default function Register() {
             value={form.password}
             onChange={set("password")}
           />
-        </div>
-        <button type="submit" className="btn btn-primary btn-lg w-full" disabled={busy}>
-          {busy ? <span className="loading loading-spinner loading-sm" /> : "Create account"}
-        </button>
-        {/* What signing up means, where it is decided — with the two
-            documents one tap away. */}
-        <p className="text-xs leading-relaxed opacity-75">
-          By creating an account you accept our{" "}
-          <Link to="/terms" className="link">terms</Link>. How we handle your details
-          is in the <Link to="/privacy" className="link">privacy policy</Link>.
-        </p>
-      </form>
+          <button type="submit" className="btn btn-primary btn w-full" disabled={busy}>
+            {busy ? <span className="loading loading-spinner loading-sm" /> : "Create account"}
+          </button>
+          {/* What signing up means, where it is decided — with the two
+              documents one tap away. */}
+          <p className="text-center text-xs opacity-70">
+            By creating an account you accept our{" "}
+            <Link to="/terms" className="link">terms</Link>. How we handle your details
+            is in the <Link to="/privacy" className="link">privacy policy</Link>.
+          </p>
+        </form>
 
-      <p className="dash-divider mt-8 pt-6 text-sm">
-        <span className="opacity-75">Already have an account?</span>{" "}
-        <Link to="/login" state={{ from }} className="link link-secondary font-semibold">
-          Log in
-        </Link>
-      </p>
-    </AuthLayout>
+        <p className="mt-4 text-center text-sm opacity-70">
+          Already have an account?{" "}
+          <Link to="/login" state={{ from }} className="link link-secondary font-semibold">
+            Log in
+          </Link>
+        </p>
+      </div>
+    </div>
   );
 }

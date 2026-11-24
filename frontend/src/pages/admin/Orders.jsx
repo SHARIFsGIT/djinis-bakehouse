@@ -1,8 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { CalendarHeart, ChevronRight, Mail, Send, Trash2, Users } from "lucide-react";
+import {
+  CalendarHeart,
+  ChevronRight,
+  Download,
+  Inbox,
+  Mail,
+  ReceiptText,
+  Search,
+  Send,
+  ShieldCheck,
+  Trash2,
+  Users,
+} from "lucide-react";
 import client, { apiError } from "../../api/client";
 import {
+  apiTime,
   BULK_STATUSES,
   EVENT_TYPES,
   bulkBadge,
@@ -653,6 +666,85 @@ function BulkDrawer({ enquiry, onClose, onChanged, onDeleted }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* What both rails are made of                                         */
+/* ------------------------------------------------------------------ */
+
+// The dashboard's panel, flush — each row carries its own padding.
+const RAIL = "glass overflow-hidden rounded-box shadow-sm ring-1 ring-base-300/60";
+
+/** "6:14 AM" — the hour beside the day, in the shop's own reading of the
+    server's clock (the same parser every other date on the desk uses). */
+const timeOf = (value) =>
+  apiTime(value).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+
+/** "Nov 24, 6:14 AM" — the year only when it is not this one. */
+const whenPlaced = (value) => {
+  const at = apiTime(value);
+  const day = at.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(at.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }),
+  });
+  return `${day}, ${timeOf(value)}`;
+};
+
+const itemsLabel = (n) => `${n} ${n === 1 ? "item" : "items"}`;
+
+// The payment as a dot and its words. The order's own status keeps the one
+// pill per row — two pills side by side made every row shout twice.
+const PAYMENT_DOT = {
+  "badge-warning": "bg-warning",
+  "badge-success": "bg-success",
+  "badge-neutral": "bg-base-content/40",
+};
+
+function PaymentState({ order }) {
+  const state = PAYMENT_STATUSES[order.payment_status] ?? {
+    label: statusLabel(order.payment_status),
+    badge: "badge-ghost",
+  };
+  return (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      <span className={`size-2 shrink-0 rounded-full ${PAYMENT_DOT[state.badge] ?? "bg-base-300"}`} aria-hidden="true" />
+      {state.label}
+    </span>
+  );
+}
+
+/** The rail's shape while it loads — rows the size of the real ones, so
+    nothing jumps when they land. The words are for a screen reader. */
+function RailSkeleton({ label }) {
+  return (
+    <div className={RAIL} role="status">
+      <span className="sr-only">{label}</span>
+      <ul className="divide-y divide-base-300/60" aria-hidden="true">
+        {Array.from({ length: 6 }, (_, i) => (
+          <li key={i} className="flex items-center gap-4 px-4 py-4 sm:px-5">
+            <span className="h-4 w-28 animate-pulse rounded bg-base-200 sm:w-36" />
+            <span className="h-4 min-w-0 flex-1 animate-pulse rounded bg-base-200" />
+            <span className="h-5 w-16 animate-pulse rounded-full bg-base-200" />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Nothing to show — said plainly, with the way back when a filter did it. */
+function RailEmpty({ icon: Icon, title, children, action }) {
+  return (
+    <div className={`${RAIL} flex flex-col items-center px-6 py-14 text-center`}>
+      <span className="flex size-12 items-center justify-center rounded-full bg-secondary/10 text-secondary">
+        <Icon size={22} aria-hidden="true" />
+      </span>
+      <p className="font-display mt-4 text-lg font-semibold">{title}</p>
+      <p className="mt-1 max-w-sm text-sm opacity-75">{children}</p>
+      {action && <div className="mt-4">{action}</div>}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Tab 1 — the everyday order rail                                     */
 /* ------------------------------------------------------------------ */
 
@@ -728,21 +820,41 @@ function OrdersTab() {
     }
   };
 
+  // Something narrows the rail — the empty state and "Reset" say so.
+  const filtered = Boolean(status || searchParam);
+
+  // A drag to copy an order number is not a request to open the order.
+  const openRow = (id) => {
+    if (window.getSelection()?.toString()) return;
+    setSelectedId(id);
+  };
+
   return (
     <div>
+      {/* Find, narrow, take away. The search and the filter share a line
+          from a tablet up; on a phone the search has a line of its own. */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <form onSubmit={submitSearch} className="join">
-          <input
-            className="input input-bordered input-sm join-item w-56"
-            placeholder="Search order # or customer…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            aria-label="Search orders"
-          />
-          <button type="submit" className="btn btn-primary btn-sm join-item">Search</button>
+        <form
+          onSubmit={submitSearch}
+          role="search"
+          className="join w-full sm:w-auto sm:min-w-72 sm:flex-1 lg:max-w-md"
+        >
+          <label className="input input-bordered join-item flex min-w-0 flex-1 items-center gap-2">
+            <Search size={16} className="shrink-0 opacity-60" aria-hidden="true" />
+            <input
+              type="search"
+              enterKeyHint="search"
+              className="min-w-0 grow"
+              placeholder="Order # or customer"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              aria-label="Search orders"
+            />
+          </label>
+          <button type="submit" className="btn btn-primary join-item">Search</button>
         </form>
         <select
-          className="select select-bordered select-sm"
+          className="select select-bordered min-w-0 flex-1 sm:w-48 sm:flex-none"
           value={status}
           onChange={(e) => setStatusFilter(e.target.value)}
           aria-label="Filter by status"
@@ -752,102 +864,193 @@ function OrdersTab() {
             <option key={s.value} value={s.value}>{s.label}</option>
           ))}
         </select>
-        <Link to="/admin/orders" className="btn btn-ghost btn-sm">Reset</Link>
-        <button type="button" className="btn btn-ghost btn-sm ml-auto" onClick={exportCsv}>
-          Export CSV
+        {filtered && (
+          <Link to="/admin/orders" className="btn btn-ghost">Reset</Link>
+        )}
+        {/* The word from a tablet up; on a phone the icon alone, still named. */}
+        <button
+          type="button"
+          className="btn btn-ghost border border-base-300 sm:ml-auto"
+          onClick={exportCsv}
+          aria-label="Export CSV"
+          title="Export CSV"
+        >
+          <Download size={16} aria-hidden="true" />
+          <span className="hidden sm:inline">Export CSV</span>
         </button>
       </div>
 
       {failed ? (
         <LoadError message={failed} onRetry={load} />
       ) : data === null ? (
-        <Loading label="Fetching the order rail…" />
+        <RailSkeleton label="Fetching the order rail…" />
+      ) : data.orders.length === 0 ? (
+        <RailEmpty
+          icon={ReceiptText}
+          title={filtered ? "No orders match" : "No orders yet"}
+          action={
+            filtered && (
+              <Link to="/admin/orders" className="btn btn-ghost btn-sm border border-base-300">
+                Reset
+              </Link>
+            )
+          }
+        >
+          {filtered
+            ? "Try clearing the filters."
+            : "The first one lands here the moment a customer checks out."}
+        </RailEmpty>
       ) : (
         <>
-          <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
-            <table className="table table-sm">
+          <p className="mb-2 text-sm opacity-75">
+            {[
+              `${data.pagination.total_items} ${data.pagination.total_items === 1 ? "order" : "orders"}`,
+              status && statusLabel(status),
+              searchParam && `matching “${searchParam}”`,
+              "newest first",
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+
+          {/* On a phone each order is a card and the whole card is the way
+              in: nothing wider than the screen, no sideways scroll, and a
+              long name ends in an ellipsis instead of pushing. */}
+          <ul className={`${RAIL} divide-y divide-base-300/60 md:hidden`}>
+            {data.orders.map((o) => (
+              <li key={o.id}>
+                <button
+                  type="button"
+                  className="flex w-full items-start gap-3 px-4 py-3.5 text-left transition-colors hover:bg-base-200/50 focus-visible:outline-offset-[-2px] active:bg-base-200/70"
+                  onClick={() => setSelectedId(o.id)}
+                  aria-label={`Manage order ${o.order_number}`}
+                  aria-describedby={`order-card-${o.id}`}
+                >
+                  <span id={`order-card-${o.id}`} className="min-w-0 flex-1">
+                    <span className="flex items-start justify-between gap-3">
+                      <span className="figures truncate font-bold">{o.order_number}</span>
+                      <span className={`badge badge-sm ${statusBadge(o.status)} shrink-0 border whitespace-nowrap`}>
+                        {statusLabel(o.status)}
+                      </span>
+                    </span>
+                    <span className="mt-1 flex items-baseline justify-between gap-3 text-sm">
+                      <span className="truncate">{o.recipient}</span>
+                      <span className="figures shrink-0 font-bold">{money(o.total, o.currency)}</span>
+                    </span>
+                    <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs opacity-75">
+                      <span className="whitespace-nowrap">{whenPlaced(o.created_at)}</span>
+                      <span className="whitespace-nowrap">{itemsLabel(o.item_count)}</span>
+                      <PaymentState order={o} />
+                    </span>
+                    {o.delivery_date && (
+                      <span className="badge badge-sm badge-accent mt-2 gap-1 text-accent-content">
+                        <CalendarHeart size={12} aria-hidden="true" />
+                        Wanted {formatDate(o.delivery_date)}
+                      </span>
+                    )}
+                  </span>
+                  <ChevronRight size={18} className="mt-0.5 shrink-0 opacity-45" aria-hidden="true" />
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          {/* From a tablet up, a table: the order with when it came in, who
+              it is for, where it stands (the payment under it until a wide
+              screen gives the payment and the delivery day columns of their
+              own), what it comes to. A click anywhere on a row opens it;
+              the keyboard has the row's own Manage button. */}
+          <div className={`${RAIL} hidden md:block`}>
+            <table className="table">
               <thead>
-                {/* On a phone the rail is three columns — the order (with
-                    who it is for), where it stands (with what it comes to),
-                    and the way in — so "Manage" is on the screen, not a
-                    sideways scroll away. The rest joins from a tablet up;
-                    the two dates wait for a wide screen (at `lg` the desk's
-                    sidebar arrives and the table has less room, not more). */}
-                <tr className="text-xs uppercase opacity-65">
-                  <th>Order</th>
-                  <th className="hidden sm:table-cell">Recipient</th>
-                  <th>Status</th>
-                  <th className="hidden md:table-cell">Payment</th>
-                  <th className="hidden text-right sm:table-cell">Total</th>
-                  <th className="hidden xl:table-cell">Wanted for</th>
-                  <th className="hidden text-right xl:table-cell">Placed</th>
-                  <th><span className="sr-only">Actions</span></th>
+                <tr className="text-xs tracking-wide uppercase opacity-65">
+                  <th scope="col">Order</th>
+                  <th scope="col">Recipient</th>
+                  <th scope="col">Status</th>
+                  <th scope="col" className="hidden xl:table-cell">Payment</th>
+                  <th scope="col" className="hidden xl:table-cell">Wanted for</th>
+                  <th scope="col" className="text-right">Total</th>
+                  <th scope="col"><span className="sr-only">Actions</span></th>
                 </tr>
               </thead>
               <tbody>
                 {data.orders.map((o) => (
-                  <tr key={o.id} className="hover:bg-base-200/50">
+                  <tr
+                    key={o.id}
+                    className="cursor-pointer transition-colors hover:bg-base-200/50"
+                    onClick={() => openRow(o.id)}
+                  >
                     <td className="whitespace-nowrap">
-                      <span className="font-bold">{o.order_number}</span>
-                      <span className="block max-w-36 truncate text-xs opacity-70 sm:hidden">{o.recipient}</span>
+                      <span className="figures block font-bold">{o.order_number}</span>
+                      <span className="block text-xs opacity-65">{whenPlaced(o.created_at)}</span>
                     </td>
-                    <td className="hidden max-w-36 truncate sm:table-cell">{o.recipient}</td>
+                    {/* The one column that gives: it takes the room the
+                        others leave and ends a long name in an ellipsis, so
+                        the table is never wider than its panel. */}
+                    <td className="w-full max-w-0">
+                      <span className="block truncate font-semibold">{o.recipient}</span>
+                      <span className="block truncate text-xs opacity-65">{o.city}</span>
+                    </td>
                     <td>
-                      <span className={`badge badge-sm ${statusBadge(o.status)} border whitespace-nowrap`}>{statusLabel(o.status)}</span>
-                      <span className="figures mt-1 block text-xs font-bold sm:hidden">{money(o.total, o.currency)}</span>
-                    </td>
-                    <td className="hidden text-xs md:table-cell">
-                      <span className={`badge badge-sm ${PAYMENT_STATUSES[o.payment_status]?.badge ?? "badge-ghost"} whitespace-nowrap`}>
-                        {PAYMENT_STATUSES[o.payment_status]?.label ?? statusLabel(o.payment_status)}
+                      <span className={`badge badge-sm ${statusBadge(o.status)} border whitespace-nowrap`}>
+                        {statusLabel(o.status)}
                       </span>
-                      <span className="mt-0.5 block whitespace-nowrap opacity-70">
+                      <span className="mt-1 block text-xs opacity-75 xl:hidden">
+                        <PaymentState order={o} />
+                      </span>
+                    </td>
+                    <td className="hidden text-sm xl:table-cell">
+                      <PaymentState order={o} />
+                      <span className="block text-xs whitespace-nowrap opacity-65">
                         {PAYMENT_METHODS[o.payment_method] ?? o.payment_method}
                       </span>
                     </td>
-                    <td className="figures hidden text-right font-bold whitespace-nowrap sm:table-cell">{money(o.total, o.currency)}</td>
-                    {/* The delivery day the customer picked at checkout —
-                        blank means "the next run", which the dash says. */}
-                    <td className="hidden text-xs whitespace-nowrap xl:table-cell">
+                    {/* The day the customer picked at checkout — none means
+                        the next delivery run, which it says. */}
+                    <td className="hidden text-sm whitespace-nowrap xl:table-cell">
                       {o.delivery_date ? (
                         <span className="font-semibold">{formatDate(o.delivery_date)}</span>
                       ) : (
-                        <span className="opacity-40" title="No day picked — next delivery run">—</span>
+                        <span className="text-xs opacity-60">Next delivery run</span>
                       )}
                     </td>
-                    <td className="hidden text-right text-xs whitespace-nowrap opacity-70 xl:table-cell">{formatDateTime(o.created_at)}</td>
+                    <td className="text-right whitespace-nowrap">
+                      <span className="figures block font-bold">{money(o.total, o.currency)}</span>
+                      <span className="block text-xs opacity-65">{itemsLabel(o.item_count)}</span>
+                    </td>
                     <td className="text-right">
-                      {/* The word from 360px up; on a narrower phone the
-                          arrow alone (still named), so the row fits. */}
                       <button
                         type="button"
-                        className="btn btn-ghost btn-xs"
-                        onClick={() => setSelectedId(o.id)}
+                        className="btn btn-ghost btn-sm border border-base-300 whitespace-nowrap"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedId(o.id);
+                        }}
                         aria-label={`Manage order ${o.order_number}`}
                       >
-                        <span className="max-[359px]:hidden">Manage</span>
-                        <ChevronRight size={16} className="min-[360px]:hidden" aria-hidden="true" />
+                        Manage
+                        <ChevronRight size={14} aria-hidden="true" />
                       </button>
                     </td>
                   </tr>
                 ))}
-                {data.orders.length === 0 && (
-                  <tr>
-                    <td colSpan={8} className="py-10 text-center text-sm opacity-70">
-                      No orders match — try clearing the filters.
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>
 
-          <Pager
-            className="mt-4"
-            label="Pages of orders"
-            page={data.pagination.page}
-            pages={data.pagination.total_pages}
-            onPage={goPage}
-          />
+          <div className="mt-4 flex flex-col items-center gap-3 sm:flex-row sm:justify-between">
+            <p className="figures text-sm opacity-70">
+              Showing {(data.pagination.page - 1) * data.pagination.per_page + 1}–
+              {Math.min(data.pagination.page * data.pagination.per_page, data.pagination.total_items)} of{" "}
+              {data.pagination.total_items}
+            </p>
+            <Pager
+              label="Pages of orders"
+              page={data.pagination.page}
+              pages={data.pagination.total_pages}
+              onPage={goPage}
+            />
+          </div>
         </>
       )}
 
@@ -918,11 +1121,20 @@ function BulkTab() {
     }
   };
 
+  const occasionOf = (e) => EVENT_TYPES.find((t) => t.value === e.event_type)?.label ?? e.event_type;
+  const guestsLabel = (n) => `${n} ${n === 1 ? "guest" : "guests"}`;
+
+  // A drag to copy an email address is not a request to open the lead.
+  const openRow = (enquiry) => {
+    if (window.getSelection()?.toString()) return;
+    setSelected(enquiry);
+  };
+
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <select
-          className="select select-bordered select-sm"
+          className="select select-bordered min-w-0 flex-1 sm:w-56 sm:flex-none"
           value={status}
           onChange={(e) => setStatusFilter(e.target.value)}
           aria-label="Filter enquiries by status"
@@ -933,84 +1145,144 @@ function BulkTab() {
           ))}
         </select>
         {status && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setStatusFilter("")}>
+          <button type="button" className="btn btn-ghost" onClick={() => setStatusFilter("")}>
             Reset
           </button>
         )}
-        <button type="button" className="btn btn-ghost btn-sm ml-auto" onClick={exportCsv}>
-          Export CSV
+        <button
+          type="button"
+          className="btn btn-ghost border border-base-300 sm:ml-auto"
+          onClick={exportCsv}
+          aria-label="Export CSV"
+          title="Export CSV"
+        >
+          <Download size={16} aria-hidden="true" />
+          <span className="hidden sm:inline">Export CSV</span>
         </button>
       </div>
 
       {failed ? (
         <LoadError message={failed} onRetry={() => load()} />
       ) : items === null ? (
-        <Loading label="Fetching the enquiry rail…" />
+        <RailSkeleton label="Fetching the enquiry rail…" />
+      ) : items.length === 0 ? (
+        // Filtered to nothing is not the same as nothing yet.
+        <RailEmpty
+          icon={Inbox}
+          title={status ? "No enquiries with this status" : "No enquiries yet"}
+          action={
+            status && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm border border-base-300"
+                onClick={() => setStatusFilter("")}
+              >
+                Reset
+              </button>
+            )
+          }
+        >
+          {status ? "Try another status, or show them all." : "The /bulk page feeds this rail."}
+        </RailEmpty>
       ) : (
-        <div className="overflow-x-auto rounded-box glass shadow-sm ring-1 ring-base-300/60">
-          <table className="table table-sm">
-            <thead>
-              {/* Three columns on a phone, like the order rail: the event
-                  (with who asked), where it stands (with the headcount) and
-                  the way in. */}
-              <tr className="text-xs uppercase opacity-65">
-                <th>Event</th>
-                <th className="hidden sm:table-cell">Customer</th>
-                <th className="hidden text-right sm:table-cell">Guests</th>
-                <th>Status</th>
-                <th className="hidden text-right md:table-cell">Sent</th>
-                <th><span className="sr-only">Actions</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((e) => (
-                <tr key={e.id} className="hover:bg-base-200/50">
-                  <td>
-                    <p className="font-bold whitespace-nowrap">{formatDate(e.event_date)}</p>
-                    <p className="text-xs opacity-70">
-                      {EVENT_TYPES.find((t) => t.value === e.event_type)?.label ?? e.event_type}
-                    </p>
-                    <p className="max-w-36 truncate text-xs opacity-70 sm:hidden">{e.name}</p>
-                  </td>
-                  <td className="hidden sm:table-cell">
-                    <p className="max-w-44 truncate font-semibold">{e.name}</p>
-                    <p className="max-w-44 truncate text-xs opacity-70">{e.email}</p>
-                  </td>
-                  <td className="hidden text-right font-bold sm:table-cell">{e.guests}</td>
-                  <td>
-                    <span className={`badge badge-sm ${bulkBadge(e.status)} border whitespace-nowrap`}>
-                      {bulkLabel(e.status)}
+        <>
+          <p className="mb-2 text-sm opacity-75">
+            {[`${items.length} ${items.length === 1 ? "enquiry" : "enquiries"}`, status && bulkLabel(status)]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+
+          {/* On a phone each lead is a card, the whole card the way in. */}
+          <ul className={`${RAIL} divide-y divide-base-300/60 md:hidden`}>
+            {items.map((e) => (
+              <li key={e.id}>
+                <button
+                  type="button"
+                  className="flex w-full items-start gap-3 px-4 py-3.5 text-left transition-colors hover:bg-base-200/50 focus-visible:outline-offset-[-2px] active:bg-base-200/70"
+                  onClick={() => setSelected(e)}
+                  aria-label={`Manage the enquiry from ${e.name}`}
+                  aria-describedby={`enquiry-card-${e.id}`}
+                >
+                  <span id={`enquiry-card-${e.id}`} className="min-w-0 flex-1">
+                    <span className="flex items-start justify-between gap-3">
+                      <span className="font-bold whitespace-nowrap">{formatDate(e.event_date)}</span>
+                      <span className={`badge badge-sm ${bulkBadge(e.status)} shrink-0 border whitespace-nowrap`}>
+                        {bulkLabel(e.status)}
+                      </span>
                     </span>
-                    <span className="mt-1 block text-xs opacity-70 sm:hidden">
-                      {e.guests} {e.guests === 1 ? "guest" : "guests"}
+                    <span className="mt-1 block text-sm">
+                      {occasionOf(e)} · {guestsLabel(e.guests)}
                     </span>
-                  </td>
-                  <td className="hidden text-right text-xs whitespace-nowrap opacity-70 md:table-cell">
-                    {formatDateTime(e.created_at)}
-                  </td>
-                  <td className="text-right">
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      onClick={() => setSelected(e)}
-                      aria-label={`Manage the enquiry from ${e.name}`}
-                    >
-                      <span className="max-[359px]:hidden">Manage</span>
-                      <ChevronRight size={16} className="min-[360px]:hidden" aria-hidden="true" />
-                    </button>
-                  </td>
+                    <span className="mt-1 block truncate text-xs opacity-75">
+                      {e.name} · {e.email}
+                    </span>
+                    <span className="mt-1 block text-xs opacity-65">Sent {whenPlaced(e.created_at)}</span>
+                  </span>
+                  <ChevronRight size={18} className="mt-0.5 shrink-0 opacity-45" aria-hidden="true" />
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          {/* From a tablet up, a table; the day it was sent joins on a wide
+              screen. */}
+          <div className={`${RAIL} hidden md:block`}>
+            <table className="table">
+              <thead>
+                <tr className="text-xs tracking-wide uppercase opacity-65">
+                  <th scope="col">Event</th>
+                  <th scope="col">Customer</th>
+                  <th scope="col" className="text-right">Guests</th>
+                  <th scope="col">Status</th>
+                  <th scope="col" className="hidden text-right xl:table-cell">Sent</th>
+                  <th scope="col"><span className="sr-only">Actions</span></th>
                 </tr>
-              ))}
-              {items.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="py-10 text-center text-sm opacity-70">
-                    No enquiries yet — the /bulk page feeds this rail.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {items.map((e) => (
+                  <tr
+                    key={e.id}
+                    className="cursor-pointer transition-colors hover:bg-base-200/50"
+                    onClick={() => openRow(e)}
+                  >
+                    <td className="whitespace-nowrap">
+                      <span className="block font-bold">{formatDate(e.event_date)}</span>
+                      <span className="block text-xs opacity-65">{occasionOf(e)}</span>
+                    </td>
+                    {/* The column that gives, as on the order rail. */}
+                    <td className="w-full max-w-0">
+                      <span className="block truncate font-semibold">{e.name}</span>
+                      <span className="block truncate text-xs opacity-65">{e.email}</span>
+                    </td>
+                    <td className="figures text-right font-bold">{e.guests}</td>
+                    <td>
+                      <span className={`badge badge-sm ${bulkBadge(e.status)} border whitespace-nowrap`}>
+                        {bulkLabel(e.status)}
+                      </span>
+                    </td>
+                    <td className="hidden text-right text-xs whitespace-nowrap opacity-70 xl:table-cell">
+                      {whenPlaced(e.created_at)}
+                    </td>
+                    <td className="text-right">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm border border-base-300 whitespace-nowrap"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          setSelected(e);
+                        }}
+                        aria-label={`Manage the enquiry from ${e.name}`}
+                      >
+                        Manage
+                        <ChevronRight size={14} aria-hidden="true" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       {/* Drawer */}
@@ -1065,13 +1337,14 @@ function PaymentsTab() {
 /* ------------------------------------------------------------------ */
 
 const TABS = [
-  { value: "orders", label: "Orders" },
-  { value: "bulk", label: "Bulk enquiries" },
-  { value: "payments", label: "Payment check" },
+  { value: "orders", label: "Orders", icon: ReceiptText },
+  { value: "bulk", label: "Bulk enquiries", icon: CalendarHeart },
+  { value: "payments", label: "Payment check", icon: ShieldCheck },
 ];
 
 export default function AdminOrders() {
   const [params, setParams] = useSearchParams();
+  const tabButtons = useRef({});
 
   const asked = params.get("tab");
   const tab = TABS.some((t) => t.value === asked) ? asked : "orders";
@@ -1083,23 +1356,52 @@ export default function AdminOrders() {
     setParams(next);
   };
 
+  // The tab row is one stop for Tab; the arrows walk along it and Home and
+  // End jump to its ends (the WAI-ARIA tabs pattern).
+  const walkTabs = (e) => {
+    const at = TABS.findIndex((t) => t.value === tab);
+    const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: TABS.length - 1 }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    const next = TABS[(to + TABS.length) % TABS.length].value;
+    switchTab(next);
+    tabButtons.current[next]?.focus();
+  };
+
   return (
     <div>
-      <div role="tablist" aria-label="Order desks" className="tabs tabs-boxed mb-5 inline-flex">
-        {TABS.map((t) => (
-          <button
-            key={t.value}
-            role="tab"
-            aria-selected={tab === t.value}
-            className={`tab ${tab === t.value ? "tab-active" : ""}`}
-            onClick={() => switchTab(t.value)}
-          >
-            {t.label}
-          </button>
-        ))}
+      {/* The page's own name under the desk's, and the three desks it holds
+          beside it as one segmented row — small enough for a 320px phone.
+          (The row was written `tabs-boxed`, a name daisyUI 5 dropped for
+          `tabs-box`, so it had been drawn as three loose words.) */}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <h2 className="font-display text-2xl font-semibold sm:text-3xl">Orders</h2>
+        <div role="tablist" aria-label="Order desks" className="tabs tabs-box flex-nowrap" onKeyDown={walkTabs}>
+          {TABS.map(({ value, label, icon: Icon }) => (
+            <button
+              key={value}
+              ref={(el) => {
+                tabButtons.current[value] = el;
+              }}
+              id={`order-desk-${value}`}
+              type="button"
+              role="tab"
+              aria-selected={tab === value}
+              aria-controls="order-desk-panel"
+              tabIndex={tab === value ? 0 : -1}
+              className={`tab gap-2 px-2 text-[13px] whitespace-nowrap min-[360px]:px-3 sm:px-4 sm:text-sm ${tab === value ? "tab-active" : ""}`}
+              onClick={() => switchTab(value)}
+            >
+              <Icon size={15} className="hidden shrink-0 sm:block" aria-hidden="true" />
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {tab === "orders" ? <OrdersTab /> : tab === "bulk" ? <BulkTab /> : <PaymentsTab />}
+      <div id="order-desk-panel" role="tabpanel" aria-labelledby={`order-desk-${tab}`}>
+        {tab === "orders" ? <OrdersTab /> : tab === "bulk" ? <BulkTab /> : <PaymentsTab />}
+      </div>
     </div>
   );
 }
