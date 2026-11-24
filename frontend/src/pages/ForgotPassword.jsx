@@ -60,7 +60,6 @@ export default function ForgotPassword() {
                 id="forgot-email"
                 type="email"
                 className="input input-bordered w-full"
-                placeholder="you@example.com"
                 autoComplete="email"
                 required
                 value={email}

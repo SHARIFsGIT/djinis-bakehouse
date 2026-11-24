@@ -605,7 +605,7 @@ export default function ProductDetail() {
                   Want one when it&rsquo;s back?
                 </p>
                 <p className="mt-1 text-xs opacity-70">
-                  Leave your email — we write once, the day the shelf refills.
+                  One email, the day the shelf refills.
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <input
@@ -613,7 +613,7 @@ export default function ProductDetail() {
                     required
                     value={restockEmail}
                     onChange={(e) => setRestockEmail(e.target.value)}
-                    placeholder="you@example.com"
+                    placeholder="Your email"
                     className="input input-bordered input-sm min-w-0 flex-1"
                     aria-label="Email me when this bake is back"
                   />

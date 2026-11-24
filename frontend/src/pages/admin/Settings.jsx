@@ -611,7 +611,6 @@ function BrandColorCard({ brand, savedBrand, dirty, saving, onPick, onSave }) {
     <section className="rounded-box glass p-6 shadow-sm ring-1 ring-base-300/60">
       <CardHead icon={Palette} title="Brand colour" />
       <p className="mt-1 text-sm opacity-70">
-        The mark&rsquo;s burgundy runs through every button, badge and headline.
         Pick the colour the shop wears — the shade is tuned automatically so
         text stays readable.
       </p>
@@ -1060,7 +1059,6 @@ export default function Settings() {
               id="contact-address"
               className="input input-bordered w-full"
               maxLength={255}
-              placeholder="12 Crumb Lane, Portland"
               value={form.contact_address}
               onChange={(e) => setForm({ ...form, contact_address: e.target.value })}
             />
@@ -1073,7 +1071,6 @@ export default function Settings() {
               id="contact-phone"
               className="input input-bordered w-full"
               maxLength={50}
-              placeholder="+1 (503) 555-0100"
               value={form.contact_phone}
               onChange={(e) => setForm({ ...form, contact_phone: e.target.value })}
             />
@@ -1087,7 +1084,6 @@ export default function Settings() {
               type="email"
               className="input input-bordered w-full"
               maxLength={255}
-              placeholder="hello@yourbakery.com"
               value={form.contact_email}
               onChange={(e) => setForm({ ...form, contact_email: e.target.value })}
             />

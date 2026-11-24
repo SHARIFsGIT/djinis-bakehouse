@@ -58,7 +58,7 @@ export default function BulkOrder() {
         guests: Number(form.guests),
       });
       setSent(true);
-      toast.success("Enquiry sent — we'll be in touch within a day");
+      toast.success("Enquiry sent");
     } catch (err) {
       toast.error(apiError(err, "Couldn't send the enquiry"));
     } finally {
@@ -183,7 +183,6 @@ export default function BulkOrder() {
               required
               minLength={3}
               maxLength={30}
-              placeholder="+49 176 555 0100"
               value={form.phone}
               onChange={(e) => setField("phone", e.target.value)}
             />
@@ -220,7 +219,7 @@ export default function BulkOrder() {
       </form>
 
       <p className="mt-6 text-center text-xs tracking-wide opacity-65">
-        Tell us the date · We quote within a day · Baked the same morning as your event
+        Baked the same morning as your event
       </p>
     </div>
   );

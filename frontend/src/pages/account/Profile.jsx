@@ -252,15 +252,14 @@ export default function Profile() {
                 id="p-email"
                 type="email"
                 className="input input-bordered w-full"
-                placeholder="you@example.com"
                 autoComplete="email"
                 maxLength={255}
                 value={newEmail}
                 onChange={(e) => setNewEmail(e.target.value)}
               />
               <p className="mt-1 text-xs opacity-70">
-                You log in with your phone number. Add an email to get receipts and order updates
-                by mail, and to be able to reset a forgotten password yourself.
+                Add an email to get receipts and order updates, and to reset a
+                forgotten password yourself.
               </p>
             </div>
           )}
@@ -406,8 +405,7 @@ export default function Profile() {
         <h2 className="font-display text-2xl font-semibold">Close your account</h2>
         <p className="mt-1 text-sm opacity-70">
           Closing the account erases your personal details — only anonymized
-          invoices remain, as the law requires. Your password confirms it&rsquo;s
-          really you.
+          invoices remain, as the law requires.
         </p>
         <p className="mt-2 text-xs opacity-70">
           Signed up with Facebook and never set a password? Use{" "}

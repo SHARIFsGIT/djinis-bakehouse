@@ -137,7 +137,7 @@ export default function Footer() {
                   type="email"
                   required
                   className="input input-bordered input-sm join-item w-full bg-base-100"
-                  placeholder="you@example.com"
+                  placeholder="Your email"
                   autoComplete="email"
                   enterKeyHint="send"
                   value={email}

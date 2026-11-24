@@ -45,8 +45,7 @@ export default function Contact() {
     <div className="mx-auto max-w-5xl px-4 py-12">
       <h1 className="font-display text-4xl font-semibold md:text-5xl">Find us</h1>
       <p className="mt-3 max-w-xl text-lg leading-relaxed opacity-75">
-        Where the counter is, when the ovens are on, and the quickest way to
-        reach the bakery.
+        Where we are, when we bake, and how to reach us.
       </p>
 
       {nothingYet ? (

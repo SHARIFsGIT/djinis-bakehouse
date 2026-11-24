@@ -80,7 +80,6 @@ export default function Register() {
             <input
               id="name"
               className="input input-bordered w-full"
-              placeholder="Jamie Oliver"
               autoComplete="name"
               required
               maxLength={200}

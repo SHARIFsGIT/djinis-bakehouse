@@ -43,7 +43,7 @@ const PAYMENT_OPTIONS = [
     Icon: CreditCard,
     title: "Card & online payment",
     hint: "On Stripe's secure page — your card, or another method it offers you",
-    summary: "Paid on Stripe's secure page — card details never touch this shop",
+    summary: "Paid on Stripe's secure page",
     action: (total) => `Pay ${total}`,
     lock: "Card details are entered on Stripe's page, never here",
   },

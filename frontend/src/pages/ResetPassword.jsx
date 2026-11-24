@@ -73,7 +73,6 @@ export default function ResetPassword() {
             <PasswordInput
               id="new-password"
               label="New password"
-              placeholder="At least 8 characters"
               autoComplete="new-password"
               required
               minLength={8}
@@ -84,7 +83,6 @@ export default function ResetPassword() {
               <PasswordInput
                 id="confirm-password"
                 label="Confirm password"
-                placeholder="Once more"
                 className={mismatch ? "input-error" : ""}
                 autoComplete="new-password"
                 required

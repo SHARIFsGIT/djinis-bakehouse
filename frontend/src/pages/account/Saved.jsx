@@ -28,7 +28,7 @@ export default function Saved() {
       <EmptyState
         as="h2"
         title="Nothing saved yet"
-        hint="Tap the heart on any bake and it will wait for you here — perfect for planning the weekend box."
+        hint="Tap the heart on any bake and it will wait for you here."
       >
         <Link to="/products" className="btn btn-primary btn">Browse the case</Link>
       </EmptyState>
