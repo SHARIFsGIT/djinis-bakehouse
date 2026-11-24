@@ -1080,14 +1080,36 @@ class AdminCustomerOut(UserOut):
     marketing_consent_at: datetime | None = None
 
 
+class AdminUserSummary(BaseModel):
+    """The whole roll at a glance — counted over every account whatever the
+    filters, so the figures above the list read the same from any page and
+    any search. Customers are live customer accounts: a closed account's
+    anonymised shell is counted apart, as `closed`. Spend is the shop's
+    active currency only, like lifetime_spend on each row."""
+
+    customers: int = 0
+    admins: int = 0
+    new_last_30_days: int = 0
+    ordered: int = 0
+    returning: int = 0
+    lifetime_spend: float = 0
+    average_spend: float = 0
+    currency: str = ""
+    marketing_consent: int = 0
+    phone_only: int = 0
+    deactivated: int = 0
+    closed: int = 0
+
+
 class AdminUserPage(BaseModel):
     """One shelf of the roll: the page itself, the whole roll's tier and
     classification counts (so the filter chips stay honest from any page),
-    and where this page sits in it."""
+    the roll's summary, and where this page sits in it."""
 
     items: list[AdminCustomerOut]
     tier_counts: dict[str, int]
     classification_counts: dict[str, int] = {}
+    summary: AdminUserSummary = Field(default_factory=AdminUserSummary)
     pagination: PaginationOut
 
 

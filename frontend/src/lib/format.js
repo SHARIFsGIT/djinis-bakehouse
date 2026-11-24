@@ -120,6 +120,21 @@ export const formatDate = (value) => {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 };
 
+/** How long ago, the way a person says it — "today", "yesterday", "5 days
+ *  ago", "3 weeks ago" — and the date itself from two months back. Days are
+ *  counted on the calendar, not in 24-hour blocks. */
+export const sinceLabel = (value, now = new Date()) => {
+  if (!value) return "—";
+  const then = value.length === 10 ? new Date(`${value}T12:00:00`) : apiTime(value);
+  const startOf = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((startOf(now) - startOf(then)) / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 14) return `${days} days ago`;
+  if (days < 60) return `${Math.floor(days / 7)} weeks ago`;
+  return formatDate(value);
+};
+
 export const formatDateTime = (value) => {
   if (!value) return "—";
   return apiTime(value).toLocaleString("en-US", {

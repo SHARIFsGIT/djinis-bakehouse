@@ -10,13 +10,13 @@ import uuid
 from collections import Counter
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import case, delete, func, or_, select, update
 
 from ..config import get_settings
 from ..database import utcnow
-from ..email import bulk_reply_email, send_email, send_restock_emails
+from ..email import DELETED_ACCOUNT_DOMAIN, bulk_reply_email, send_email, send_restock_emails
 from ..models import (
     DEFAULT_ANNOUNCEMENT,
     DEFAULT_HERO_IMAGE,
@@ -59,6 +59,7 @@ from ..schemas import (
     AdminReviewOut,
     AdminStatsOut,
     AdminUserPage,
+    AdminUserSummary,
     AdminVatUpdateRequest,
     BulkEnquiryOut,
     BulkEnquiryUpdate,
@@ -458,12 +459,17 @@ def all_orders(
     db: DbSession,
     status_filter: OrderStatus | None = Query(default=None, alias="status"),
     search: str | None = None,
+    # One customer's orders exactly (the desk's customer card) — a search by
+    # their email or name would also catch anyone whose details contain it.
+    user_id: int | None = Query(default=None, ge=1),
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=15, ge=1, le=50),
 ):
     query = select(Order)
     if status_filter:
         query = query.where(Order.status == status_filter.value)
+    if user_id is not None:
+        query = query.where(Order.user_id == user_id)
     if search and search.strip():
         term = like_term(search)
         query = query.join(User).where(
@@ -1609,7 +1615,8 @@ def _customer_roll(db: DbSession) -> list[AdminCustomerOut]:
 
 # How the roll can be ordered — heaviest/newest first. The "last" key pairs
 # a has-visited flag with the date, so never-ordered customers sink to the
-# bottom without ever comparing None to a date.
+# bottom without ever comparing None to a date. "name" alone reads A to Z
+# (see _narrow_roll).
 _USER_SORTS = {
     "spend": lambda c: c.lifetime_spend,
     "orders": lambda c: c.order_count,
@@ -1618,41 +1625,64 @@ _USER_SORTS = {
 }
 
 
-@router.get("/users", response_model=AdminUserPage)
-def all_users(
-    admin: CurrentAdmin,
-    db: DbSession,
+def _is_closed(customer: AdminCustomerOut) -> bool:
+    """A closed account's anonymised shell — its address parked on the
+    deleted-account domain. It stays on the roll; the summary counts it
+    apart from the live accounts."""
+    return (customer.email or "").strip().lower().endswith("@" + DELETED_ACCOUNT_DOMAIN)
+
+
+def roll_filters(
     tier: str | None = Query(None, pattern="^(vip|loyal|lapsed|regular)$"),
     classification: str | None = Query(
         None, pattern="^(vip|loyal|lapsed|regular|none)$"
     ),
-    sort: str = Query("spend", pattern="^(spend|orders|last|joined)$"),
     search: str | None = Query(None, min_length=1, max_length=100),
-    page: int = Query(1, ge=1),
-    per_page: int = Query(10, ge=5, le=50),
-):
-    """The regulars' roll, one shelf at a time: tier- and
-    classification-filtered, searched, ordered and paginated — with the
-    whole roll's counts alongside, so the chips count loyal hands from any
-    page and any search. `tier` filters the measured loyalty; `classification`
-    filters the desk's manual word (none = customers without one)."""
-    roll = _customer_roll(db)
-    tier_counts = Counter(c.loyalty for c in roll)
-    classification_counts = Counter(
-        c.classification for c in roll if c.classification is not None
-    )
-    if tier:
-        roll = [c for c in roll if c.loyalty == tier]
-    if classification:
-        if classification == "none":
+    role: str | None = Query(None, pattern="^(customer|admin)$"),
+    account_status: str | None = Query(None, alias="status", pattern="^(active|inactive)$"),
+    consent: str | None = Query(None, pattern="^(yes|no)$"),
+    contact: str | None = Query(None, pattern="^(email|phone)$"),
+    sort: str = Query("spend", pattern="^(spend|orders|last|joined|name)$"),
+) -> dict:
+    """How the roll is narrowed and ordered — read once for the page and for
+    its spreadsheet alike, so an export is exactly what the desk is looking
+    at. `tier` filters the measured loyalty, `classification` the desk's
+    manual word (none = customers without one); `contact=phone` is the
+    accounts opened with a phone number and no email."""
+    return {
+        "tier": tier,
+        "classification": classification,
+        "search": search,
+        "role": role,
+        "status": account_status,
+        "consent": consent,
+        "contact": contact,
+        "sort": sort,
+    }
+
+
+def _narrow_roll(roll: list[AdminCustomerOut], f: dict) -> list[AdminCustomerOut]:
+    """The roll filtered, searched and ordered by `roll_filters`."""
+    if f["tier"]:
+        roll = [c for c in roll if c.loyalty == f["tier"]]
+    if f["classification"]:
+        if f["classification"] == "none":
             roll = [c for c in roll if c.classification is None]
         else:
-            roll = [c for c in roll if c.classification == classification]
-    if search:
+            roll = [c for c in roll if c.classification == f["classification"]]
+    if f["role"]:
+        roll = [c for c in roll if c.role == f["role"]]
+    if f["status"]:
+        roll = [c for c in roll if c.is_active == (f["status"] == "active")]
+    if f["consent"]:
+        roll = [c for c in roll if (c.marketing_consent_at is not None) == (f["consent"] == "yes")]
+    if f["contact"]:
+        roll = [c for c in roll if (c.email is None) == (f["contact"] == "phone")]
+    if f["search"]:
         # Matched against name, email or phone — the things the baker
         # actually knows about a regular. Numbers compare digit-for-digit,
         # so "555-0142" finds however the number was typed or stored.
-        needle = search.strip().lower()
+        needle = f["search"].strip().lower()
         needle_digits = "".join(ch for ch in needle if ch.isdigit())
         roll = [
             c
@@ -1661,19 +1691,118 @@ def all_users(
             or needle in f"{c.first_name} {c.last_name}".lower()
             or (needle_digits and needle_digits in (c.phone or ""))
         ]
-    roll.sort(key=_USER_SORTS.get(sort, _USER_SORTS["spend"]), reverse=True)
+    if f["sort"] == "name":
+        roll = sorted(roll, key=lambda c: (c.first_name.casefold(), c.last_name.casefold(), c.id))
+    else:
+        roll = sorted(roll, key=_USER_SORTS[f["sort"]], reverse=True)
+    return roll
+
+
+def _roll_summary(roll: list[AdminCustomerOut]) -> AdminUserSummary:
+    """The figures above the list (AdminUserSummary says what each one
+    counts). Live customer accounts only; admins and closed shells apart."""
+    since = utcnow() - timedelta(days=30)
+    live = [c for c in roll if not _is_closed(c)]
+    customers = [c for c in live if c.role == UserRole.CUSTOMER.value]
+    ordered = [c for c in customers if c.order_count > 0]
+    spend = round(sum(c.lifetime_spend for c in customers), 2)
+    return AdminUserSummary(
+        customers=len(customers),
+        admins=sum(1 for c in live if c.role == UserRole.ADMIN.value),
+        new_last_30_days=sum(1 for c in customers if c.created_at >= since),
+        ordered=len(ordered),
+        returning=sum(1 for c in ordered if c.order_count >= 2),
+        lifetime_spend=spend,
+        average_spend=round(spend / len(ordered), 2) if ordered else 0.0,
+        currency=str(get_settings().stripe_currency or "").strip().upper(),
+        marketing_consent=sum(1 for c in customers if c.marketing_consent_at is not None),
+        phone_only=sum(1 for c in customers if c.email is None),
+        deactivated=sum(1 for c in customers if not c.is_active),
+        closed=len(roll) - len(live),
+    )
+
+
+@router.get("/users", response_model=AdminUserPage)
+def all_users(
+    admin: CurrentAdmin,
+    db: DbSession,
+    filters: dict = Depends(roll_filters),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(10, ge=5, le=50),
+):
+    """The regulars' roll, one shelf at a time: filtered, searched, ordered
+    and paginated — with the whole roll's tier and classification counts and
+    its summary alongside, so the chips and the figures count the whole
+    roll from any page and any search."""
+    roll = _customer_roll(db)
+    tier_counts = Counter(c.loyalty for c in roll)
+    classification_counts = Counter(
+        c.classification for c in roll if c.classification is not None
+    )
+    summary = _roll_summary(roll)
+    roll = _narrow_roll(roll, filters)
     total = len(roll)
     start = (page - 1) * per_page
     return AdminUserPage(
         items=roll[start : start + per_page],
         tier_counts=dict(tier_counts),
         classification_counts=dict(classification_counts),
+        summary=summary,
         pagination=PaginationOut(
             page=page,
             per_page=per_page,
             total_items=total,
             total_pages=max(1, -(-total // per_page)),
         ),
+    )
+
+
+@router.get("/users/export")
+def export_users(admin: CurrentAdmin, db: DbSession, filters: dict = Depends(roll_filters)):
+    """The roll as a spreadsheet: the same filters, search and order as the
+    page the desk is looking at — every row of it, not one shelf. It is
+    personal data, so it only ever leaves as the admin's own download, and
+    each export is written to the log."""
+    currency = str(get_settings().stripe_currency or "").strip().upper()
+
+    def day(moment) -> str:
+        return shoptime.in_shop_time(moment).strftime("%Y-%m-%d") if moment else ""
+
+    roll = _narrow_roll(_customer_roll(db), filters)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        ["first_name", "last_name", "email", "phone", "phone_verified", "role", "active",
+         "joined", "orders", "lifetime_spend", "currency", "last_order", "loyalty",
+         "desk_word", "marketing_consent"]
+    )
+    for c in roll:
+        writer.writerow(
+            [
+                # Customer-typed text: shown by the spreadsheet, never run.
+                csv_safe(c.first_name),
+                csv_safe(c.last_name),
+                csv_safe(c.email or ""),
+                csv_safe(c.phone or ""),
+                "yes" if c.phone_verified else "no",
+                getattr(c.role, "value", c.role),
+                "yes" if c.is_active else "no",
+                day(c.created_at),
+                c.order_count,
+                f"{c.lifetime_spend:.2f}",
+                currency,
+                day(c.last_order_at),
+                c.loyalty,
+                c.classification or "",
+                day(c.marketing_consent_at),
+            ]
+        )
+    logger.info("customer roll exported by admin %s (%d rows)", admin.id, len(roll))
+    buffer.seek(0)
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=bakehouse-customers.csv"},
     )
 
 

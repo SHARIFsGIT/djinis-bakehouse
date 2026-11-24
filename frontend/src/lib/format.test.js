@@ -19,6 +19,7 @@ import {
   paysOnline,
   providerLabel,
   shopConfig,
+  sinceLabel,
   statusGroup,
   statusLabel,
   taxLabel,
@@ -187,4 +188,15 @@ test("order statuses keep the API's values and fall into their badge groups", ()
   assert.equal(statusGroup(undefined), null);
   assert.equal(statusLabel("out_for_delivery"), "Out for delivery");
   assert.equal(statusLabel("unheard_of"), "Unheard of");
+});
+
+test("how long ago reads the way a person says it", () => {
+  const now = new Date(2026, 10, 24, 9, 30); // Nov 24, 2026, 9:30 local
+  const at = (y, m, d, h = 12) => new Date(y, m, d, h).toISOString();
+  assert.equal(sinceLabel(at(2026, 10, 24, 6), now), "today");
+  assert.equal(sinceLabel(at(2026, 10, 23, 23), now), "yesterday"); // calendar days, not 24 hours
+  assert.equal(sinceLabel(at(2026, 10, 19), now), "5 days ago");
+  assert.equal(sinceLabel(at(2026, 10, 3), now), "3 weeks ago");
+  assert.match(sinceLabel(at(2026, 7, 1), now), /^Aug 1, 2026$/); // two months back: the date
+  assert.equal(sinceLabel(null, now), "—");
 });
