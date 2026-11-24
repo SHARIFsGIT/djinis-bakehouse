@@ -28,3 +28,52 @@ export const identify = (value) => {
     a leading 0 (the shop's own country) or a "+" and the country code.
     Mirrors the server's rule, so the form can say so before sending. */
 export const saysItsCountry = (phone) => /^\s*[+0]/.test(String(phone ?? ""));
+
+/* ------------------------------------------------------------------ */
+/* The Email | Phone tabs on the log-in and sign-up pages              */
+/* ------------------------------------------------------------------ */
+
+/** What was typed, read on a tab that already says which it is: `{ email }`
+    from the Email tab, `{ phone }` from the Phone tab — and null when the
+    typing doesn't fit its tab (a number under Email, an address under
+    Phone), so the page can point to the other tab instead of guessing. */
+export const identifyAs = (way, value) => {
+  const id = identify(value);
+  if (!id) return null;
+  return (way === "phone") === "phone" in id ? id : null;
+};
+
+/** The words for a typing that doesn't fit its tab, or that is neither. */
+export const wayProblem = (way, value, { signingUp = false } = {}) => {
+  const typed = String(value ?? "").trim();
+  if (way === "email" && looksLikePhone(typed)) return "That looks like a phone number — use the Phone tab.";
+  if (way === "phone" && typed.includes("@")) return "That's an email address — use the Email tab.";
+  if (way === "email") {
+    return signingUp ? "Enter your email address — you'll log in with it." : "Enter the email address on your account.";
+  }
+  return signingUp ? "Enter your phone number — you'll log in with it." : "Enter the phone number on your account.";
+};
+
+export const WAY_KEY = "bakehouse.signin-way";
+
+/** Which tab the pages open on: one asked for in the address (`?with=phone`,
+    as the links between the two pages carry it), else the way this browser
+    last signed in with, else Email. */
+export const initialWay = (search = "") => {
+  const asked = new URLSearchParams(search).get("with");
+  if (asked === "email" || asked === "phone") return asked;
+  try {
+    return localStorage.getItem(WAY_KEY) === "phone" ? "phone" : "email";
+  } catch {
+    return "email";
+  }
+};
+
+/** Remember the way that just worked — a per-browser nicety, never needed. */
+export const rememberWay = (way) => {
+  try {
+    localStorage.setItem(WAY_KEY, way);
+  } catch {
+    /* private mode, storage full: the pages simply open on Email */
+  }
+};

@@ -3,9 +3,10 @@ import { useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router";
 import client, { apiError } from "../api/client";
 import { returnPath } from "../lib/navigation";
-import { identify, looksLikePhone } from "../lib/signin";
+import { identifyAs, initialWay, rememberWay, wayProblem } from "../lib/signin";
 import { fetchStore } from "../lib/store";
 import PasswordInput from "../components/PasswordInput";
+import SignInWay from "../components/SignInWay";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 
@@ -30,20 +31,23 @@ export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // One field for either way in: an email address or a phone number.
-  const [who, setWho] = useState("");
+  // Two tabs, two ways in: an email address or a phone number. Each keeps
+  // its own typing, so a switch back finds it where it was left.
+  const [way, setWay] = useState(() => initialWay(location.search));
+  const [switched, setSwitched] = useState(false); // the panel slides only on a real switch, not on arrival
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState(""); // the Phone tab's number, for a password or a texted code
   const [password, setPassword] = useState("");
-  const [unclear, setUnclear] = useState(false);
+  const [problem, setProblem] = useState("");
   const [busy, setBusy] = useState(false);
   const [demoAccounts, setDemoAccounts] = useState(false);
   // Which extra sign-in rails this deployment offers — a rail with no keys
   // behind it never shows a customer a button that can't work.
   const [rails, setRails] = useState({ phone: false, facebook: false });
 
-  // The texted-code rail (only where the shop can send texts): the number,
-  // the "code is out" step, the code itself.
+  // The texted-code rail, inside the Phone tab (only where the shop can
+  // send texts): the "code is out" step, the code itself.
   const [byCode, setByCode] = useState(false);
-  const [phone, setPhone] = useState("");
   const [codeSent, setCodeSent] = useState(null); // { message } — never the code itself
   const [code, setCode] = useState("");
   const [phoneBusy, setPhoneBusy] = useState(false);
@@ -65,16 +69,31 @@ export default function Login() {
   // logged in): there is nothing to do here — on to where they were going.
   if (ready && user && !busy && !phoneBusy) return <Navigate to={from} replace />;
 
+  const backToPassword = () => {
+    setByCode(false);
+    setCodeSent(null);
+    setCode("");
+  };
+
+  const switchWay = (next) => {
+    if (next !== way) setSwitched(true);
+    setWay(next);
+    setProblem("");
+    backToPassword();
+  };
+
   const submit = async (e) => {
     e.preventDefault();
-    const id = identify(who);
+    const typed = way === "email" ? email : phone;
+    const id = identifyAs(way, typed);
     if (!id) {
-      setUnclear(true);
+      setProblem(wayProblem(way, typed));
       return;
     }
     setBusy(true);
     try {
       const user = await login(id, password);
+      rememberWay(way);
       toast.success(`Welcome back, ${user.first_name}`);
       navigate(from, { replace: true });
     } catch (err) {
@@ -104,6 +123,7 @@ export default function Login() {
     setPhoneBusy(true);
     try {
       const user = await phoneLogin(phone, code);
+      rememberWay("phone");
       toast.success(`Welcome back, ${user.first_name}`);
       navigate(from, { replace: true });
     } catch (err) {
@@ -125,184 +145,202 @@ export default function Login() {
     }
   };
 
-  // Over to the texted code, carrying across a number already typed.
-  const useCode = () => {
-    if (looksLikePhone(who)) setPhone(who.trim());
-    setByCode(true);
-  };
-
-  const usePassword = () => {
-    setByCode(false);
-    setCodeSent(null);
-    setCode("");
-  };
+  const field = (id, label, props) => (
+    <div>
+      <label className="label text-xs" htmlFor={id}>{label}</label>
+      <input
+        id={id}
+        className={`input input-bordered w-full ${problem ? "input-error" : ""}`}
+        autoCapitalize="none"
+        autoCorrect="off"
+        spellCheck={false}
+        required
+        aria-invalid={Boolean(problem)}
+        aria-describedby={problem ? "login-who-problem" : undefined}
+        {...props}
+        onChange={(e) => {
+          props.onChange(e);
+          setProblem("");
+        }}
+      />
+      {problem && (
+        <p id="login-who-problem" className="mt-1.5 text-xs font-semibold text-error" role="alert">
+          {problem}
+        </p>
+      )}
+    </div>
+  );
 
   return (
     <div className="mx-auto flex max-w-md flex-col px-4 py-16">
-      {/* On a phone under 390px the card gives its sides 20px instead of 32
-          so the email field has room to show its whole hint. */}
+      {/* On a phone under 390px the card gives its sides 20px instead of 32,
+          so the two tabs and the fields keep their room. */}
       <div className="rise-in rounded-box glass px-5 py-8 shadow-lg ring-1 ring-base-300/60 min-[390px]:px-8">
         <img src="/static/site/logo.png" alt="" className="mx-auto h-14 w-14 object-contain" />
         <h1 className="font-display mt-4 text-center text-3xl font-semibold">Welcome back</h1>
         <p className="mt-1 text-center text-sm opacity-70">Log in to check out faster.</p>
 
-        {!byCode ? (
-          <form onSubmit={submit} className="mt-6 space-y-4">
-            <div>
-              <label className="label text-xs" htmlFor="email">Email or phone number</label>
-              {/* One field, either way in. The email keyboard has the letters,
-                  the digits, "@" and "+" — enough for both. */}
-              <input
-                id="email"
-                type="text"
-                inputMode="email"
-                // The hint alone steps down on a narrow phone (15px, then 13px
-                // under 360px) so all of it reads; what is typed stays 16px,
-                // the size that keeps iOS from zooming in.
-                className={`input input-bordered w-full max-[389px]:placeholder:text-[15px] max-[359px]:placeholder:text-[13px] ${unclear ? "input-error" : ""}`}
-                placeholder="you@example.com or 0176 555 0100"
-                autoComplete="username"
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
-                required
-                aria-invalid={unclear}
-                aria-describedby={unclear ? "login-who-problem" : undefined}
-                value={who}
-                onChange={(e) => {
-                  setWho(e.target.value);
-                  setUnclear(false);
-                }}
-              />
-              {unclear && (
-                <p id="login-who-problem" className="mt-1.5 text-xs font-semibold text-error" role="alert">
-                  Enter the email address or the phone number on your account.
+        <div className="mt-6">
+          <SignInWay value={way} onChange={switchWay} idPrefix="login" label="Log in with" />
+        </div>
+
+        <div
+          key={way}
+          id="login-panel"
+          role="tabpanel"
+          aria-labelledby={`login-tab-${way}`}
+          className={`mt-5 ${switched ? (way === "phone" ? "slide-from-right" : "slide-from-left") : ""}`}
+        >
+          {way === "phone" && byCode ? (
+            codeSent ? (
+              <div className="space-y-4">
+                <div className="rounded-box border border-success/40 bg-success/10 p-4 text-sm">
+                  <p className="font-semibold">{codeSent.message}</p>
+                </div>
+                <form onSubmit={verifyCode} className="space-y-4">
+                  <div>
+                    <label className="label text-xs" htmlFor="sms-code">Sign-in code</label>
+                    <input
+                      id="sms-code"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      className="input input-bordered w-full text-center font-mono tracking-[0.4em]"
+                      placeholder="······"
+                      maxLength={6}
+                      required
+                      value={code}
+                      onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                    />
+                  </div>
+                  <button type="submit" className="btn btn-primary w-full" disabled={phoneBusy || code.length !== 6}>
+                    {phoneBusy ? <span className="loading loading-spinner loading-sm" /> : "Verify & sign in"}
+                  </button>
+                </form>
+                <p className="text-center text-sm opacity-70">
+                  Wrong number, or nothing arrived?{" "}
+                  <button
+                    type="button"
+                    className="link link-secondary font-semibold"
+                    onClick={() => {
+                      setCodeSent(null);
+                      setCode("");
+                    }}
+                  >
+                    Use a different number
+                  </button>
                 </p>
-              )}
-            </div>
-            <div>
-              <div className="mb-1 flex items-baseline justify-between gap-4">
-                <label className="label text-xs" htmlFor="password">Password</label>
-                <Link to="/forgot-password" className="text-xs link link-secondary">Forgot?</Link>
               </div>
-              <PasswordInput
-                id="password"
-                placeholder="••••••••"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-            <button type="submit" className="btn btn-primary w-full" disabled={busy}>
-              {busy ? <span className="loading loading-spinner loading-sm" /> : "Log in"}
-            </button>
-          </form>
-        ) : codeSent ? (
-          <div className="mt-6 space-y-4">
-            <div className="rounded-box border border-success/40 bg-success/10 p-4 text-sm">
-              <p className="font-semibold">{codeSent.message}</p>
-            </div>
-            <form onSubmit={verifyCode} className="space-y-4">
+            ) : (
+              <form onSubmit={sendCode} className="space-y-4">
+                <div>
+                  <label className="label text-xs" htmlFor="login-phone">Phone number</label>
+                  <input
+                    id="login-phone"
+                    type="tel"
+                    autoComplete="tel"
+                    className="input input-bordered w-full"
+                    required
+                    maxLength={30}
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                  />
+                  <p className="mt-1.5 text-xs opacity-70">
+                    The mobile number on your account. Text sign-in works once you&rsquo;ve
+                    confirmed the number in your profile.
+                  </p>
+                </div>
+                <button type="submit" className="btn btn-primary w-full" disabled={phoneBusy || !phone}>
+                  {phoneBusy ? (
+                    <span className="loading loading-spinner loading-sm" />
+                  ) : (
+                    <MessageSquare size={16} aria-hidden="true" />
+                  )}
+                  {phoneBusy ? "Sending…" : "Text me a sign-in code"}
+                </button>
+              </form>
+            )
+          ) : (
+            <form onSubmit={submit} className="space-y-4">
+              {way === "email"
+                ? field("email", "Email", {
+                    type: "text",
+                    inputMode: "email",
+                    autoComplete: "username",
+                    value: email,
+                    onChange: (e) => setEmail(e.target.value),
+                  })
+                : field("login-phone", "Phone number", {
+                    type: "tel",
+                    autoComplete: "username",
+                    maxLength: 30,
+                    value: phone,
+                    onChange: (e) => setPhone(e.target.value),
+                  })}
               <div>
-                <label className="label text-xs" htmlFor="sms-code">Sign-in code</label>
-                <input
-                  id="sms-code"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  className="input input-bordered w-full text-center font-mono tracking-[0.4em]"
-                  placeholder="······"
-                  maxLength={6}
+                <div className="mb-1 flex items-baseline justify-between gap-4">
+                  <label className="label text-xs" htmlFor="password">Password</label>
+                  <Link to="/forgot-password" className="text-xs link link-secondary">Forgot?</Link>
+                </div>
+                <PasswordInput
+                  id="password"
+                  placeholder="••••••••"
+                  autoComplete="current-password"
                   required
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                 />
               </div>
-              <button type="submit" className="btn btn-primary w-full" disabled={phoneBusy || code.length !== 6}>
-                {phoneBusy ? <span className="loading loading-spinner loading-sm" /> : "Verify & sign in"}
+              <button type="submit" className="btn btn-primary w-full" disabled={busy}>
+                {busy ? <span className="loading loading-spinner loading-sm" /> : "Log in"}
               </button>
             </form>
-            <p className="text-center text-sm opacity-70">
-              Wrong number, or nothing arrived?{" "}
+          )}
+
+          {/* A texted code instead of the password — only where the shop
+              can send texts, and only on the Phone tab, where it belongs. */}
+          {way === "phone" &&
+            rails.phone &&
+            (byCode ? (
+              <button type="button" onClick={backToPassword} className="btn btn-ghost btn-sm mt-3 w-full border border-base-300">
+                Use my password instead
+              </button>
+            ) : (
               <button
                 type="button"
-                className="link link-secondary font-semibold"
-                onClick={() => {
-                  setCodeSent(null);
-                  setCode("");
-                }}
+                onClick={() => setByCode(true)}
+                className="btn btn-ghost btn-sm mt-3 w-full border border-base-300"
               >
-                Use a different number
+                <MessageSquare size={15} aria-hidden="true" />
+                Text me a sign-in code instead
               </button>
-            </p>
-          </div>
-        ) : (
-          <form onSubmit={sendCode} className="mt-6 space-y-4">
-            <div>
-              <label className="label text-xs" htmlFor="login-phone">Phone number</label>
-              <input
-                id="login-phone"
-                type="tel"
-                autoComplete="tel"
-                className="input input-bordered w-full"
-                placeholder="0176 555 0100"
-                required
-                maxLength={30}
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-              />
-              <p className="mt-1.5 text-xs opacity-70">
-                The mobile number on your account. Text sign-in works once you&rsquo;ve
-                confirmed the number in your profile.
-              </p>
-            </div>
-            <button type="submit" className="btn btn-primary w-full" disabled={phoneBusy || !phone}>
-              {phoneBusy ? (
-                <span className="loading loading-spinner loading-sm" />
-              ) : (
-                <MessageSquare size={16} aria-hidden="true" />
-              )}
-              {phoneBusy ? "Sending…" : "Text me a sign-in code"}
-            </button>
-          </form>
-        )}
+            ))}
+        </div>
 
-        {/* The other ways in. A texted code only where the shop can send
-            texts; Facebook only where its keys are set. */}
-        {(rails.phone || rails.facebook) && (
-          <div className="mt-5 flex items-center gap-3 text-xs opacity-70">
-            <span className="h-px flex-1 bg-base-content/20" />
-            or
-            <span className="h-px flex-1 bg-base-content/20" />
-          </div>
-        )}
-        {rails.phone &&
-          (byCode ? (
-            <button type="button" onClick={usePassword} className="btn btn-ghost btn-sm mt-3 w-full border border-base-300">
-              Log in with a password instead
-            </button>
-          ) : (
-            <button type="button" onClick={useCode} className="btn btn-ghost btn-sm mt-3 w-full border border-base-300">
-              <MessageSquare size={15} aria-hidden="true" />
-              Text me a sign-in code
-            </button>
-          ))}
+        {/* Facebook is a third way in, whichever tab is open — only where
+            its keys are set. */}
         {rails.facebook && (
-          <button
-            type="button"
-            onClick={goFacebook}
-            disabled={fbBusy}
-            className="btn btn-sm mt-3 w-full border-none text-white hover:border-none"
-            style={{ backgroundColor: "#1877F2" }}
-          >
-            {fbBusy ? <span className="loading loading-spinner loading-xs" /> : <FacebookMark size={16} />}
-            Continue with Facebook
-          </button>
+          <>
+            <div className="mt-5 flex items-center gap-3 text-xs opacity-70">
+              <span className="h-px flex-1 bg-base-content/20" />
+              or
+              <span className="h-px flex-1 bg-base-content/20" />
+            </div>
+            <button
+              type="button"
+              onClick={goFacebook}
+              disabled={fbBusy}
+              className="btn btn-sm mt-3 w-full border-none text-white hover:border-none"
+              style={{ backgroundColor: "#1877F2" }}
+            >
+              {fbBusy ? <span className="loading loading-spinner loading-xs" /> : <FacebookMark size={16} />}
+              Continue with Facebook
+            </button>
+          </>
         )}
 
         <p className="mt-4 text-center text-sm opacity-70">
           New here?{" "}
-          <Link to="/register" state={{ from }} className="link link-secondary font-semibold">
+          <Link to={`/register?with=${way}`} state={{ from }} className="link link-secondary font-semibold">
             Create an account
           </Link>
         </p>
@@ -321,8 +359,8 @@ export default function Login() {
                 type="button"
                 className="btn btn-ghost btn-xs border border-base-300"
                 onClick={() => {
-                  usePassword();
-                  setWho(acct.email);
+                  switchWay("email");
+                  setEmail(acct.email);
                   setPassword(acct.password);
                 }}
               >

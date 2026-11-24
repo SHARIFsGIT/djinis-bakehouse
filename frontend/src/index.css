@@ -574,6 +574,35 @@ label.label:not(:has(input, select, textarea), .input > *, .select > *) {
   animation: fade-in 0.2s ease-out both;
 }
 
+/* The sign-in pages' Email | Phone panels: each arrives from the side its
+   tab sits on, as the tab's pill slides over. */
+@keyframes from-left {
+  from {
+    opacity: 0;
+    transform: translateX(-14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes from-right {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.slide-from-left {
+  animation: from-left 0.26s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+.slide-from-right {
+  animation: from-right 0.26s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .rise-in,
   .animate-pop,
@@ -581,6 +610,8 @@ label.label:not(:has(input, select, textarea), .input > *, .select > *) {
   .basket-nod,
   .sheet-up,
   .fade-in,
+  .slide-from-left,
+  .slide-from-right,
   /* the placeholders that hold a page's shape while it loads: still there,
      no longer pulsing (the spinners stay — they are the only word that
      something is happening) */
