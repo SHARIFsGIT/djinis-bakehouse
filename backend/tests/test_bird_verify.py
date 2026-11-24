@@ -226,6 +226,7 @@ def test_a_redirect_is_never_followed_and_the_key_never_travels(bird_on):
             asked.append((self.command, self.path, self.headers.get("Authorization")))
 
         def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))  # else Windows resets the connection
             self._note()
             self.send_response(302)
             self.send_header("Location", f"http://127.0.0.1:{port}/elsewhere")
