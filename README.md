@@ -77,15 +77,23 @@ and the admin is the login you set at deploy time.
 product pages with reviews (one per customer, editable), related items,
 ingredients & allergens. Every product and category carries a real photo; images
 ship pre-resized (900px, ~60–110 KB progressive JPEGs) via `scripts/prepare_images.py`.
-The palette is drawn from the shop mark itself — deep burgundy with a lighter
-wine secondary and honey gold over warm cream; at night the surfaces stay warm
-— near-black cocoa backgrounds, the same burgundy-to-wine brand gradient, and
-gold stepping back to an accent role (success is the logo's sage green, info
-its cocoa; only the rating stars stay gold). One signature finish runs through
-the whole shop: every brand surface — buttons, badges, the announcement bar,
-the today strip, the rating meters — wears the same burgundy-to-wine gradient
-(`.brand-gradient` in `index.css`, applied automatically to `btn-primary`,
-`btn-secondary` and the brand badges). The category links sit dead-centre on
+The palette is drawn from the shop mark itself — the logo's own burgundy
+(`#851b31`) and saffron (`#eca13a`) over flour-cream paper, with a warm
+crust-brown ink; at night the surfaces stay warm — near-black espresso
+backgrounds, and a brighter burgundy (`#ae3b4c`) so a button still stands off
+the paper. The feedback colours keep out of the brand's way: success is the
+logo's sage, information a slate blue, cautions orange and errors orange-red;
+the saffron is for highlights such as the rating stars. Every brand surface —
+buttons, badges, the announcement bar, the today strip, the rating meters — is
+filled flat in the burgundy, the way a printed label is (`.brand-gradient` in
+`index.css` keeps the name of the gradient it used to draw). An order's status
+reads by its group, with its own pictogram and word
+(`components/OrderStatusBadge.jsx`): Pending solid orange; Confirmed, Baking
+and Ready soft tints of teal, saffron and burgundy; Out for delivery solid
+burgundy; Delivered solid sage; Cancelled a neutral outline — fixed colours
+that a brand-colour pick never changes. Display type is Fraunces, upright and
+in its real italic (the italic file is loaded, not slanted by the browser);
+body text is Karla. The category links sit dead-centre on
 the main navbar, on the mark's own line — the search box narrows rather than
 letting them collide — and the avatar goes straight to the customer's
 "My corner" (orders, saved bakes, addresses, profile) or, for the baker,
@@ -136,8 +144,8 @@ AA: on the two paper tones, the ink at every strength the pages dim text
 to, each label on its own fill and each semantic colour used as text
 compute to 4.5:1 or better. At night the wine has two seats for that
 reason — `--color-secondary` is the one read as text, `--brand-wine` the
-deeper one under cream text (`index.css`). The rating stars keep the honey
-on cream; the number is always beside them.
+deeper one under cream text (`index.css`). The rating stars wear the
+saffron on cream; the number is always beside them.
 
 **Back-in-stock alerts** — a sold-out bake's page takes an email instead of
 an order ("Tell me when it's back", guests included, rate-limited and

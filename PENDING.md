@@ -4,6 +4,11 @@ Written 2026-11-23, with the release that added **phone-number sign-in** and
 the **new dashboard**. Checked against the live shop's public settings
 (`https://djinisbakehouse.com/api/store`) and the code in this repository.
 
+Updated 2026-11-24, with the release that restores the sign-in pages, brings
+back the logo's own burgundy and shortens the shop's wording: items **17**
+and **18** are new. Since the first writing, the live shop also reports text
+sign-in (item 11) and "Continue with Facebook" (item 12) as switched on.
+
 Everything below is yours to do or to decide — none of it can be done from
 the code. Each item says **what is open**, **why it matters**, **how to fix
 it**, and **how to see that it worked**. No step asks for a real payment as
@@ -35,6 +40,8 @@ a test, and no secret belongs in this repository: keys go into Render only.
 | 14 | A walk through the site on a real phone | Soon | 15 min |
 | 15 | Smaller decisions (visitor address header, server region, CSV column) | No hurry | — |
 | 16 | Housekeeping (backups, public repository, your PC's memory) | No hurry | — |
+| 17 | Brand colour: back to the mark's burgundy | **Right after this release** | 1 min |
+| 18 | Words on the site that only you can confirm | No hurry | 10 min |
 
 ---
 
@@ -413,6 +420,51 @@ Android phone and tell me what looks or feels wrong:
   15.8 GB). The local test shop was therefore started only for the minutes
   each check took and stopped again each time; nothing was left running. If
   you run the shop locally, close a few browser tabs first.
+
+---
+
+## 17. Brand colour: back to the mark's burgundy
+
+**What is open.** The shop's colours now come from the logo itself: its
+burgundy (`#851b31`) and saffron, flat fills instead of the old gradient.
+But the live shop still has a brand colour **picked in Settings — teal
+(`#1e7d74`)** — and a pick always wins over the shop's own colour. Until it
+is reset, buttons, links and the brand strips stay teal next to the
+burgundy logo. (Order statuses are not affected: they keep their own
+colours whatever is picked.)
+
+**How to fix it.** Desk → **Settings** → **Brand colour** → the first
+round swatch, **"Burgundy — the mark's own"** → **Save colour**.
+
+**How to see that it worked.** The buttons and the announcement bar are
+burgundy, and `https://djinisbakehouse.com/api/store` shows
+`"brand_color": null`. Any other colour can still be picked later — the
+picker is unchanged.
+
+---
+
+## 18. Words on the site that only you can confirm
+
+**What is open.** The wording was shortened in this release, but these
+lines were deliberately left exactly as they were, because they make claims
+only you know to be true — please read them and change or remove any that
+are not:
+
+- [ ] "Baked fresh every morning" — on every product's page.
+- [ ] "Flour from two farms" — the home page's promise row.
+- [ ] "Small-batch breads, pastries and sweet things — mixed by hand, baked
+      before sunrise, gone by supper." — the footer.
+- [ ] "Made with patience, baked with love — small batches out of our little
+      kitchen, on your table the same day." — the home page's first lines.
+- [ ] "Faster checkout, order history, first dibs on seasonal bakes." — the
+      sign-up page.
+- [ ] "Baked the same morning as your event" — the bulk-order page.
+- [ ] "Checkout you can trust" — the home page's promise row. It says little;
+      a more specific line (for example where card details are entered)
+      would be a payment statement, so the choice of words is yours.
+
+**How to fix it.** Tell me the wording you want — none of these is
+editable from the desk.
 
 ---
 
