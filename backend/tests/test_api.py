@@ -925,7 +925,13 @@ def test_users_loyalty_roll():
     assert first["pagination"]["per_page"] == 10
     assert first["pagination"]["page"] == 1
 
+    # The whole roll, shelf by shelf: by the time this runs the suite has
+    # opened more accounts than one shelf of fifty holds.
     whole = client.get("/api/admin/users", params={"per_page": 50}, headers=headers).json()
+    for page in range(2, whole["pagination"]["total_pages"] + 1):
+        whole["items"] += client.get(
+            "/api/admin/users", params={"per_page": 50, "page": page}, headers=headers
+        ).json()["items"]
     assert whole["pagination"]["total_items"] == len(whole["items"])
     assert sum(whole["tier_counts"].values()) == len(whole["items"])
 

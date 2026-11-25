@@ -199,3 +199,83 @@ def test_a_customers_card_lists_their_orders_exactly():
     assert [order["order_number"] for order in exact["orders"]] == [placed.json()["order_number"]]
     assert exact["pagination"]["total_items"] == 1
     assert client.get("/api/admin/orders", params={"user_id": 0}, headers=admin_headers()).status_code == 422
+
+
+def _found(search: str) -> set[int]:
+    return {row["id"] for row in _roll(search=search, per_page=50)["items"]}
+
+
+def _german_mobile() -> tuple[str, str]:
+    """A fresh mobile number's seven last digits, and how the shop stores it."""
+    tail = "".join(secrets.choice("0123456789") for _ in range(7))
+    return tail, f"+49176{tail}"
+
+
+def test_a_number_is_found_however_it_is_written():
+    tail, stored = _german_mobile()
+    made = client.post(
+        "/api/auth/register",
+        json={"phone": f"0176 {tail[:3]} {tail[3:]}", "password": PASSWORD, "first_name": "Searchy"},
+    )
+    assert made.status_code in (200, 201), made.text
+    assert made.json()["user"]["phone"] == stored  # stored as it always was
+    me = made.json()["user"]["id"]
+
+    for typed in (
+        f"0176 {tail[:3]} {tail[3:]}",  # at home
+        stored,  # as stored
+        f"+49 176 {tail[:3]} {tail[3:]}",  # abroad
+        f"0049 176 {tail}",  # an old business card
+        f"+49 (0)176 {tail}",  # the trunk 0 kept by mistake
+        f"0176-{tail[:3]}-{tail[3:]}",
+        f"(0176) {tail[:3]}/{tail[3:]}",
+        f"0176.{tail[:3]}.{tail[3:]}",
+        f"0176 {tail[:3]}",  # the start of it
+        tail,  # the end of it, as before
+    ):
+        assert me in _found(typed), typed
+
+
+def test_a_number_stored_the_old_way_is_found_both_ways():
+    """Accounts from before app/phones.py keep the number as it was typed."""
+    tail, _ = _german_mobile()
+    api.register_and_login(f"legacy.{tail}{DOMAIN}", PASSWORD)
+    me = _only_id(f"legacy.{tail}")
+    db = SessionLocal()
+    try:
+        db.get(User, me).phone = f"0176 {tail[:3]} {tail[3:5]} {tail[5:]}"
+        db.commit()
+    finally:
+        db.close()
+    assert me in _found(f"+49 176 {tail}")
+    assert me in _found(f"0176{tail}")
+
+
+def test_a_number_search_finds_no_other_number():
+    tail, _ = _german_mobile()
+    mine = f"0176 {tail}"
+    neighbour = f"0176 {tail[:-1]}{(int(tail[-1]) + 1) % 10}"  # one digit apart
+    abroad = f"+44 176 {tail}"  # the same digits behind another country code
+    ids = {}
+    for label, number in (("mine", mine), ("neighbour", neighbour), ("abroad", abroad)):
+        made = client.post("/api/auth/register", json={"phone": number, "password": PASSWORD, "first_name": label})
+        assert made.status_code in (200, 201), made.text
+        ids[label] = made.json()["user"]["id"]
+
+    for typed in (mine, f"+49 176 {tail}", f"0049176{tail}"):
+        found = _found(typed)
+        assert ids["mine"] in found, typed
+        assert ids["neighbour"] not in found and ids["abroad"] not in found, typed
+    # A search that is not shaped like a number never matches one: the old
+    # digit-for-digit rule found every number holding the "2" of "anna2".
+    assert ids["mine"] not in _found(f"anna{tail[-3:]}")
+    # Two digits are no number to look for.
+    assert ids["mine"] not in _found(tail[-2:])
+
+
+def test_names_and_addresses_are_still_found_as_before():
+    token = api.register_and_login(f"plain.search{DOMAIN}", PASSWORD)
+    client.put("/api/auth/me", json={"first_name": "Philippa", "last_name": "Search"}, headers=auth_header(token))
+    me = _only_id("plain.search")
+    for typed in ("philippa", "PHILIPPA SEARCH", "plain.search@", f"plain.search{DOMAIN}", "ppa sea"):
+        assert me in _found(typed), typed
