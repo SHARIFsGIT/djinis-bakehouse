@@ -97,7 +97,7 @@ from ..schemas import (
     UserOut,
     VoucherLinkRequest,
 )
-from .. import delivery, ledger, payment_ops, shoptime
+from .. import audit, delivery, ledger, payment_ops, phones, shoptime
 from ..loyalty import loyalty_tier as _loyalty
 from ..security import CurrentAdmin, DbSession, site_base
 from .auth import RESET_TOKEN_MINUTES as RESET_LINK_MINUTES
@@ -1661,6 +1661,32 @@ def roll_filters(
     }
 
 
+# What a typed phone number looks like: digits and the usual separators,
+# perhaps a leading "+". A search shaped otherwise ("anna2", an email) is
+# never looked up as a number.
+_PHONE_SEARCH = re.compile(r"\+?[\d\s()./-]+")
+
+
+def _phone_hit(typed: str, stored: str | None) -> bool:
+    """Whether the search `typed` finds the number `stored` on an account.
+
+    Part of a number finds it digit for digit ("098 2671", "176 098"). A
+    number written with its country — "0176 098 2671" at home, "+49 176 …"
+    or "0049 …" abroad, "+49 (0)176 …" — finds the same number however it
+    was stored, as the leading part of its one canonical spelling (see
+    app/phones.py), so it never finds a number that merely contains the
+    same digits somewhere."""
+    if not stored or not _PHONE_SEARCH.fullmatch(typed):
+        return False
+    digits = "".join(ch for ch in typed if ch.isdigit())
+    if len(digits) < 3:
+        return False
+    if digits in "".join(ch for ch in stored if ch.isdigit()):
+        return True
+    wanted = phones.canonical(typed)
+    return wanted.startswith("+") and phones.canonical(stored).startswith(wanted)
+
+
 def _narrow_roll(roll: list[AdminCustomerOut], f: dict) -> list[AdminCustomerOut]:
     """The roll filtered, searched and ordered by `roll_filters`."""
     if f["tier"]:
@@ -1680,16 +1706,16 @@ def _narrow_roll(roll: list[AdminCustomerOut], f: dict) -> list[AdminCustomerOut
         roll = [c for c in roll if (c.email is None) == (f["contact"] == "phone")]
     if f["search"]:
         # Matched against name, email or phone — the things the baker
-        # actually knows about a regular. Numbers compare digit-for-digit,
-        # so "555-0142" finds however the number was typed or stored.
-        needle = f["search"].strip().lower()
-        needle_digits = "".join(ch for ch in needle if ch.isdigit())
+        # actually knows about a regular. A number is found however it was
+        # typed or stored (_phone_hit).
+        typed = f["search"].strip()
+        needle = typed.lower()
         roll = [
             c
             for c in roll
             if needle in (c.email or "").lower()
             or needle in f"{c.first_name} {c.last_name}".lower()
-            or (needle_digits and needle_digits in (c.phone or ""))
+            or _phone_hit(typed, c.phone)
         ]
     if f["sort"] == "name":
         roll = sorted(roll, key=lambda c: (c.first_name.casefold(), c.last_name.casefold(), c.id))
@@ -1831,12 +1857,27 @@ def update_user(user_id: int, payload: UserAdminUpdateRequest, admin: CurrentAdm
                 "Promote another admin first, then make this change.",
             )
 
+    before_role, before_active = user.role, user.is_active
     if payload.is_active is not None:
         user.is_active = payload.is_active
     if payload.role is not None:
         user.role = payload.role.value
     db.commit()
     db.refresh(user)
+    # The two settings the shop's keys hang on — each change written down
+    # with the admin who made it (app/audit.py).
+    if user.role != before_role:
+        audit.record(
+            "user.role_changed", admin_id=admin.id, target_id=user.id, before=before_role, after=user.role
+        )
+    if user.is_active != before_active:
+        audit.record(
+            "user.activated" if user.is_active else "user.deactivated",
+            admin_id=admin.id,
+            target_id=user.id,
+            before="active" if before_active else "inactive",
+            after="active" if user.is_active else "inactive",
+        )
     return user
 
 
@@ -1899,6 +1940,9 @@ def set_classification(
     )
     db.commit()
     db.refresh(user)
+    audit.record(
+        "user.classification_changed", admin_id=admin.id, target_id=user.id, before=previous, after=value
+    )
     return user
 
 

@@ -26,6 +26,7 @@ import { useToast } from "../../context/ToastContext";
 import { LoadError } from "../../components/Loading";
 import Pager from "../../components/Pager";
 import Drawer from "../../components/Drawer";
+import ConfirmDialog from "../../components/ConfirmDialog";
 import OrderStatusBadge from "../../components/OrderStatusBadge";
 
 /* What each tier wears. The rules live on the server (app/loyalty.py) —
@@ -317,6 +318,20 @@ function CustomerDrawer({ user, voucher, onClose, onChanged, onUpdate, onWord })
     if (!(await onUpdate(user.id, payload))) setAccount(before);
   };
 
+  // Making someone an admin hands them the whole desk, so it is asked once
+  // more and never done by a slip of the select. Every other change to the
+  // role goes straight in, as before.
+  const [promotion, setPromotion] = useState(null); // null | "asking" | "saving"
+  const pickRole = (role) => {
+    if (role === "admin" && account.role !== "admin") setPromotion("asking");
+    else changeAccount({ role });
+  };
+  const promote = async () => {
+    setPromotion("saving");
+    await changeAccount({ role: "admin" });
+    setPromotion(null);
+  };
+
   useEffect(() => {
     loadLedger();
     // Their own orders exactly — newest first, the last five.
@@ -376,7 +391,7 @@ function CustomerDrawer({ user, voucher, onClose, onChanged, onUpdate, onWord })
   };
 
   const average = user.order_count > 0 ? user.lifetime_spend / user.order_count : 0;
-  const allOrders = `/admin/orders?search=${encodeURIComponent(user.email ?? user.phone ?? user.first_name)}`;
+  const allOrders = `/admin/orders?user_id=${user.id}`;
 
   return (
     <Drawer
@@ -452,10 +467,15 @@ function CustomerDrawer({ user, voucher, onClose, onChanged, onUpdate, onWord })
         <Section
           title="Recent orders"
           aside={
-            // The order rail's search matches by "contains", so it can find a
-            // few more than this card does — the link promises no number.
+            // This account's orders exactly, by its id — never a search that
+            // could catch another customer whose address contains this one.
+            // The name rides along in the link's state for the rail to say.
             orders && orders !== "failed" && orders.pagination.total_items > 0 ? (
-              <Link to={allOrders} className="link link-secondary text-xs font-semibold">
+              <Link
+                to={allOrders}
+                state={{ customer: fullName(user) }}
+                className="link link-secondary text-xs font-semibold"
+              >
                 See all in Orders
               </Link>
             ) : null
@@ -657,7 +677,7 @@ function CustomerDrawer({ user, voucher, onClose, onChanged, onUpdate, onWord })
                 id={`role-${user.id}`}
                 className="select select-bordered select-sm"
                 value={account.role}
-                onChange={(e) => changeAccount({ role: e.target.value })}
+                onChange={(e) => pickRole(e.target.value)}
               >
                 <option value="customer">customer</option>
                 <option value="admin">admin</option>
@@ -732,6 +752,23 @@ function CustomerDrawer({ user, voucher, onClose, onChanged, onUpdate, onWord })
           )}
         </Section>
       </div>
+
+      {promotion && (
+        <ConfirmDialog
+          title={`Make ${fullName(user)} an admin?`}
+          confirmLabel="Yes, make admin"
+          cancelLabel="Keep as customer"
+          busy={promotion === "saving"}
+          onConfirm={promote}
+          onCancel={() => setPromotion(null)}
+        >
+          <p>
+            An admin opens the whole baker&rsquo;s desk: every customer&rsquo;s details and orders,
+            refunds, products and prices, promotions and settings &mdash; and can make or remove
+            other admins. It takes effect at once.
+          </p>
+        </ConfirmDialog>
+      )}
     </Drawer>
   );
 }

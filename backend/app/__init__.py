@@ -530,6 +530,11 @@ def create_app() -> FastAPI:
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        # The desk's answers are about people — customer lists, orders, the
+        # spreadsheets — so neither the browser nor anything in between may
+        # keep a copy. The storefront's own caching is left as it was.
+        if request.url.path == "/api/admin" or request.url.path.startswith("/api/admin/"):
+            response.headers["Cache-Control"] = "no-store"
         # HSTS pins the https:// canonical domain — browsers ignore it over
         # plain HTTP, so dev on localhost is untouched.
         if settings.is_production or request.url.scheme == "https":

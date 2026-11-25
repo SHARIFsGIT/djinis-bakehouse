@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useLocation, useSearchParams } from "react-router";
 import {
   CalendarHeart,
   ChevronRight,
@@ -757,11 +757,19 @@ function OrdersTab() {
   const status = params.get("status") ?? "";
   const page = Number(params.get("page") ?? 1);
   const searchParam = params.get("search") ?? "";
+  // One customer's orders exactly: a customer card links here with the
+  // account's id, and its name in the link's state (an address shared on
+  // without it just says "one customer"). Narrowing further keeps the name.
+  const location = useLocation();
+  const customer = /^[1-9]\d*$/.test(params.get("user_id") ?? "") ? params.get("user_id") : "";
+  const customerName = customer && typeof location.state?.customer === "string" ? location.state.customer : "";
+  const keepName = { state: location.state };
 
   const load = () => {
     const query = { page, per_page: 15 };
     if (status) query.status = status;
     if (searchParam) query.search = searchParam;
+    if (customer) query.user_id = customer;
     setFailed(null);
     client
       .get("/admin/orders", { params: query })
@@ -773,7 +781,7 @@ function OrdersTab() {
     setData(null);
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, page, searchParam]);
+  }, [status, page, searchParam, customer]);
 
   // The box follows the address bar: the bell and the dashboard deep-link
   // here with ?search=…, and "Reset" clears it — the list changed either
@@ -786,7 +794,7 @@ function OrdersTab() {
     if (search.trim()) next.set("search", search.trim());
     else next.delete("search");
     next.delete("page");
-    setParams(next);
+    setParams(next, keepName);
   };
 
   const setStatusFilter = (value) => {
@@ -794,14 +802,14 @@ function OrdersTab() {
     if (value) next.set("status", value);
     else next.delete("status");
     next.delete("page");
-    setParams(next);
+    setParams(next, keepName);
   };
 
   const goPage = (p) => {
     const next = new URLSearchParams(params);
     if (p > 1) next.set("page", p);
     else next.delete("page");
-    setParams(next);
+    setParams(next, keepName);
   };
 
   const exportCsv = async () => {
@@ -819,7 +827,7 @@ function OrdersTab() {
   };
 
   // Something narrows the rail — the empty state and "Reset" say so.
-  const filtered = Boolean(status || searchParam);
+  const filtered = Boolean(status || searchParam || customer);
 
   // A drag to copy an order number is not a request to open the order.
   const openRow = (id) => {
@@ -903,6 +911,7 @@ function OrdersTab() {
           <p className="mb-2 text-sm opacity-75">
             {[
               `${data.pagination.total_items} ${data.pagination.total_items === 1 ? "order" : "orders"}`,
+              customer && (customerName ? `for ${customerName}` : "for one customer"),
               status && statusLabel(status),
               searchParam && `matching “${searchParam}”`,
               "newest first",

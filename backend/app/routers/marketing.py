@@ -39,6 +39,7 @@ from ..security import CurrentAdmin, DbSession, OptionalUser, client_key, site_b
 from ..serialize import csv_safe
 from ..delivery import parse_area
 from .. import (
+    audit,
     bird_verify,
     facebook_gateway,
     payment_ops,
@@ -398,6 +399,7 @@ def update_marketing_consent(
             status_code=400,
             detail="This customer has no email address on file — there is nothing to send marketing to",
         )
+    was_consented = user.marketing_consent_at is not None
     if payload.granted:
         user.marketing_consent_at = utcnow()
         user.marketing_consent_source = payload.source.strip()
@@ -420,6 +422,15 @@ def update_marketing_consent(
             )
     db.commit()
     db.refresh(user)
+    # Who recorded or withdrew it — the source and evidence stay in the
+    # account, never in the log (app/audit.py).
+    audit.record(
+        "user.marketing_consent_granted" if payload.granted else "user.marketing_consent_withdrawn",
+        admin_id=admin.id,
+        target_id=user.id,
+        before=was_consented,
+        after=payload.granted,
+    )
     suppressed = db.scalar(select(Suppression).where(Suppression.email == user.email))
     return MarketingStateOut(
         marketing_consent_at=user.marketing_consent_at,
