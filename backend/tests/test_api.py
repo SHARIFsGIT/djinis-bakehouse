@@ -556,6 +556,44 @@ def test_facebook_login_flow(monkeypatch):
     ).status_code == 200
 
 
+def test_a_sign_in_code_is_refused_when_made_up_expired_spent_or_disabled():
+    """The sign-in callback trades its one-time code the moment it opens.
+    Whatever robots.txt keeps away, the exchange itself takes a code only
+    while it is fresh, once, and only for an active account."""
+    import hashlib
+    from datetime import timedelta
+
+    from app.database import SessionLocal, utcnow
+    from app.models import User
+
+    register_and_login("code.window@example.com", "Window123!")
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == "code.window@example.com").one()
+
+        def issue(code: str, seconds: int) -> None:
+            user.login_code_hash = hashlib.sha256(code.encode()).hexdigest()
+            user.login_code_expires = utcnow() + timedelta(seconds=seconds)
+            db.commit()
+
+        def exchange(code: str) -> int:
+            return client.post("/api/auth/exchange", json={"code": code}).status_code
+
+        assert exchange("made-up-code-0123456789") == 400
+        issue("expired-code-0123456789", -1)
+        assert exchange("expired-code-0123456789") == 400
+        issue("fresh-code-0123456789", 60)
+        assert exchange("fresh-code-0123456789") == 200
+        assert exchange("fresh-code-0123456789") == 400  # once only
+        db.refresh(user)
+        user.is_active = False
+        db.commit()
+        issue("disabled-code-0123456789", 60)
+        assert exchange("disabled-code-0123456789") == 400
+    finally:
+        db.close()
+
+
 def test_addresses():
     token = register_and_login("addr@example.com", "Address123!")
     headers = auth_header(token)
@@ -4648,10 +4686,63 @@ def test_robots_opens_the_shop_and_closes_the_back_rooms():
     assert robots.status_code == 200
     body = robots.text
     assert "User-agent: *" in body
-    assert "Disallow: /api/" in body
+    # The API stays open: a search engine renders the pages from it, and a
+    # closed API left it product pages with no bake on them (test_seo.py).
+    assert "Disallow: /api" not in body
     assert "Disallow: /admin" in body
     assert "Disallow: /account" in body
+    assert "Disallow: /checkout" in body
     assert "Sitemap: http://testserver/sitemap.xml" in body
+
+
+def test_robots_keeps_crawlers_off_the_pages_that_act_when_opened():
+    """The one-click unsubscribe sends its token and the sign-in callback
+    trades its one-time code the moment the page opens — a crawler that
+    rendered either would act for the customer. robots.txt closes exactly
+    those two pages, by their own addresses, and nothing a shopper or a
+    search engine needs."""
+    import re
+    from pathlib import Path
+    from urllib.robotparser import RobotFileParser
+
+    body = client.get("/robots.txt").text
+    assert [line for line in body.splitlines() if line.startswith("Disallow:")] == [
+        "Disallow: /admin",
+        "Disallow: /account",
+        "Disallow: /checkout",
+        "Disallow: /unsubscribe",
+        "Disallow: /auth/callback",
+    ]
+    rules = RobotFileParser()
+    rules.parse(body.splitlines())
+
+    def open_to_crawlers(path: str) -> bool:
+        return rules.can_fetch("Googlebot", f"http://testserver{path}")
+
+    # The two pages, however their links are written.
+    for path in ("/unsubscribe", "/unsubscribe?token=abc", "/auth/callback",
+                 "/auth/callback?code=abc", "/auth/callback?error=facebook_declined"):
+        assert not open_to_crawlers(path), path
+    # Exactly those, beside checkout, of the pages the app draws outside the
+    # account and the desk (both closed whole, as before).
+    app = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "App.jsx").read_text(encoding="utf-8")
+    for section in ("account", "admin"):
+        start = app.index(f'path="{section}"')
+        app = app.replace(app[start:app.index("</Route>", start)], "")
+    pages = {"/"} | {f"/{path}" for path in re.findall(r'path="([^":*]+)"', app)}
+    assert len(pages) >= 15, pages  # the reading found the routes
+    assert {page for page in pages if not open_to_crawlers(page)} == {"/checkout", "/unsubscribe", "/auth/callback"}
+    # Narrow: the addresses beside the two rules stay open.
+    for path in ("/uns", "/unsere-backstube", "/auth", "/auth/other", "/authors"):
+        assert open_to_crawlers(path), path
+    # Every page on the map stays open, and so does everything the pages
+    # draw themselves from — the API, the scripts, styles and fonts, the photos.
+    mapped = re.findall(r"<loc>http://testserver([^<]*)</loc>", client.get("/sitemap.xml").text)
+    assert mapped
+    for path in mapped + ["/api/products", "/api/store", "/api/auth/me", "/api/marketing/unsubscribe",
+                          "/assets/index.js", "/assets/index.css", "/assets/face.woff2",
+                          "/static/site/logo.png", "/static/uploads/products/x.jpg", "/favicon.png", "/manifest.json"]:
+        assert open_to_crawlers(path), path
 
 
 def test_stats_carry_a_thirty_day_trading_chart():

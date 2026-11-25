@@ -2,6 +2,7 @@ import { ChevronLeft, ChevronRight, SlidersHorizontal, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import client from "../api/client";
+import { shelfTitle, titleFor } from "../lib/titles";
 import EmptyState from "../components/EmptyState";
 import { LoadError, ProductGridSkeleton } from "../components/Loading";
 import ProductCard from "../components/ProductCard";
@@ -219,6 +220,12 @@ export default function Products() {
 
   const activeCategory = categories.find((c) => c.slug === filters.category);
   const pagination = data?.pagination;
+
+  // A shelf names the tab after itself, as the server's head for this
+  // address already does (backend/app/seo.py) — the two never disagree.
+  useEffect(() => {
+    document.title = activeCategory ? shelfTitle(activeCategory.name) : titleFor("/products");
+  }, [activeCategory]);
 
   // Everything narrowing the shelf right now, each with the patch that
   // takes it off again — shown as chips above the results, so what is
@@ -456,8 +463,10 @@ export default function Products() {
             />
           ) : data?.products?.length ? (
             <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-              {data.products.map((p) => (
-                <ProductCard key={p.id} product={p} />
+              {/* The first row is what the shelf opens on: its photos are
+                  fetched first, ahead of the cards further down. */}
+              {data.products.map((p, i) => (
+                <ProductCard key={p.id} product={p} eager={i < 2} />
               ))}
             </div>
           ) : (

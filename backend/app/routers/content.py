@@ -6,7 +6,7 @@ from xml.sax.saxutils import escape
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import select
 
-from ..models import ComingSoonItem, Product, Testimonial, get_store_setting
+from ..models import Category, ComingSoonItem, Product, Testimonial, get_store_setting
 from ..schemas import ComingSoonOut, TestimonialOut
 from ..security import DbSession, site_base
 
@@ -42,27 +42,48 @@ def list_coming_soon(db: DbSession):
     )
 
 
-def _url(base: str, path: str, *, changefreq: str, priority: str, lastmod=None) -> str:
+def _url(base: str, path: str, *, changefreq: str, priority: str, lastmod=None, image=None) -> str:
     last = f"<lastmod>{lastmod:%Y-%m-%d}</lastmod>" if lastmod else ""
+    photo = f"<image:image><image:loc>{escape(image)}</image:loc></image:image>" if image else ""
     return (
         "<url>"
         f"<loc>{escape(base + path)}</loc>"
         f"{last}"
         f"<changefreq>{changefreq}</changefreq>"
         f"<priority>{priority}</priority>"
+        f"{photo}"
         "</url>"
     )
 
 
-@seo_router.get("/sitemap.xml")
+# GET and HEAD, as the pages answer (app/__init__.py).
+@seo_router.api_route("/sitemap.xml", methods=["GET", "HEAD"])
 def sitemap(request: Request, db: DbSession):
-    """The shop's map for crawlers: the standing pages plus every live
-    bake's page, each stamped with the moment it last changed. Sold-out
-    bakes stay on the map — the page still answers, it just says so."""
+    """The shop's map for crawlers: the standing pages, each shelf with
+    something on it (the address the navigation links, which is also its
+    canonical one — app/seo.py), and every live bake's page with its photo,
+    each stamped with the moment it last changed. Sold-out bakes stay on the
+    map — the page still answers, it just says so."""
     base = site_base(request)
+    products = list(
+        db.scalars(
+            select(Product)
+            .where(Product.is_available.is_(True))
+            .order_by(Product.updated_at.desc())
+        )
+    )
+    newest = max((p.updated_at for p in products), default=None)
     urls = [
         _url(base, "/", changefreq="daily", priority="1.0"),
-        _url(base, "/products", changefreq="daily", priority="0.9"),
+        _url(base, "/products", changefreq="daily", priority="0.9", lastmod=newest),
+    ]
+    for shelf in db.scalars(select(Category).order_by(Category.sort_order, Category.name)):
+        on_it = [p.updated_at for p in products if p.category_id == shelf.id]
+        if on_it:
+            urls.append(
+                _url(base, f"/products?category={shelf.slug}", changefreq="daily", priority="0.8", lastmod=max(on_it))
+            )
+    urls += [
         _url(base, "/bulk", changefreq="monthly", priority="0.6"),
         _url(base, "/contact", changefreq="monthly", priority="0.5"),
         _url(base, "/privacy", changefreq="yearly", priority="0.2"),
@@ -71,11 +92,10 @@ def sitemap(request: Request, db: DbSession):
     ]
     if (get_store_setting(db).legal_notice or "").strip():
         urls.append(_url(base, "/imprint", changefreq="yearly", priority="0.2"))
-    for product in db.scalars(
-        select(Product)
-        .where(Product.is_available.is_(True))
-        .order_by(Product.updated_at.desc())
-    ):
+    for product in products:
+        photo = product.image_url or None
+        if photo and not photo.startswith(("http://", "https://")):
+            photo = base + "/" + photo.lstrip("/")
         urls.append(
             _url(
                 base,
@@ -83,28 +103,42 @@ def sitemap(request: Request, db: DbSession):
                 changefreq="weekly",
                 priority="0.8",
                 lastmod=product.updated_at,
+                image=photo,
             )
         )
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" '
+        'xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">\n'
         + "\n".join(urls)
         + "\n</urlset>\n"
     )
     return Response(content=xml, media_type="application/xml")
 
 
-@seo_router.get("/robots.txt")
+@seo_router.api_route("/robots.txt", methods=["GET", "HEAD"])
 def robots(request: Request):
-    """Crawl rules: the storefront is open, the API and every private corner
-    (the desk, the account, checkout) are not."""
+    """Crawl rules: the storefront is open, every private corner (the desk,
+    the account, checkout) is not. The API stays open: the pages read it as
+    they draw themselves, and a search engine renders a page the same way —
+    a closed API left it a page with no bake on it. Its answers carry
+    "X-Robots-Tag: noindex" (app/__init__.py), so none is listed itself.
+
+    Two pages act the moment they open: the one-click unsubscribe sends its
+    token, the sign-in callback trades its one-time code. A crawler that
+    rendered them would act for the customer, so each is closed by its own
+    address and nothing wider — every link to them is /unsubscribe?token=…
+    or /auth/callback?code=… (or ?error=…). This only keeps well-behaved
+    crawlers away; the endpoints check the token and the code themselves,
+    as before."""
     base = site_base(request)
     body = (
         "User-agent: *\n"
-        "Disallow: /api/\n"
         "Disallow: /admin\n"
         "Disallow: /account\n"
         "Disallow: /checkout\n"
+        "Disallow: /unsubscribe\n"
+        "Disallow: /auth/callback\n"
         f"\nSitemap: {base}/sitemap.xml\n"
     )
     return Response(content=body, media_type="text/plain")

@@ -16,12 +16,12 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
 from . import bird_verify
-from . import paypal_gateway, stripe_gateway
+from . import paypal_gateway, seo, stripe_gateway
 from .config import get_settings
 from .database import Base, engine
 from .routers import (
@@ -38,7 +38,7 @@ from .routers import (
 # the app package's `costing` attribute to the router module, shadowing
 # the app.costing engine module everywhere `from app import costing` runs.
 from .routers import costing as costing_routes
-from .security import DbSession
+from .security import DbSession, site_base
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 
@@ -535,6 +535,10 @@ def create_app() -> FastAPI:
         # keep a copy. The storefront's own caching is left as it was.
         if request.url.path == "/api/admin" or request.url.path.startswith("/api/admin/"):
             response.headers["Cache-Control"] = "no-store"
+        # The API feeds the pages — a search engine fetches it to render
+        # them, so robots.txt lets it in — but its JSON is no page to list.
+        if request.url.path.startswith("/api/"):
+            response.headers["X-Robots-Tag"] = "noindex"
         # HSTS pins the https:// canonical domain — browsers ignore it over
         # plain HTTP, so dev on localhost is untouched.
         if settings.is_production or request.url.scheme == "https":
@@ -584,12 +588,19 @@ def create_app() -> FastAPI:
             "Cache-Control": "no-cache",
             "Content-Security-Policy": _content_security_policy(dist_dir / "index.html"),
         }
+        # Read once: every page is this shell with its own head written in
+        # (app/seo.py) — the build does not change while the app runs.
+        shell = seo.Shell((dist_dir / "index.html").read_text(encoding="utf-8"))
 
-        @app.get("/{full_path:path}", include_in_schema=False)
-        async def spa(full_path: str):
+        # HEAD as well as GET: uptime monitors and link checkers ask with
+        # HEAD, and every page must answer it as it answers GET (RFC 9110).
+        @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+        def spa(full_path: str, request: Request, db: DbSession):
             # Unknown API paths must stay JSON 404s — the catch-all exists
             # for the SPA's client-side routes, not to swallow typos in /api.
             if full_path == "api" or full_path.startswith("api/"):
+                if request.method == "HEAD":  # the API answers HEAD as it always has
+                    return JSONResponse(status_code=405, content={"detail": "Method Not Allowed"}, headers={"Allow": "GET"})
                 return JSONResponse(status_code=404, content={"detail": "Not found"})
             candidate = (dist_dir / full_path).resolve()
             if full_path and candidate.is_file() and dist_dir.resolve() in candidate.parents:
@@ -604,8 +615,27 @@ def create_app() -> FastAPI:
             # the browser HTML where it asked for JavaScript.
             if full_path.startswith("assets/"):
                 return JSONResponse(status_code=404, content={"detail": "Not found"})
+            # One address per page: "/products/" is "/products", for people
+            # and crawlers alike (the query, if any, comes along).
+            if full_path.endswith("/") and full_path.strip("/"):
+                target = "/" + full_path.strip("/")
+                if request.url.query:
+                    target += "?" + request.url.query
+                return RedirectResponse(target, status_code=301)
+            # The shell with this address's own head — title, description,
+            # canonical address, robots rule, share card, structured data —
+            # and a 404 for an address no page answers. Should the head ever
+            # fail, the plain shell still serves: a page without its head is
+            # better than no page.
+            try:
+                base = site_base(request)
+                head = seo.head_for("/" + full_path, request.query_params, db, base)
+                html, status = shell.render(head, base), head.status
+            except Exception:
+                logger.exception("seo head failed for /%s — serving the plain shell", full_path)
+                html, status = shell.html, 200
             # index.html must always be re-fetched so SPA updates go live.
-            return FileResponse(dist_dir / "index.html", headers=shell_headers)
+            return HTMLResponse(html, status_code=status, headers=shell_headers)
 
     return app
 

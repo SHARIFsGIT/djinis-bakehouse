@@ -8,7 +8,9 @@ import { productInitial } from "../lib/format";
  * once it has arrived, instead of painting itself top to bottom.
  *
  * `decorative` is for a thumbnail that sits right beside the bake's name:
- * a screen reader hears the name once, not twice.
+ * a screen reader hears the name once, not twice. `eager` is for the
+ * photos a page opens on — fetched at once and ahead of the rest, since
+ * they are the largest thing the shopper waits to see.
  */
 export default function PhotoTile({ src, name = "", className = "", decorative = false, eager = false }) {
   const img = useRef(null);
@@ -31,6 +33,7 @@ export default function PhotoTile({ src, name = "", className = "", decorative =
           src={src}
           alt={decorative ? "" : name}
           loading={eager ? "eager" : "lazy"}
+          fetchPriority={eager ? "high" : undefined}
           decoding="async"
           data-loaded={loaded}
           onLoad={() => setLoaded(true)}

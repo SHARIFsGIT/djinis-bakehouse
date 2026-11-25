@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { Outlet, Route, Routes, useLocation } from "react-router";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
@@ -82,12 +82,23 @@ const Settings = deskPage(() => import("./pages/admin/Settings"));
    and name the browser tab after where the shopper now is (lib/titles.js —
    a product page then writes its own bake's name over it). */
 function OnNavigate() {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   useEffect(() => {
     // "instant": a new page begins at its top, it does not glide there.
     window.scrollTo({ top: 0, behavior: "instant" });
     document.title = titleFor(pathname);
   }, [pathname]);
+
+  // The server writes a few tags for the one address a page was opened at
+  // (backend/app/seo.py): its canonical address, its robots rule, its
+  // structured data. Once the shopper moves on inside the app they would
+  // describe a page no longer on screen — and a phone's share sheet sends
+  // the canonical address — so they go at the first move.
+  const landing = useRef(pathname + search);
+  useEffect(() => {
+    if (pathname + search === landing.current) return;
+    document.querySelectorAll("[data-seo]").forEach((tag) => tag.remove());
+  }, [pathname, search]);
   return null;
 }
 

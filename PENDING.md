@@ -13,6 +13,13 @@ Updated 2026-11-25, with the release that puts **Email | Phone tabs** on the
 log-in and sign-up pages and rebuilds the desk's **Users** page: items 10,
 11 and 14 now describe the tabs. Nothing new to do.
 
+Updated again 2026-11-25, with the **search-engine round** (ready for
+review, not deployed yet — `docs/operations/SEO_IMPLEMENTATION_REPORT.md`):
+item **19** is new. Checked against the live shop the same day, items **5**
+and **6** read as done: the address has its postal code and town, the
+opening hours no longer contradict each other, the notes are current, and
+the delivery area is 28359.
+
 Everything below is yours to do or to decide — none of it can be done from
 the code. Each item says **what is open**, **why it matters**, **how to fix
 it**, and **how to see that it worked**. No step asks for a real payment as
@@ -46,6 +53,7 @@ a test, and no secret belongs in this repository: keys go into Render only.
 | 16 | Housekeeping (backups, public repository, your PC's memory) | No hurry | — |
 | 17 | Brand colour: back to the mark's burgundy | **Right after this release** | 1 min |
 | 18 | Words on the site that only you can confirm | No hurry | 10 min |
+| 19 | Search engines: Search Console, then the sitemap | Step 1 now; step 2 after the search release | 20 min |
 
 ---
 
@@ -473,6 +481,36 @@ are not:
 
 **How to fix it.** Tell me the wording you want — none of these is
 editable from the desk.
+
+---
+
+## 19. Search engines: Search Console, then the sitemap
+
+**What is open.** A release that lets search engines read every page
+properly — each page's own title, description and address, product
+information they can understand, a fuller sitemap — is ready for review but
+not deployed (`docs/operations/SEO_IMPLEMENTATION_REPORT.md`). Google has
+not been told about the shop: no Search Console property was set up from
+here, and none can be.
+
+**Why it matters.** Search Console is where you see whether Google has found
+the pages, which searches show them, and what it could not read.
+
+**How to fix it.**
+
+1. **Now — no deploy needed.** [search.google.com/search-console](https://search.google.com/search-console)
+   → *Add property* → **Domain** → `djinisbakehouse.com` → add the `TXT`
+   record it shows where your domain's DNS is managed → *Verify*.
+2. **After the search release is deployed.** *Sitemaps* → submit
+   `https://djinisbakehouse.com/sitemap.xml`; *URL Inspection* → test the
+   home page and one product page → *Request indexing*.
+3. **Your decision.** A Google Business Profile as a delivery business for
+   28359, with the home address hidden — the report's section 9 says what
+   Google allows.
+
+**How to see it worked.** The sitemap shows "Success", and over the
+following days *Pages → Indexed* grows. Nothing guarantees indexing, and it
+takes days to weeks.
 
 ---
 

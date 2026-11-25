@@ -20,15 +20,18 @@ export default function NotFound() {
     document.title = `Page not found — ${SHOP_NAME}`;
   }, [pathname]);
 
-  // The server answers any address with the app, so a wrong one arrives as
-  // an ordinary page. This asks search engines not to keep it.
+  // A wrong address asks search engines not to keep it. Loaded directly,
+  // the server's answer already says so (a 404 with noindex — app/seo.py);
+  // reached from inside the app, where that tag has gone, the page says it
+  // itself — once for each wrong turn.
   useEffect(() => {
+    if (document.querySelector('meta[name="robots"][content="noindex"]')) return undefined;
     const meta = document.createElement("meta");
     meta.name = "robots";
     meta.content = "noindex";
     document.head.appendChild(meta);
     return () => meta.remove();
-  }, []);
+  }, [pathname]);
 
   useEffect(() => {
     client

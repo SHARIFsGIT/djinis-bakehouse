@@ -7,7 +7,7 @@ import PriceTag from "./PriceTag";
 import PhotoTile from "./PhotoTile";
 import RatingStars from "./RatingStars";
 
-export default function ProductCard({ product }) {
+export default function ProductCard({ product, eager = false }) {
   const { add } = useCart();
   const toast = useToast();
   const { isSaved, toggle } = useFavorites();
@@ -29,6 +29,7 @@ export default function ProductCard({ product }) {
             src={product.image_url}
             name={product.name}
             className="absolute inset-0"
+            eager={eager}
           />
           {product.is_on_sale && (
             <span className="badge badge-secondary absolute top-3 left-3 font-display font-bold shadow">

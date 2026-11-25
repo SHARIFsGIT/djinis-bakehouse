@@ -2,9 +2,9 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router";
 import { BadgeCheck, Bell, Heart, Share2, Star, Truck, Wheat } from "lucide-react";
 import client, { apiError } from "../api/client";
-import { formatDate, MAX_LINE_QUANTITY, shopConfig } from "../lib/format";
+import { formatDate, MAX_LINE_QUANTITY } from "../lib/format";
 import { rememberBake } from "../lib/recent";
-import { DEFAULT_TITLE, SHOP_NAME } from "../lib/titles";
+import { DEFAULT_TITLE, SHOP_NAME, productDescription } from "../lib/titles";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
 import { useFavorites } from "../context/FavoritesContext";
@@ -54,52 +54,17 @@ function setMetaTag(name, content) {
   tag.setAttribute("content", content);
 }
 
-/** The product page's own <title>, description and Product structured
-    data — the crawl files point spiders here, so the page must say what
-    it is. Cleared on unmount so the next page starts clean. */
+/** The product page's own <title> and description as the shopper moves
+    between bakes. The first answer for a product's address already carries
+    both, with its Product structured data (backend/app/seo.py — the same
+    title and the same description rule), so a crawler never waits on this.
+    Cleared on unmount so the next page starts clean. */
 function useProductHead(product) {
   useEffect(() => {
     if (!product) return undefined;
     document.title = `${product.name} — ${SHOP_NAME}`;
-    const description = (product.description || DEFAULT_TITLE).slice(0, 160);
-    setMetaTag("description", description);
-
-    const script = document.createElement("script");
-    script.type = "application/ld+json";
-    script.id = "product-structured-data";
-    script.textContent = JSON.stringify({
-      "@context": "https://schema.org",
-      "@type": "Product",
-      name: product.name,
-      sku: String(product.id),
-      description,
-      ...(product.image_url
-        ? { image: [new URL(product.image_url, window.location.origin).href] }
-        : {}),
-      offers: {
-        "@type": "Offer",
-        url: window.location.href,
-        priceCurrency: shopConfig.currency || "EUR",
-        price: product.current_price.toFixed(2),
-        availability:
-          product.stock > 0
-            ? "https://schema.org/InStock"
-            : "https://schema.org/OutOfStock",
-      },
-      ...(product.review_count > 0
-        ? {
-            aggregateRating: {
-              "@type": "AggregateRating",
-              ratingValue: product.average_rating,
-              reviewCount: product.review_count,
-            },
-          }
-        : {}),
-    });
-    document.head.appendChild(script);
-
+    setMetaTag("description", productDescription(product.description, product.category_name));
     return () => {
-      script.remove();
       document.title = DEFAULT_TITLE;
     };
   }, [product]);
